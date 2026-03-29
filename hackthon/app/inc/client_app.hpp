@@ -11,7 +11,9 @@ public:
                    server *parent)
       : evt_io(channel, peer_host), m_parent(parent) {}
 
-  virtual ~connected_client() {}
+  virtual ~connected_client() {
+    std::cout << "Fn:" << __func__ << ":" << __LINE__ << " dtor" << std::endl;
+  }
 
   server &parent() const { return *m_parent; }
   virtual std::int32_t handle_read(const std::int32_t &channel,

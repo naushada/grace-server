@@ -9,11 +9,17 @@ std::int32_t server::handle_connect(const std::int32_t &channel,
                                     const std::string &peer_host) {
 
   auto clnt = std::make_unique<connected_client>(channel, peer_host, this);
-  clients().emplace(channel, std::move(clnt));
-  // m_clients.at(fd) = std::move(clnt);
+  auto res = clients().insert(std::make_pair(channel, std::move(clnt)));
+  if (!res.second) {
+    std::cout << "Fn:" << __func__ << ":" << __LINE__
+              << " New client insersion for channel:" << channel << " failed"
+              << std::endl;
+  }
 }
 
-std::int32_t server::handle_close(const std::int32_t &channel) { return (0); }
+std::int32_t server::handle_close(const std::int32_t &channel) {
+  return (clients().erase(channel));
+}
 
 std::int32_t server::handle_accept(const std::int32_t &channel,
                                    const std::string &peer_host) {

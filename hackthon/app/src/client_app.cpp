@@ -10,6 +10,8 @@ std::int32_t connected_client::handle_read(const std::int32_t &channel,
   if (dry_run) {
     return 0;
   }
+  std::cout << "Fn:" << __func__ << ":" << __LINE__ << "Received:" << data
+            << std::endl;
   return (data.length());
 }
 

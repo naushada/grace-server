@@ -18,13 +18,13 @@ public:
 
   client_t &clients() { return m_clients; }
 
-  std::int32_t handle_connect(const handle_t &channel,
-                              const std::string &peer_host) override;
+  virtual std::int32_t handle_connect(const handle_t &channel,
+                                      const std::string &peer_host) override;
 
-  std::int32_t handle_close(const handle_t &channel) override;
+  virtual std::int32_t handle_close(const handle_t &channel) override;
 
-  std::int32_t handle_accept(const handle_t &channel,
-                             const std::string &peer_host) override;
+  virtual std::int32_t handle_accept(const handle_t &channel,
+                                     const std::string &peer_host) override;
 
 private:
   client_t m_clients;
