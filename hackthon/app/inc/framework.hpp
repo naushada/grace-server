@@ -19,6 +19,7 @@ extern "C" {
 // Client related callback
 void client_event_cb(struct bufferevent *bev, short events, void *ctx);
 void client_read_cb(struct bufferevent *bev, void *ctx);
+void fs_read_cb(struct bufferevent *bev, void *ctx);
 void client_write_cb(struct bufferevent *bev, void *ctx);
 
 // Server related callback
@@ -76,7 +77,19 @@ public:
     bufferevent_enable(m_buffer_evt_p.get(), events);
   }
 
-  evt_io(const evutil_socket_t &channel) : evt_io(channel, std::string()) {}
+  evt_io(const evutil_socket_t &channel)
+      : m_from_host(),
+        m_buffer_evt_p(bufferevent_socket_new(evt_base::instance().get(),
+                                              channel, BEV_OPT_CLOSE_ON_FREE)),
+        m_listener_p(nullptr) {
+
+    evutil_make_socket_nonblocking(channel);
+    bufferevent_setcb(m_buffer_evt_p.get(), fs_read_cb, nullptr, nullptr, this);
+
+    auto events = EV_READ | EV_WRITE | EV_PERSIST;
+    // Enable the events
+    bufferevent_enable(m_buffer_evt_p.get(), events);
+  }
 
   evt_io(const std::string &host, const std::uint16_t &port)
       : m_from_host(host), m_buffer_evt_p(nullptr), m_listener_p(nullptr) {
