@@ -36,6 +36,7 @@ public:
       std::cout << "Fn:" << __func__ << ":" << __LINE__
                 << " channel:" << m_channel
                 << " watch_channel:" << m_watch_channel << std::endl;
+      m_lua_engine->dump_commands();
     }
   }
 

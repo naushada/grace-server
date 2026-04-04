@@ -51,6 +51,8 @@ public:
   void process_create_luafile(const std::string &file_name);
   void process_delete_luafile(const std::string &file_name);
   void process_modify_luafile(const std::string &file_name);
+  void dump_commands();
+  void dump_table(const table_type &table, int indent = 0);
 
 private:
   std::unique_ptr<lua_State, custom_deleter> m_luaL;

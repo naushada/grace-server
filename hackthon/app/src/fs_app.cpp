@@ -17,8 +17,10 @@ std::int32_t fs_app::on_boot(const std::string &folder_path) {
     if (entry.is_regular_file() && entry.path().extension() == ".lua") {
       std::string file_path = entry.path().string();
       std::cout << "Fn:" << __func__ << ":" << __LINE__
-                << " file-name:" << file_path << std::endl;
-      m_lua_engine->process_create_luafile(file_path);
+                << " file-name:" << file_path
+                << " file-name:" << entry.path().filename().string()
+                << std::endl;
+      m_lua_engine->process_create_luafile(entry.path().filename().string());
     }
   }
 }

@@ -77,6 +77,65 @@ void lua_file::process_delete_luafile(const std::string &file_name) {
   }
 }
 
+void lua_file::dump_table(const table_type &table, int indent) {
+  std::string padding(indent, ' ');
+
+  for (const auto &[key, entry] : table.members) {
+    std::cout << padding << key << " = ";
+
+    std::visit(
+        [&](auto &&arg) {
+          using T = std::decay_t<decltype(arg)>;
+
+          if constexpr (std::is_same_v<T, value_type>) {
+            // Leaf value (string, int, bool, etc.)
+            std::visit(
+                [](auto &&val) {
+                  using V = std::decay_t<decltype(val)>;
+                  if constexpr (std::is_same_v<V, std::nullptr_t>)
+                    std::cout << "nil";
+                  else if constexpr (std::is_same_v<V, bool>)
+                    std::cout << (val ? "true" : "false");
+                  else
+                    std::cout << val;
+                },
+                arg);
+            std::cout << "\n";
+          } else if constexpr (std::is_same_v<T, std::vector<value_type>>) {
+            // Simple Array
+            std::cout << "{ ";
+            for (const auto &v : arg) {
+              std::visit([](auto &&val) { std::cout << val << " "; }, v);
+            }
+            std::cout << "}\n";
+          } else if constexpr (std::is_same_v<T, std::shared_ptr<table_type>>) {
+            // Nested Table
+            std::cout << "{\n";
+            if (arg)
+              dump_table(*arg, indent + 4);
+            std::cout << padding << "}\n";
+          } else if constexpr (std::is_same_v<
+                                   T,
+                                   std::vector<std::shared_ptr<table_type>>>) {
+            // Array of Tables
+            std::cout << "[List of Tables]\n";
+            for (const auto &sub : arg) {
+              if (sub)
+                dump_table(*sub, indent + 4);
+            }
+          }
+        },
+        entry);
+  }
+}
+
+void lua_file::dump_commands() {
+  for (const auto &[key, value] : m_commands) {
+    std::cout << "key:" << key << std::endl;
+    dump_table(value);
+  }
+}
+
 void lua_file::process_modify_luafile(const std::string &file_name) {
   process_delete_luafile(file_name);
   process_create_luafile(file_name);
