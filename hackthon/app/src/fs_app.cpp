@@ -16,11 +16,10 @@ std::int32_t fs_app::on_boot(const std::string &folder_path) {
     // Check if it's a regular file and has .lua extension
     if (entry.is_regular_file() && entry.path().extension() == ".lua") {
       std::string file_path = entry.path().string();
-      std::cout << "Fn:" << __func__ << ":" << __LINE__
-                << " file-name:" << file_path
+      std::cout << "Fn:" << __func__ << ":" << __LINE__ << " path:" << file_path
                 << " file-name:" << entry.path().filename().string()
                 << std::endl;
-      m_lua_engine->process_create_luafile(entry.path().filename().string());
+      m_lua_engine->process_create_luafile(file_path);
     }
   }
 }
@@ -34,6 +33,7 @@ std::int32_t fs_app::process_inotify_onchange(const std::string &in) {
       // This is a file
       namespace fs = std::filesystem;
       std::string fname(event->name);
+      fname = m_location + "/" + fname;
       fs::path fn(fname);
       // fn.extension() will return extention with double quotes within, hence
       // using string to get rid of this.
@@ -42,12 +42,14 @@ std::int32_t fs_app::process_inotify_onchange(const std::string &in) {
           std::cout << "Fn:" << __func__ << ":" << __LINE__
                     << " This file:" << fname << " is created" << std::endl;
           m_lua_engine->process_create_luafile(fname);
+          m_lua_engine->dump_commands();
 
         } else if (event->mask & IN_MODIFY) {
           std::cout << "Fn:" << __func__ << ":" << __LINE__
                     << " This file:" << fname << " is modifed" << std::endl;
           m_lua_engine->process_delete_luafile(fname);
           m_lua_engine->process_create_luafile(fname);
+          m_lua_engine->dump_commands();
 
         } else if (event->mask & IN_MOVED_TO) {
           if (!m_old_event.empty()) {
@@ -59,6 +61,7 @@ std::int32_t fs_app::process_inotify_onchange(const std::string &in) {
                         << " new-file-name:" << event->name << std::endl;
               m_lua_engine->process_delete_luafile(old_event->name);
               m_lua_engine->process_create_luafile(fname);
+              m_lua_engine->dump_commands();
               // clear old event now
               m_old_event.clear();
             }
@@ -69,6 +72,7 @@ std::int32_t fs_app::process_inotify_onchange(const std::string &in) {
                       << " This file:" << fname
                       << " is moved to watched location" << std::endl;
             m_lua_engine->process_create_luafile(fname);
+            m_lua_engine->dump_commands();
           }
         } else if (event->mask & IN_MOVED_FROM) {
           std::cout << "Fn:" << __func__ << ":" << __LINE__
@@ -85,11 +89,6 @@ std::int32_t fs_app::process_inotify_onchange(const std::string &in) {
           std::cerr << "Fn:" << __func__ << ":" << __LINE__
                     << " mask:" << event->mask << std::endl;
         }
-      } else {
-        std::cout << "Fn:" << __func__ << ":" << __LINE__
-                  << " vale:" << fn.extension().string()
-                  << " comp:" << fn.extension().string().compare(".lua")
-                  << std::endl;
       }
     }
 
@@ -106,6 +105,7 @@ std::int32_t fs_app::process_inotify_onchange(const std::string &in) {
     std::cout << "Fn:" << __func__ << ":" << __LINE__
               << " old-file-name:" << old_event->name << std::endl;
     m_lua_engine->process_delete_luafile(old_event->name);
+    m_lua_engine->dump_commands();
     // clear old event now
     m_old_event.clear();
   }

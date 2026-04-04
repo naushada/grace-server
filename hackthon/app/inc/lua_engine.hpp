@@ -45,7 +45,8 @@ public:
     std::unordered_map<std::string, entry_type> members;
   };
 
-  bool is_lua_array(lua_State *L, int index);
+  value_type extract_value(lua_State *L, std::int32_t idx);
+  bool is_lua_array(lua_State *L, std::int32_t index);
   void parse_lua_to_table(lua_State *L, std::int32_t index,
                           table_type &out_table);
   void process_create_luafile(const std::string &file_name);
