@@ -3,6 +3,26 @@
 
 #include "fs_app.hpp"
 
+std::int32_t fs_app::on_boot(const std::string &folder_path) {
+
+  namespace fs = std::filesystem;
+  if (!fs::exists(folder_path) || !fs::is_directory(folder_path)) {
+    std::cerr << "Fn:" << __func__ << ":" << __LINE__
+              << " Invalid directory: " << folder_path << std::endl;
+    return (-1);
+  }
+
+  for (const auto &entry : fs::directory_iterator(folder_path)) {
+    // Check if it's a regular file and has .lua extension
+    if (entry.is_regular_file() && entry.path().extension() == ".lua") {
+      std::string file_path = entry.path().string();
+      std::cout << "Fn:" << __func__ << ":" << __LINE__
+                << " file-name:" << file_path << std::endl;
+      m_lua_engine->process_create_luafile(file_path);
+    }
+  }
+}
+
 std::int32_t fs_app::process_inotify_onchange(const std::string &in) {
 
   auto offset = 0;
@@ -17,15 +37,17 @@ std::int32_t fs_app::process_inotify_onchange(const std::string &in) {
       // using string to get rid of this.
       if (fn.extension().string() == std::string(".lua")) {
         if (event->mask & IN_CREATE) {
-          // lua_engine().update_command(fname);
           std::cout << "Fn:" << __func__ << ":" << __LINE__
                     << " This file:" << fname << " is created" << std::endl;
+          m_lua_engine->process_create_luafile(fname);
+
         } else if (event->mask & IN_MODIFY) {
-          // lua_engine().update_command(fname);
           std::cout << "Fn:" << __func__ << ":" << __LINE__
                     << " This file:" << fname << " is modifed" << std::endl;
+          m_lua_engine->process_delete_luafile(fname);
+          m_lua_engine->process_create_luafile(fname);
+
         } else if (event->mask & IN_MOVED_TO) {
-          // lua_engine().update_command(fname);
           if (!m_old_event.empty()) {
             auto *old_event =
                 reinterpret_cast<struct inotify_event *>(m_old_event.data());
@@ -33,6 +55,8 @@ std::int32_t fs_app::process_inotify_onchange(const std::string &in) {
               std::cout << "Fn:" << __func__ << ":" << __LINE__
                         << " old-file-name:" << old_event->name
                         << " new-file-name:" << event->name << std::endl;
+              m_lua_engine->process_delete_luafile(old_event->name);
+              m_lua_engine->process_create_luafile(fname);
               // clear old event now
               m_old_event.clear();
             }
@@ -42,19 +66,19 @@ std::int32_t fs_app::process_inotify_onchange(const std::string &in) {
             std::cout << "Fn:" << __func__ << ":" << __LINE__
                       << " This file:" << fname
                       << " is moved to watched location" << std::endl;
+            m_lua_engine->process_create_luafile(fname);
           }
         } else if (event->mask & IN_MOVED_FROM) {
-          // Insert into MAP - key=filename
-          // lua_engine().update_command(fname);
           std::cout << "Fn:" << __func__ << ":" << __LINE__
                     << " This file:" << fname << " old file name" << std::endl;
           m_old_event.resize(sizeof(struct inotify_event) + event->len);
           std::memcpy(m_old_event.data(), event, m_old_event.size());
+
         } else if (event->mask & IN_DELETE) {
           // Remove entry from MAP
-          // lua_engine().delete_command(fname);
           std::cout << "Fn:" << __func__ << ":" << __LINE__
                     << " This file:" << fname << " is deleted" << std::endl;
+          m_lua_engine->process_delete_luafile(fname);
         } else {
           std::cerr << "Fn:" << __func__ << ":" << __LINE__
                     << " mask:" << event->mask << std::endl;
@@ -79,6 +103,7 @@ std::int32_t fs_app::process_inotify_onchange(const std::string &in) {
         reinterpret_cast<struct inotify_event *>(m_old_event.data());
     std::cout << "Fn:" << __func__ << ":" << __LINE__
               << " old-file-name:" << old_event->name << std::endl;
+    m_lua_engine->process_delete_luafile(old_event->name);
     // clear old event now
     m_old_event.clear();
   }
