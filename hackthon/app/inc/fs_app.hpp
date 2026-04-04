@@ -3,8 +3,11 @@
 
 #include "framework.hpp"
 #include <filesystem>
+#include <vector>
 
 extern "C" {
+#include <cstring>
+#include <linux/limits.h>
 #include <sys/inotify.h>
 #include <unistd.h>
 }
@@ -13,9 +16,12 @@ class fs_app : public evt_io {
 
 public:
   using handle_t = std::int32_t;
-  fs_app(const std::string &location) : evt_io(m_channel = inotify_init()) {
-    m_watch_channel = inotify_add_watch(m_channel, location.c_str(),
-                                        (IN_CREATE | IN_MODIFY | IN_DELETE));
+  fs_app(const std::string &location)
+      : evt_io(m_channel = inotify_init()),
+        m_watch_channel(inotify_add_watch(
+            m_channel, location.c_str(),
+            (IN_CREATE | IN_MODIFY | IN_DELETE | IN_MOVED_TO | IN_MOVED_FROM))),
+        m_old_event() {
     if (m_watch_channel < 0) {
       std::cout << "Fn:" << __func__ << ":" << __LINE__
                 << " inotify_add_watch failed for channel:" << m_channel
@@ -36,6 +42,7 @@ public:
     close(m_channel);
   }
 
+  std::int32_t process_inotify_onchange(const std::string &in);
   virtual std::int32_t handle_read(const std::int32_t &channel,
                                    const std::string &data,
                                    const bool &dry_run) override;
@@ -47,6 +54,7 @@ public:
 private:
   handle_t m_channel;
   handle_t m_watch_channel;
+  std::vector<std::uint8_t> m_old_event;
 };
 
 #endif
