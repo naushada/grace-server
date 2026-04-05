@@ -157,4 +157,9 @@ void lua_file::process_modify_luafile(const std::string &file_name) {
   process_create_luafile(file_name);
 }
 
+const std::unordered_map<std::string, lua_file::table_type> &
+lua_file::commands() const {
+  return m_commands;
+}
+
 #endif

@@ -3,6 +3,10 @@
 
 #include "fs_app.hpp"
 
+const std::unique_ptr<lua_file> &fs_app::lua_engine() const {
+  return (m_lua_engine);
+}
+
 std::int32_t fs_app::on_boot(const std::string &folder_path) {
 
   namespace fs = std::filesystem;

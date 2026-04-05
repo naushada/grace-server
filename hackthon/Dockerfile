@@ -15,6 +15,7 @@ RUN apt-get update && apt-get install -y \
     libprotobuf-dev \
     libgtest-dev \
     liblua5.4-dev \
+    libreadline-dev \
   && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /src

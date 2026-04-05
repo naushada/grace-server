@@ -57,6 +57,7 @@ public:
 
   std::int32_t on_boot(const std::string &folder_path);
   std::int32_t process_inotify_onchange(const std::string &in);
+  const std::unique_ptr<lua_file> &lua_engine() const;
   virtual std::int32_t handle_read(const std::int32_t &channel,
                                    const std::string &data,
                                    const bool &dry_run) override;

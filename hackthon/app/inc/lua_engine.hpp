@@ -54,6 +54,7 @@ public:
   void process_modify_luafile(const std::string &file_name);
   void dump_commands();
   void dump_table(const table_type &table, int indent = 0);
+  const std::unordered_map<std::string, lua_file::table_type> &commands() const;
 
 private:
   std::unique_ptr<lua_State, custom_deleter> m_luaL;
