@@ -4,6 +4,7 @@
 #include "fs_app.hpp"
 #include "lua_engine.hpp"
 
+#include <fstream>
 #include <iostream>
 #include <map>
 #include <sstream>
@@ -14,6 +15,7 @@
 #include <google/protobuf/dynamic_message.h>
 #include <google/protobuf/message.h>
 
+#include <iomanip>
 #include <readline/history.h>
 #include <readline/readline.h>
 
@@ -38,5 +40,7 @@ void set_value_by_type(google::protobuf::Message *msg,
 
 void init_readline();
 void run_cli();
+void custom_display_matches(char **matches, int len, int max_len);
+void serialise_to_binary(const google::protobuf::Message &msg);
 
 #endif

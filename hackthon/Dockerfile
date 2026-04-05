@@ -53,5 +53,6 @@ RUN chown -R edge:cordoba /app
 USER edge
 
 COPY --from=build /src/build/app/app /app/app
+COPY --from=build /src/build/app/cli/cli_app /app/cli_app
 
 CMD ["/app/app"]

@@ -25,6 +25,38 @@ void run_cli() {
   }
 }
 
+void custom_display_matches(char **matches, int len, int max_len) {
+  // 1. Move to a new line before printing matches
+  std::cout << "\n";
+
+  // 2. Calculate column width based on max_len
+  int column_width = max_len + 2;
+  int screen_width = 80; // Ideally get this from ioctl(TIOCGWINSZ)
+  int cols = screen_width / column_width;
+  if (cols < 1)
+    cols = 1;
+
+  // 3. Print matches, but strip the path
+  for (int i = 1; matches[i]; i++) {
+    std::string full_path(matches[i]);
+    size_t last_slash = full_path.find_last_of('/');
+
+    // Only show the part after the last slash
+    std::string display_name = (last_slash == std::string::npos)
+                                   ? full_path
+                                   : full_path.substr(last_slash + 1);
+
+    std::cout << std::left << std::setw(column_width) << display_name;
+
+    if (i % cols == 0)
+      std::cout << "\n";
+  }
+
+  // 4. Force a redraw of the prompt and current input
+  std::cout << "\n";
+  rl_on_new_line();
+}
+
 void init_readline() {
   // 1. Register your custom completion function
   rl_attempted_completion_function = lua_command_completion;
@@ -34,6 +66,8 @@ void init_readline() {
   // so your generator receives the whole string to parse.
   rl_basic_word_break_characters = " \t\n\"\\'`@$><=;|&{(";
 
+  // Register the display hook here
+  rl_completion_display_matches_hook = custom_display_matches;
   // 3. Optional: Enable history (up/down arrows)
   using_history();
 }
@@ -214,6 +248,7 @@ void apply_to_proto(const std::string &cmd_name,
         }
       }
     }
+    serialise_to_binary(*msg); // For the actual network transmission
     // Don't forget to delete the message when finished!
     delete msg;
   }
@@ -242,6 +277,25 @@ void set_value_by_type(google::protobuf::Message *msg,
   default:
     std::cerr << "Unsupported field type!" << std::endl;
   }
+}
+
+void serialise_to_binary(const google::protobuf::Message &msg) {
+  // 1. Serialise to string (bytes)
+  std::string binary_data;
+  if (msg.SerializeToString(&binary_data)) {
+    std::cout << "Successfully serialised " << binary_data.size()
+              << " bytes.\n";
+
+    // Optional: Hex dump for debugging
+    for (unsigned char c : binary_data) {
+      printf("%02X ", c);
+    }
+    std::cout << std::endl;
+  }
+
+  // 2. Or serialise directly to a file
+  std::fstream output("command.bin", std::ios::out | std::ios::binary);
+  msg.SerializeToOstream(&output);
 }
 
 int main() {
