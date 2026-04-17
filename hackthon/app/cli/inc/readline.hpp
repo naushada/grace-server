@@ -28,10 +28,11 @@ void process_command(const std::string &line);
 void get_sub_keys(const lua_file::table_type &table, const std::string &prefix,
                   const std::string &filter, std::vector<std::string> &matches);
 
-char *lua_option_generator(const char *text, int state);
+char *param_value_generator(const char *text, int state);
+char *param_name_generator(const char *text, int state);
 
-char **lua_command_completion(const char *text, std::int32_t start,
-                              std::int32_t end);
+char **command_completion(const char *text, std::int32_t start,
+                          std::int32_t end);
 
 void set_value_by_type(google::protobuf::Message *msg,
                        const google::protobuf::Reflection *reft,

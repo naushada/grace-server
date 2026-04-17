@@ -4,7 +4,6 @@
 #include "readline.hpp"
 
 static fs_app fs_mon("/app/command");
-int g_completion_start = 0;
 
 ////////////////////////////////////////////////////
 
@@ -58,65 +57,207 @@ void custom_display_matches(char **matches, int len, int max_len) {
 }
 
 void init_readline() {
+  /* rl_attempted_completion_over variable to a non-zero value,
+     Readline will not perform its default completion even if this function
+     returns no matches*/
+  rl_attempted_completion_over = 1;
+
   // 1. Register your custom completion function
-  rl_attempted_completion_function = lua_command_completion;
+  rl_attempted_completion_function = command_completion;
 
   // 2. Remove '.' and '=' from word breaks
   // This allows Readline to treat "test_param.rate_mbps=50" as one "word"
   // so your generator receives the whole string to parse.
   rl_basic_word_break_characters = " \t\n\"\\'`@$><=;|&{(";
 
-  // Register the display hook here
+  // 3. Register the display hook here
   rl_completion_display_matches_hook = custom_display_matches;
-  // 3. Optional: Enable history (up/down arrows)
+  // 4. Optional: Enable history (up/down arrows)
   using_history();
 }
 
-char **lua_command_completion(const char *text, std::int32_t start,
-                              std::int32_t end) {
-  g_completion_start = start; // Save it here
-  // Prevent default filename completion
-  rl_attempted_completion_over = 1;
+/* Generator function for command completion.  STATE lets us know whether
+ * to start from scratch; without any state (i.e. STATE == 0), then we
+ * start at the top of the list.
+ * Note: This Function is kept invoking by readline until it returns NULL.
+ */
+char *command_generator(const char *text, int state) {
+  // Use the actual map type directly:
+  static std::map<std::string, lua_file::table_type>::const_iterator
+      s_members_it_start;
+  static std::map<std::string, lua_file::table_type>::const_iterator
+      s_members_it_end;
 
-  // rl_line_buffer contains the full line. We use it to determine context.
-  return rl_completion_matches(text, lua_option_generator);
+  static std::map<std::string, lua_file::table_type>::const_iterator
+      s_command_it;
+
+  std::string command(text);
+  std::cout << "Fn:" << __func__ << ":" << __LINE__ << " command:" << command
+            << " state:" << state << std::endl;
+  /* If this is a new word to complete, initialize now.  This includes
+     saving the length of TEXT for efficiency, and initializing the index
+     variable to 0. */
+  if (!state) {
+    auto it = std::find_if(
+        fs_mon.lua_engine()->commands().begin(),
+        fs_mon.lua_engine()->commands().end(), [&](const auto &ent) {
+          auto inner_it = std::find_if(
+              ent.second.begin(), ent.second.end(), [&](const auto &element) {
+                // Name of the command
+                return (!element.first.compare(0, command.length(), command));
+              });
+
+          return (inner_it != ent.second.end());
+        });
+
+    if (it != fs_mon.lua_engine()->commands().end()) {
+      s_command_it = it;
+      auto *table_ptr =
+          std::get_if<std::shared_ptr<lua_file::table_type>>(&it->second);
+      if (table_ptr) {
+        s_members_it_start = (*table_ptr)->members.begin();
+        s_members_it_end = (*table_ptr)->members.end();
+        return (strdup(s_members_it_start->first.c_str()));
+      }
+
+      // s_members_it_start = it->second.begin();
+      // s_members_it_end = it->second.end();
+      // return (strdup(s_members_it_start->first.c_str()));
+    }
+  }
+  /* If no names matched, then return NULL. */
+  return ((char *)NULL);
 }
 
-char *lua_option_generator(const char *text, int state) {
+char **command_completion(const char *text, std::int32_t start,
+                          std::int32_t end) {
+  // g_completion_start = start; // Save it here
+  //  Prevent default filename completion
+  rl_attempted_completion_over = 1;
+  std::string what(text);
+  if (!start && start == end) {
+    // command is entered.
+    return rl_completion_matches(text, command_generator);
+  } else if (what.empty() && start == end) {
+    return rl_completion_matches(text, param_name_generator);
+  } else {
+    return rl_completion_matches(text, param_value_generator);
+  }
+}
+
+char *param_value_generator(const char *text, int state) {
+  if (!state) {
+    // TAB is hit
+  }
+#if 0
   static size_t list_index;
   static std::vector<std::string> matches;
 
-  if (!state) {
-    list_index = 0;
-    matches.clear();
+  // 1. Get the "Command" (the first word on the line)
+  std::string param_name(text);
 
-    // 1. Get the "Command" (the first word on the line)
-    std::string filter(text);
-
-    // 2. If we are typing the first word, suggest top-level Commands
-    if (g_completion_start == 0) {
-      for (auto const &[name, _] : fs_mon.lua_engine()->commands()) {
-        if (name.find(filter) == 0)
-          matches.push_back(name);
-      }
-    } else {
-      // 1. Find which command was typed first on the line
-      std::stringstream ss(rl_line_buffer);
-      std::string command;
-      ss >> command;
-      if (fs_mon.lua_engine()->commands().count(command)) {
-        // Helper function to crawl your table_type and find children
-        // of whatever the user has partially typed so far
-        get_sub_keys(fs_mon.lua_engine()->commands().at(command), "", filter,
-                     matches);
+  std::cout << "Fn:" << __func__ << ":" << __LINE__
+            << " param_name:" << param_name << " state:" << state << std::endl;
+  if (!param_name.empty()) {
+    auto &entry = g_current_member_itr->second;
+    auto *table_ptr =
+        std::get_if<std::shared_ptr<lua_file::table_type>>(&entry);
+    if (table_ptr) {
+      auto it = (*table_ptr)->members.find(param_name);
+      if (it != (*table_ptr)->members.end()) {
       }
     }
+    // CASE A: It's a singular value (int, string, etc.)
+    if (auto *val = std::get_if<lua_file::value_type>(&entry)) {
+      // You've reached a leaf!
+      // You can't "dig" deeper. You would likely print or set this value.
+      std::cout << "This is a value, not a table.";
+    }
+
+    // CASE B: It's a nested table (Message)
+    else if (auto *table_ptr =
+                 std::get_if<std::shared_ptr<lua_file::table_type>>(&entry)) {
+      // This is a branch!
+      // You can now access the keys inside (*table_ptr)->members
+      for (auto const &[key, _] : (*table_ptr)->members) {
+        // These are the "sub-options" for your autocomplete
+        matches.push_back(key);
+        std::cout << "Fn:" << __func__ << ":" << __LINE__ << " key:" << key
+                  << std::endl;
+      }
+    }
+
+    // CASE C & D: It's a list (Repeated field)
+    else if (auto *vec_val =
+                 std::get_if<std::vector<lua_file::value_type>>(&entry)) {
+      // It's a list of primitive values
+    }
+
+  } else {
+    // get the value of key now.
+  }
+#endif
+  return nullptr;
+}
+
+char *param_name_generator(const char *text, int state) {
+
+  std::string param_name(text);
+#if 0
+  std::cout << "Fn:" << __func__ << ":" << __LINE__
+            << " param_name:" << param_name << " state:" << state << std::endl;
+  if (g_current_member_itr == g_current_command_itr->second.members.end()) {
+    return (NULL);
+  }
+  // User hit Tab right after entering the command
+  auto &entry = g_current_member_itr->second;
+
+  // CASE A: It's a singular value (int, string, etc.)
+  if (auto *val = std::get_if<lua_file::value_type>(&entry)) {
+    // You've reached a leaf!
+    // You can't "dig" deeper. You would likely print or set this value.
+    std::cout << "Fn:" << __func__ << ":" << __LINE__ << " This is a value_type"
+              << std::endl;
   }
 
-  if (list_index < matches.size()) {
-    return strdup(matches[list_index++].c_str());
+  // CASE B: It's a nested table (Message)
+  else if (auto *table_ptr =
+               std::get_if<std::shared_ptr<lua_file::table_type>>(&entry)) {
+    if (g_current_member_itr != (*table_ptr)->members.end()) {
+      const auto param = (*table_ptr)->members.begin()->first;
+      std::cout << "Fn:" << __func__ << ":" << __LINE__
+                << " param-name:" << param << std::endl;
+      ++g_current_member_itr;
+      return (strdup(param.c_str()));
+    }
+      // This is a branch!
+      // You can now access the keys inside (*table_ptr)->members
+      for (auto const &[key, _] : (*table_ptr)->members) {
+        // These are the "sub-options" for your autocomplete
+        matches.push_back(key);
+        std::cout << "Fn:" << __func__ << ":" << __LINE__ << " key:" << key
+                  << std::endl;
+      }
+    if (table_ptr) {
+      const auto param = (*table_ptr)->members.begin()->first;
+      std::cout << "Fn:" << __func__ << ":" << __LINE__
+                << " param-name:" << param << std::endl;
+      ++g_current_member_itr;
+      return (strdup(param.c_str()));
+    }
+    return (NULL);
   }
 
+  // CASE C & D: It's a list (Repeated field)
+  else if (auto *vec_val =
+               std::get_if<std::vector<lua_file::value_type>>(&entry)) {
+    // It's a list of primitive values
+    std::cout << "Fn:" << __func__ << ":" << __LINE__
+              << " An array of value_type" << std::endl;
+  }
+
+#endif
+  // find the matching one
   return nullptr;
 }
 
@@ -209,14 +350,15 @@ void process_command(const std::string &line) {
 
 void apply_to_proto(const std::string &cmd_name,
                     const std::map<std::string, std::string> &args) {
-  // 1. Create the specific Protobuf message instance (e.g., using a Factory)
-  // For this example, let's assume 'msg' is your
+  // 1. Create the specific Protobuf message instance (e.g., using a
+  // Factory) For this example, let's assume 'msg' is your
   // StartDownlinkConnectionsTestRequest object
   // Create the Protobuf message dynamically
   google::protobuf::Message *msg = create_message_by_name(cmd_name);
 
   if (msg) {
-    // Parse arguments and apply them via reflection (as discussed previously)
+    // Parse arguments and apply them via reflection (as discussed
+    // previously)
     // ... apply_to_proto(msg, arguments) ...
     // Now, apply these arguments to your Protobuf message
 

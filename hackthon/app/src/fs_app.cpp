@@ -108,7 +108,7 @@ std::int32_t fs_app::process_inotify_onchange(const std::string &in) {
         reinterpret_cast<struct inotify_event *>(m_old_event.data());
     std::cout << "Fn:" << __func__ << ":" << __LINE__
               << " old-file-name:" << old_event->name << std::endl;
-    m_lua_engine->process_delete_luafile(old_event->name);
+    m_lua_engine->process_delete_luafile(std::string(old_event->name));
     m_lua_engine->dump_commands();
     // clear old event now
     m_old_event.clear();
