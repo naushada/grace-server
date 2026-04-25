@@ -7,6 +7,8 @@ find_package(Threads REQUIRED)
 find_package(GTest REQUIRED)
 # Use pkg-config to find libevent and set variables
 pkg_check_modules(LIBEVENT REQUIRED libevent)
+# nghttp2 for HTTP/2 session handling
+pkg_check_modules(NGHTTP2 REQUIRED libnghttp2)
 
 find_package(Lua REQUIRED)
 include_directories(${LUA_INCLUDE_DIR})
@@ -14,9 +16,16 @@ include_directories(${LUA_INCLUDE_DIR})
 set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -std=c++20 -g -Wall -Wextra")
 
 include_directories(inc)
+include_directories(${NGHTTP2_INCLUDE_DIRS})
 file(GLOB SOURCES "src/*.cpp")
 add_executable(app ${SOURCES})
-target_link_libraries(app PUBLIC pthread ssl crypto ${LIBEVENT_LIBRARIES} ${LUA_LIBRARIES})
+target_link_libraries(app PUBLIC
+  pthread
+  ssl
+  crypto
+  ${LIBEVENT_LIBRARIES}
+  ${NGHTTP2_LIBRARIES}
+  ${LUA_LIBRARIES})
 
 # Unit tests for the core engine (lua_file) live in app/test. They only
 # depend on GTest + Lua + pthread, not on libevent or networking.
