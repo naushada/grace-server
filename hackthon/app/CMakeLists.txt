@@ -3,11 +3,9 @@ project(hackthon)
 
 find_package(PkgConfig REQUIRED)
 find_package(Threads REQUIRED)
-# Find GoogleTest
 find_package(GTest REQUIRED)
-# Use pkg-config to find libevent and set variables
+find_package(Protobuf REQUIRED)
 pkg_check_modules(LIBEVENT REQUIRED libevent)
-# nghttp2 for HTTP/2 session handling
 pkg_check_modules(NGHTTP2 REQUIRED libnghttp2)
 
 find_package(Lua REQUIRED)
@@ -15,11 +13,62 @@ include_directories(${LUA_INCLUDE_DIR})
 
 set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -std=c++20 -g -Wall -Wextra")
 
+# ---------------------------------------------------------------------------
+# gNMI protobuf library
+# ---------------------------------------------------------------------------
+# Proto files are vendored under app/idl/ with a flat two-level layout:
+#   idl/gnmi/gnmi.proto
+#   idl/gnmi_ext/gnmi_ext.proto
+# The import in gnmi.proto was adjusted from the upstream Go module path to
+# the shorter local path so protoc resolves it with -I app/idl.
+set(IDL_DIR "${CMAKE_CURRENT_SOURCE_DIR}/idl")
+
+set(GNMI_PROTO_FILES
+    "${IDL_DIR}/gnmi_ext/gnmi_ext.proto"
+    "${IDL_DIR}/gnmi/gnmi.proto"
+)
+
+set(PROTO_GEN_DIR "${CMAKE_CURRENT_BINARY_DIR}/proto_gen")
+file(MAKE_DIRECTORY "${PROTO_GEN_DIR}")
+
+# Output paths mirror the proto's relative path from IDL_DIR.
+set(GNMI_GEN_SRCS
+    "${PROTO_GEN_DIR}/gnmi_ext/gnmi_ext.pb.cc"
+    "${PROTO_GEN_DIR}/gnmi/gnmi.pb.cc"
+)
+set(GNMI_GEN_HDRS
+    "${PROTO_GEN_DIR}/gnmi_ext/gnmi_ext.pb.h"
+    "${PROTO_GEN_DIR}/gnmi/gnmi.pb.h"
+)
+
+add_custom_command(
+    OUTPUT  ${GNMI_GEN_SRCS} ${GNMI_GEN_HDRS}
+    COMMAND ${Protobuf_PROTOC_EXECUTABLE}
+            --cpp_out=${PROTO_GEN_DIR}
+            -I${IDL_DIR}
+            -I${Protobuf_INCLUDE_DIRS}
+            ${GNMI_PROTO_FILES}
+    DEPENDS ${GNMI_PROTO_FILES}
+    COMMENT "Generating C++ from gNMI proto files"
+    VERBATIM
+)
+
+add_library(gnmi_proto STATIC ${GNMI_GEN_SRCS})
+target_include_directories(gnmi_proto PUBLIC
+    ${PROTO_GEN_DIR}
+    ${Protobuf_INCLUDE_DIRS}
+)
+target_link_libraries(gnmi_proto PUBLIC ${Protobuf_LIBRARIES})
+
+# ---------------------------------------------------------------------------
+# Main application
+# ---------------------------------------------------------------------------
 include_directories(inc)
 include_directories(${NGHTTP2_INCLUDE_DIRS})
 file(GLOB SOURCES "src/*.cpp")
 add_executable(app ${SOURCES})
 target_link_libraries(app PUBLIC
+  gnmi_proto
   pthread
   ssl
   crypto
@@ -27,8 +76,9 @@ target_link_libraries(app PUBLIC
   ${NGHTTP2_LIBRARIES}
   ${LUA_LIBRARIES})
 
-# Unit tests for the core engine (lua_file) live in app/test. They only
-# depend on GTest + Lua + pthread, not on libevent or networking.
+# ---------------------------------------------------------------------------
+# Unit tests
+# ---------------------------------------------------------------------------
 if(BUILD_TESTING OR PROJECT_IS_TOP_LEVEL)
   add_subdirectory(test)
 endif()

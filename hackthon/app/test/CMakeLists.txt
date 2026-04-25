@@ -43,6 +43,7 @@ add_executable(app_tests
 )
 
 target_link_libraries(app_tests PRIVATE
+  gnmi_proto
   GTest::gtest
   GTest::gtest_main
   Threads::Threads
