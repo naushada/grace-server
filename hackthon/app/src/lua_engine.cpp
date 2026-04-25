@@ -75,10 +75,12 @@ void lua_file::parse_lua_to_table(lua_State *L, std::int32_t table_index,
 void lua_file::process_create_luafile(const std::string &file_name) {
   if (luaL_dofile(m_luaL.get(), file_name.c_str()) == LUA_OK) {
     table_type file_root;
-    //  Use the recursive parser we built
-    parse_lua_to_table(m_luaL.get(), lua_gettop(m_luaL.get()), file_root);
-
-    // Store it: e.g., m_commands["test_config.lua"] = file_root;
+    // Scripts assign globals (no return), so lua_gettop() is 0 after dofile.
+    // Discard any accidental return values and parse the global table instead.
+    lua_settop(m_luaL.get(), 0);
+    lua_pushglobaltable(m_luaL.get());
+    parse_lua_to_table(m_luaL.get(), 1, file_root);
+    lua_pop(m_luaL.get(), 1);
     m_commands[file_name] = std::move(file_root);
   } else {
     std::cout << "Fn:" << __func__ << ":" << __LINE__
