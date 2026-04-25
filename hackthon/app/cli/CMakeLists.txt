@@ -39,6 +39,6 @@ target_link_libraries(cli_app PRIVATE
   ${LUA_LIBRARIES})
 
 # Completion-helper tests. Deliberately isolated from readline / protobuf.
-if(BUILD_TESTING OR PROJECT_IS_TOP_LEVEL)
+if((BUILD_TESTING OR PROJECT_IS_TOP_LEVEL) AND EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/test")
   add_subdirectory(test)
 endif()
