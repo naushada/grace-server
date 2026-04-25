@@ -81,10 +81,17 @@ bool http2_session::want_write() const {
 // Submitting responses (server) and requests (client)
 // ---------------------------------------------------------------------------
 
+// make_nv for string-literal names (static duration — pointer is always valid).
+nghttp2_nv http2_session::make_nv(const char *name, const std::string &value) {
+  return {const_cast<uint8_t *>(reinterpret_cast<const uint8_t *>(name)),
+          const_cast<uint8_t *>(
+              reinterpret_cast<const uint8_t *>(value.data())),
+          std::strlen(name), value.size(), NGHTTP2_NV_FLAG_NONE};
+}
+
+// make_nv for runtime string names (e.g. user-supplied header keys).
 nghttp2_nv http2_session::make_nv(const std::string &name,
                                   const std::string &value) {
-  // nghttp2 copies name/value immediately inside submit_*, so casting away
-  // const from the string data is safe for the duration of the call.
   return {const_cast<uint8_t *>(
               reinterpret_cast<const uint8_t *>(name.data())),
           const_cast<uint8_t *>(

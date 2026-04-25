@@ -73,6 +73,9 @@ private:
     std::string resp_body; // staging buffer for submit_response data provider
   };
 
+  // Overload for string-literal names (static duration — no temporary created).
+  static nghttp2_nv make_nv(const char *name, const std::string &value);
+  // Overload for runtime string names (e.g. user-supplied header names).
   static nghttp2_nv make_nv(const std::string &name, const std::string &value);
 
   // nghttp2 session callbacks
