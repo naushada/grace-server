@@ -100,7 +100,7 @@ std::int32_t fs_app::process_inotify_onchange(const std::string &in) {
     // and will not include size of variable array's size as it's not known at
     // compile time, that's why + event->len to cater variable string length
     offset += sizeof(struct inotify_event) + event->len;
-  } while (offset <= in.length());
+  } while (offset < in.length());
 
   // case Where, file is moved away from watched location
   if (!m_old_event.empty()) {

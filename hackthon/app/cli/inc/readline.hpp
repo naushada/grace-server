@@ -1,6 +1,7 @@
 #ifndef __readline_hpp__
 #define __readline_hpp__
 
+#include "completion_helpers.hpp"
 #include "fs_app.hpp"
 #include "lua_engine.hpp"
 
@@ -24,9 +25,6 @@ void apply_to_proto(const std::string &cmd_name,
                     const std::map<std::string, std::string> &args);
 
 void process_command(const std::string &line);
-
-void get_sub_keys(const lua_file::table_type &table, const std::string &prefix,
-                  const std::string &filter, std::vector<std::string> &matches);
 
 char *param_value_generator(const char *text, int state);
 char *param_name_generator(const char *text, int state);

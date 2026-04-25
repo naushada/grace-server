@@ -25,17 +25,32 @@ COPY . /src
 ARG CMAKE_BUILD_TYPE=Debug
 # Optional external proto dir for third_party imports
 ARG EXTERNAL_PROTO_DIR=""
-RUN cmake -S . -B build -DCMAKE_BUILD_TYPE=${CMAKE_BUILD_TYPE} -DEXTERNAL_PROTO_DIR="${EXTERNAL_PROTO_DIR}" \
- && cmake --build build -j "$(nproc)"
+# Toggle unit tests — ON by default so the image fails to build if the
+# gtest suites in app/test and app/cli/test regress. Pass
+# `--build-arg RUN_TESTS=OFF` to skip.
+ARG RUN_TESTS=ON
+RUN cmake -S . -B build \
+      -DCMAKE_BUILD_TYPE=${CMAKE_BUILD_TYPE} \
+      -DEXTERNAL_PROTO_DIR="${EXTERNAL_PROTO_DIR}" \
+      -DBUILD_TESTING=ON \
+ && cmake --build build -j "$(nproc)" \
+ && if [ "$RUN_TESTS" = "ON" ]; then \
+      ctest --test-dir build --output-on-failure; \
+    fi
 
 FROM ubuntu:22.04 AS runtime
 
 ENV DEBIAN_FRONTEND=noninteractive
-# Runtime dependencies for the built binary (libevent, nghttp2, openssl)
+# Runtime dependencies for the built binaries.
+#   - libevent/libnghttp2/libssl/zlib/libprotobuf: used by `app`
+#   - libreadline8:                               used by `cli_app`
+#   - liblua5.4-0:                                shared by both (lua_engine)
+#   - gdb:                                        kept for in-container debugging
 RUN apt-get update && apt-get install -y \
     libevent-2.1-7 \
     libnghttp2-14 \
     libprotobuf23 \
+    libreadline8 \
     libssl3 \
     zlib1g \
     gdb \
@@ -52,7 +67,13 @@ RUN chown -R edge:cordoba /app
 # Switch to 'edge'
 USER edge
 
-COPY --from=build /src/build/app/app /app/app
-COPY --from=build /src/build/app/cli/cli_app /app/cli_app
+COPY --from=build --chown=edge:cordoba /src/build/app/app /app/app
+COPY --from=build --chown=edge:cordoba /src/build/app/cli/cli_app /app/cli_app
+
+# fs_app in readline.cpp / fs_app.cpp watches /app/command for .lua command
+# definitions. Ship the sample StartDownlinkConnectionsTestRequest.lua so the
+# CLI has something to auto-complete out of the box. Operators can drop
+# additional .lua files here at runtime — inotify picks them up live.
+COPY --from=build --chown=edge:cordoba /src/app/command/ /app/command/
 
 CMD ["/app/app"]

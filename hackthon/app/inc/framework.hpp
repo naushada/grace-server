@@ -101,13 +101,13 @@ public:
     if (!s) {
       self_addr = *((struct sockaddr_in *)(result->ai_addr));
       freeaddrinfo(result);
+      // TCP server listener
+      m_listener_p.reset(evconnlistener_new_bind(
+          evt_base::instance().get(), server_accept_cb,
+          this /*This is for *ctx*/,
+          (LEV_OPT_CLOSE_ON_FREE | LEV_OPT_REUSEABLE | LEV_OPT_CLOSE_ON_EXEC),
+          32 /*backlog*/, (struct sockaddr *)&self_addr, sizeof(self_addr)));
     }
-
-    // TCP server listener
-    m_listener_p.reset(evconnlistener_new_bind(
-        evt_base::instance().get(), server_accept_cb, this /*This is for *ctx*/,
-        (LEV_OPT_CLOSE_ON_FREE | LEV_OPT_REUSEABLE | LEV_OPT_CLOSE_ON_EXEC),
-        32 /*backlog*/, (struct sockaddr *)&self_addr, sizeof(self_addr)));
   }
 
   std::int32_t tx(const char *buffer, const size_t &len) {

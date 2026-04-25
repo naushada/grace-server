@@ -26,14 +26,19 @@ file(GLOB SHARED_SOURCES
   "../src/lua_engine.cpp" 
   "../src/lua_file.cpp")
 
-add_executable(cli_app 
+add_executable(cli_app
   ${SOURCES}
   ${SHARED_SOURCES})
-target_link_libraries(cli_app PRIVATE 
-  pthread 
-  ssl 
-  crypto 
-  readline 
-  protobuf 
-  ${LIBEVENT_LIBRARIES} 
+target_link_libraries(cli_app PRIVATE
+  pthread
+  ssl
+  crypto
+  readline
+  protobuf
+  ${LIBEVENT_LIBRARIES}
   ${LUA_LIBRARIES})
+
+# Completion-helper tests. Deliberately isolated from readline / protobuf.
+if(BUILD_TESTING OR PROJECT_IS_TOP_LEVEL)
+  add_subdirectory(test)
+endif()

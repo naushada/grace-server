@@ -22,9 +22,7 @@ void client_event_cb(struct bufferevent *bev, short events, void *ctx) {
   if (events & BEV_EVENT_EOF) {
     clnt->handle_close(channel);
     clnt->parent().handle_close(channel);
-  }
-
-  if (events & BEV_EVENT_ERROR) {
+  } else if (events & BEV_EVENT_ERROR) {
     // Add error handling
     clnt->handle_close(channel);
     clnt->parent().handle_close(channel);

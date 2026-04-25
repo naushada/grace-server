@@ -17,3 +17,9 @@ include_directories(inc)
 file(GLOB SOURCES "src/*.cpp")
 add_executable(app ${SOURCES})
 target_link_libraries(app PUBLIC pthread ssl crypto ${LIBEVENT_LIBRARIES} ${LUA_LIBRARIES})
+
+# Unit tests for the core engine (lua_file) live in app/test. They only
+# depend on GTest + Lua + pthread, not on libevent or networking.
+if(BUILD_TESTING OR PROJECT_IS_TOP_LEVEL)
+  add_subdirectory(test)
+endif()
