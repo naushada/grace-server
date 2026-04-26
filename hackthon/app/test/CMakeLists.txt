@@ -9,6 +9,7 @@ find_package(Threads REQUIRED)
 find_package(Lua REQUIRED)
 find_package(PkgConfig REQUIRED)
 pkg_check_modules(LIBEVENT REQUIRED libevent)
+pkg_check_modules(LIBEVENT_OPENSSL REQUIRED libevent_openssl)
 pkg_check_modules(NGHTTP2 REQUIRED libnghttp2)
 
 include(GoogleTest)
@@ -51,6 +52,7 @@ target_link_libraries(app_tests PRIVATE
   GTest::gtest
   GTest::gtest_main
   Threads::Threads
+  ${LIBEVENT_OPENSSL_LIBRARIES}
   ${LIBEVENT_LIBRARIES}
   ${NGHTTP2_LIBRARIES}
   ssl
