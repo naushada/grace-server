@@ -3,6 +3,7 @@
 
 #include "client_app.hpp"
 #include "framework.hpp"
+#include "server_app.hpp"
 
 // Generated protobuf headers (produced by protoc at build time under
 // ${CMAKE_BINARY_DIR}/app/proto_gen/).
