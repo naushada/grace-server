@@ -130,7 +130,7 @@ TEST_F(GrpcSessionTest, DecodeFrameRoundTrips) {
 }
 
 TEST_F(GrpcSessionTest, DecodeFrameReturnsEmptyOnIncompleteData) {
-  std::string buf = "\x00\x00\x00\x00\x05he"; // header says 5 bytes, only 2
+  std::string buf("\x00\x00\x00\x00\x05he", 7); // header says 5 bytes, only 2 present
   const std::string result = grpc_session::decode_frame(buf);
   EXPECT_TRUE(result.empty());
   EXPECT_EQ(buf.size(), 7u); // unchanged

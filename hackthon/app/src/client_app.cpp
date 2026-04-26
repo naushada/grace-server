@@ -170,7 +170,8 @@ std::int32_t connected_client::handle_close(const std::int32_t &channel) {
   // Tell the server to remove this connection from its client map.
   // server::handle_close erases the unique_ptr<connected_client>, destroying
   // this object — no member access is safe after this call returns.
-  m_parent->handle_close(channel);
+  if (m_parent)
+    m_parent->handle_close(channel);
   return 0;
 }
 
