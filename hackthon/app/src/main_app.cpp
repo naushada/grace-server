@@ -135,6 +135,9 @@ static void dump_gnmi_response(const gnmi_client::response &r) {
 // ---------------------------------------------------------------------------
 
 int main(int argc, const char *argv[]) {
+  // Docker pipes stdout through a non-TTY, making it block-buffered by default.
+  // Force unit (per-write) flushing so log lines appear immediately.
+  std::cout << std::unitbuf;
 
   const std::string mode = get_flag(argc, argv, "mode", "server");
 
