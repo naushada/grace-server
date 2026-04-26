@@ -89,6 +89,11 @@ public:
   const std::string &assigned_ip() const { return m_assigned_ip; }
   void forward_data(const std::string &pkt) { send_frame(TYPE_DATA, pkt); }
 
+  // Called when the TLS handshake completes (BEV_EVENT_CONNECTED).
+  // Extracts the client certificate CN and logs it; rejects the connection
+  // if the CN is not in the server's allowed-CN list.
+  std::int32_t handle_connect(const std::int32_t &channel,
+                               const std::string &peer_host) override;
   std::int32_t handle_read(const std::int32_t &channel,
                            const std::string &data,
                            const bool &dry_run) override;
@@ -102,9 +107,12 @@ private:
   void   send_frame(uint8_t type, const std::string &payload);
   size_t process_frames(const std::string &buf);
 
+  static std::string extract_cn(struct bufferevent *bev);
+
   openvpn_server *m_parent;
   std::string     m_assigned_ip;
   std::string     m_netmask;
+  std::string     m_peer_cn;   // CN from client certificate (empty = plain TCP)
   std::string     m_recv_buf; // reassembly buffer for partial frames
 };
 

@@ -30,8 +30,14 @@ struct tls_config {
       std::cerr << "[tls] server ctx: cert/key load failed\n";
       return nullptr;
     }
-    if (!ca_file.empty())
+    if (!ca_file.empty()) {
       SSL_CTX_load_verify_locations(ctx.get(), ca_file.c_str(), nullptr);
+      // Require client to present a certificate signed by the CA.
+      // CN-based authorisation is then enforced in openvpn_peer::handle_connect.
+      SSL_CTX_set_verify(ctx.get(),
+                         SSL_VERIFY_PEER | SSL_VERIFY_FAIL_IF_NO_PEER_CERT,
+                         nullptr);
+    }
     return ctx;
   }
 

@@ -298,3 +298,106 @@ Docker bridge: vpn-net (172.20.0.0/24)
 - `tun0` on each side carries the virtual IP traffic (10.8.0.0/24).
 - The server adds a `/32` host route per connected client via `SIOCADDRT`
   so the kernel routes reply packets back through `tun0` to the right peer.
+
+---
+
+## 10. Client authentication via certificate CN
+
+### How mutual TLS (mTLS) works
+
+When TLS is enabled, the server requires every connecting client to present a
+certificate signed by the configured CA (`--ca`).  OpenSSL rejects the TLS
+handshake automatically if the client presents no certificate or one signed by
+an unknown CA — no application code is needed for this.
+
+After the handshake the server extracts the **Common Name (CN)** from the
+client certificate and can use it for fine-grained authorisation.
+
+```
+Client                              Server
+──────                              ──────
+ClientHello  ──────────────────────►
+             ◄────────────────────── ServerHello + server cert (CN=vpn-server)
+client cert (CN=vpn-client) ───────►
+             ◄────────────────────── Finished  (handshake OK)
+BEV_EVENT_CONNECTED fires                    BEV_EVENT_CONNECTED fires
+                                     openvpn_peer::handle_connect()
+                                       extract_cn() → "vpn-client"
+                                       check against allowed-CN list
+                                       → accept / reject
+```
+
+### SSL_CTX configuration (tls_config.hpp)
+
+```cpp
+SSL_CTX_set_verify(ctx.get(),
+                   SSL_VERIFY_PEER | SSL_VERIFY_FAIL_IF_NO_PEER_CERT,
+                   nullptr);
+```
+
+`SSL_VERIFY_PEER` — server requests client certificate.  
+`SSL_VERIFY_FAIL_IF_NO_PEER_CERT` — handshake fails if client sends no cert.
+
+### CN extraction (openvpn_peer.cpp)
+
+```cpp
+SSL   *ssl  = bufferevent_openssl_get_ssl(get_bufferevt());
+X509  *cert = SSL_get_peer_certificate(ssl);          // NULL for plain TCP
+char   cn[256]{};
+X509_NAME_get_text_by_NID(X509_get_subject_name(cert),
+                           NID_commonName, cn, sizeof(cn));
+X509_free(cert);
+// cn now holds e.g. "vpn-client"
+```
+
+`bufferevent_openssl_get_ssl()` returns `nullptr` for plain-TCP bufferevents,
+so the same code path is safe for non-TLS connections.
+
+### Adding an allowed-CN list
+
+In `openvpn_server.hpp` add a set of permitted CNs:
+
+```cpp
+std::set<std::string> m_allowed_cns; // empty = allow all
+```
+
+Populate it from a Lua config file via `lua_engine` at startup:
+
+```lua
+-- /app/command/allowed_clients.lua
+return {
+  allowed_clients = {
+    "vpn-client",
+    "vpn-client-2",
+  }
+}
+```
+
+In `openvpn_peer::handle_connect` after extracting the CN:
+
+```cpp
+if (!m_parent->is_cn_allowed(m_peer_cn)) {
+  std::cerr << "[openvpn_peer] rejected CN=\"" << m_peer_cn << "\"\n";
+  return -1;   // closes the connection
+}
+```
+
+### Test certificates (CN mapping)
+
+| File                    | CN           | Role                        |
+|-------------------------|--------------|-----------------------------|
+| `certs/ca.pem`          | Marvel-CA    | Trust anchor (both sides)   |
+| `certs/server.pem/.key` | vpn-server   | Server identity             |
+| `certs/client.pem/.key` | vpn-client   | Client identity (allowed CN)|
+
+To add a second client:
+
+```bash
+openssl genrsa -out certs/client2.key 2048
+openssl req -new -key certs/client2.key -subj "/CN=vpn-client-2" -out /tmp/c2.csr
+openssl x509 -req -in /tmp/c2.csr -CA certs/ca.pem -CAkey certs/ca.key \
+             -CAcreateserial -out certs/client2.pem -days 3650 -sha256
+```
+
+Then add `"vpn-client-2"` to `allowed_clients.lua` — no server restart required
+if the server reloads the Lua file via `lua_engine` on `inotify` change.

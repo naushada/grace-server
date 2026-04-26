@@ -7,6 +7,8 @@
 #include <arpa/inet.h>
 #include <cstring>
 #include <iostream>
+#include <openssl/ssl.h>
+#include <openssl/x509.h>
 
 // ---------------------------------------------------------------------------
 // Constructor — send IP_ASSIGN immediately after the connection is created.
@@ -28,6 +30,37 @@ openvpn_peer::openvpn_peer(struct bufferevent *bev, const std::string &peer_host
     : evt_io(bev, peer_host),
       m_parent(parent), m_assigned_ip(assigned_ip), m_netmask(netmask) {
   send_ip_assign();
+}
+
+// ---------------------------------------------------------------------------
+// TLS handshake complete — extract client CN, then send IP_ASSIGN
+// ---------------------------------------------------------------------------
+
+std::string openvpn_peer::extract_cn(struct bufferevent *bev) {
+  SSL *ssl = bufferevent_openssl_get_ssl(bev);
+  if (!ssl) return {};
+  X509 *cert = SSL_get_peer_certificate(ssl);
+  if (!cert) return {};
+  char cn[256]{};
+  X509_NAME_get_text_by_NID(X509_get_subject_name(cert), NID_commonName,
+                              cn, sizeof(cn));
+  X509_free(cert);
+  return cn;
+}
+
+std::int32_t openvpn_peer::handle_connect(const std::int32_t &,
+                                           const std::string &peer_host) {
+  m_peer_cn = extract_cn(get_bufferevt());
+  if (m_peer_cn.empty()) {
+    std::cout << "[openvpn_peer] " << peer_host << " connected (plain TCP)\n";
+  } else {
+    std::cout << "[openvpn_peer] " << peer_host
+              << " authenticated CN=\"" << m_peer_cn << "\"\n";
+    // Extend here: check m_peer_cn against an allowed-CN list held by
+    // m_parent and return -1 to reject unauthorised clients, e.g.:
+    //   if (!m_parent->is_cn_allowed(m_peer_cn)) return -1;
+  }
+  return 0;
 }
 
 // ---------------------------------------------------------------------------
