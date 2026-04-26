@@ -17,6 +17,8 @@ RUN apt-get update && apt-get install -y \
     liblua5.4-dev \
     libreadline-dev \
   && rm -rf /var/lib/apt/lists/*
+# Note: grpc_session is implemented directly over nghttp2 (no libgrpc++ needed).
+# libnghttp2-dev above covers both http2_session and grpc_session.
 
 WORKDIR /src
 COPY . /src

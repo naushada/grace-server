@@ -1,11 +1,11 @@
-// Tests for connected_client. We pass a nullptr `server*` because the
-// handlers under test do not dereference `m_parent`. The fd is supplied
-// via socketpair so the underlying bufferevent_socket_new() call in
-// evt_io succeeds.
+// Tests for connected_client.
 //
-// handle_read now feeds raw bytes into an HTTP/2 session (nghttp2), so
-// the return-value semantics changed: positive = bytes consumed, negative
-// = nghttp2 protocol error.
+// The handle_read path now feeds raw bytes into a grpc_session (which wraps
+// http2_session internally).  We use a raw http2_session on the client side to
+// generate realistic input for the server-side grpc_session.
+//
+// Dry-run semantics: handle_read(dry_run=true) always returns 0 ("can handle").
+// Wet-run semantics: returns bytes-consumed (>0) on valid HTTP/2, or <0 on error.
 
 #include "client_app.hpp"
 #include "http2.hpp"
@@ -34,14 +34,18 @@ protected:
       close(sv[1]);
   }
 
-  // Build the bytes a real HTTP/2 client would send at connection start
-  // (connection preface + SETTINGS frame). These are valid input for the
-  // server-side HTTP/2 session inside connected_client.
+  // Build the bytes a real HTTP/2 (or gRPC) client sends at connection start:
+  // PRI * HTTP/2.0\r\n\r\nSM\r\n\r\n + client SETTINGS frame.
+  // A grpc_session server accepts these because it wraps http2_session.
   static std::string valid_http2_preface() {
     http2_session client(/*server_side=*/false);
     return client.drain_send_buf();
   }
 };
+
+// ---------------------------------------------------------------------------
+// Dry-run gate
+// ---------------------------------------------------------------------------
 
 TEST_F(ConnectedClientTest, HandleReadDryRunReturnsZero) {
   connected_client c(sv[0], "127.0.0.1", /*parent=*/nullptr);
@@ -49,14 +53,22 @@ TEST_F(ConnectedClientTest, HandleReadDryRunReturnsZero) {
   EXPECT_EQ(c.handle_read(/*channel=*/0, "any data", /*dry_run=*/true), 0);
 }
 
+// ---------------------------------------------------------------------------
+// Wet-run: valid HTTP/2 / gRPC connection preface
+// ---------------------------------------------------------------------------
+
 TEST_F(ConnectedClientTest, HandleReadWetRunWithValidHttp2ReturnsPositive) {
   connected_client c(sv[0], "127.0.0.1", nullptr);
   sv[0] = -1;
 
   const auto preface = valid_http2_preface();
-  // Feed the valid client connection preface into the server-side session.
+  // grpc_session wraps http2_session; a valid HTTP/2 preface is consumed fine.
   EXPECT_GT(c.handle_read(0, preface, /*dry_run=*/false), 0);
 }
+
+// ---------------------------------------------------------------------------
+// Wet-run: garbage bytes trigger an HTTP/2 protocol error
+// ---------------------------------------------------------------------------
 
 TEST_F(ConnectedClientTest, HandleReadWetRunWithGarbageReturnsNegative) {
   connected_client c(sv[0], "127.0.0.1", nullptr);
@@ -64,6 +76,10 @@ TEST_F(ConnectedClientTest, HandleReadWetRunWithGarbageReturnsNegative) {
   // "hello" is not a valid HTTP/2 client connection preface.
   EXPECT_LT(c.handle_read(0, "hello", /*dry_run=*/false), 0);
 }
+
+// ---------------------------------------------------------------------------
+// Edge cases
+// ---------------------------------------------------------------------------
 
 TEST_F(ConnectedClientTest, HandleReadEmptyDataIsHandledGracefully) {
   connected_client c(sv[0], "127.0.0.1", nullptr);

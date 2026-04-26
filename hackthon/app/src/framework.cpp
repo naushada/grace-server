@@ -12,20 +12,27 @@ extern "C" {
 }
 
 // Client related callback
-void client_event_cb(struct bufferevent *bev, short events, void *ctx) {
-  if (bev == nullptr) {
-    return;
-  }
-  auto channel = bufferevent_getfd(bev);
-  auto clnt = static_cast<connected_client *>(ctx);
+//
+// All three callbacks cast ctx to evt_io* so they work for any subclass
+// (connected_client, gnmi_connection, etc.).  Virtual dispatch takes care
+// of calling the right override.
 
-  if (events & BEV_EVENT_EOF) {
-    clnt->handle_close(channel);
-    clnt->parent().handle_close(channel);
-  } else if (events & BEV_EVENT_ERROR) {
-    // Add error handling
-    clnt->handle_close(channel);
-    clnt->parent().handle_close(channel);
+void client_event_cb(struct bufferevent *bev, short events, void *ctx) {
+  if (bev == nullptr)
+    return;
+
+  auto channel = bufferevent_getfd(bev);
+  auto io = static_cast<evt_io *>(ctx);
+
+  if (events & BEV_EVENT_CONNECTED) {
+    // Outbound connection established — let the subclass start its protocol.
+    io->handle_connect(channel, "");
+  } else if ((events & BEV_EVENT_EOF) || (events & BEV_EVENT_ERROR)) {
+    // Peer closed or network error.  handle_close() is responsible for any
+    // parent-notification (e.g. connected_client tells server to erase it).
+    io->handle_close(channel);
+  } else if (events & BEV_EVENT_TIMEOUT) {
+    io->handle_event(channel, static_cast<std::uint16_t>(events));
   }
 }
 
@@ -40,20 +47,18 @@ void client_read_cb(struct bufferevent *bev, void *ctx) {
   std::string data((char *)evbuffer_pullup(input, nbytes), nbytes);
 
   auto dry_run = true;
-  auto clnt = static_cast<connected_client *>(ctx);
+  auto io = static_cast<evt_io *>(ctx);
 
-  if (!clnt->handle_read(channel, data, dry_run)) {
-    clnt->handle_read(channel, data, !dry_run);
+  if (!io->handle_read(channel, data, dry_run)) {
+    io->handle_read(channel, data, !dry_run);
     evbuffer_drain(input, nbytes);
   }
 }
 
 void client_write_cb(struct bufferevent *bev, void *ctx) {
-
-  auto clnt = static_cast<connected_client *>(ctx);
-  // tx buffer has free space in it, proceed next write
+  auto io = static_cast<evt_io *>(ctx);
   auto channel = bufferevent_getfd(bev);
-  clnt->handle_write(channel);
+  io->handle_write(channel);
 }
 
 // Server related callback

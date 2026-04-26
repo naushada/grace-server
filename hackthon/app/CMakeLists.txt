@@ -75,6 +75,7 @@ include_directories(inc)
 include_directories(${NGHTTP2_INCLUDE_DIRS})
 file(GLOB SOURCES "src/*.cpp")
 add_executable(app ${SOURCES})
+target_include_directories(app PRIVATE ${PROTO_GEN_DIR})
 target_link_libraries(app PUBLIC
   gnmi_proto
   pthread

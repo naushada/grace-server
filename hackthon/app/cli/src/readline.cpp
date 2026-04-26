@@ -320,6 +320,229 @@ google::protobuf::Message *create_message_by_name(const std::string &cmd_name) {
   return prototype->New();
 }
 
+// ---------------------------------------------------------------------------
+// YANG path helpers
+// ---------------------------------------------------------------------------
+
+// Convert a YANG instance-identifier string such as
+//   "/interfaces/interface[name=eth0]/state/oper-status"
+// into a gnmi::Path with one PathElem per segment.
+static gnmi::Path parse_yang_path(const std::string &path_str) {
+  gnmi::Path path;
+  std::string s = path_str;
+  if (!s.empty() && s[0] == '/')
+    s = s.substr(1);
+  if (s.empty())
+    return path;
+
+  std::istringstream ss(s);
+  std::string segment;
+  while (std::getline(ss, segment, '/')) {
+    if (segment.empty())
+      continue;
+    auto *elem = path.add_elem();
+    const auto bracket = segment.find('[');
+    if (bracket == std::string::npos) {
+      elem->set_name(segment);
+    } else {
+      elem->set_name(segment.substr(0, bracket));
+      // Parse "[key=val][key2=val2]..." predicates
+      std::string rest = segment.substr(bracket);
+      size_t pos = 0;
+      while (pos < rest.size() && rest[pos] == '[') {
+        const auto end_b = rest.find(']', pos);
+        if (end_b == std::string::npos)
+          break;
+        const std::string kv = rest.substr(pos + 1, end_b - pos - 1);
+        const auto eq = kv.find('=');
+        if (eq != std::string::npos)
+          (*elem->mutable_key())[kv.substr(0, eq)] = kv.substr(eq + 1);
+        pos = end_b + 1;
+      }
+    }
+  }
+  return path;
+}
+
+// Populate a gnmi::TypedValue from a string and an encoding hint.
+// If value_str looks like JSON (starts with '{' or '[') and encoding is JSON*,
+// use json_val/json_ietf_val; otherwise fall back to string_val.
+static void set_typed_value(gnmi::TypedValue *val,
+                             const std::string &value_str,
+                             const std::string &encoding) {
+  const bool is_json =
+      !value_str.empty() &&
+      (value_str.front() == '{' || value_str.front() == '[');
+
+  if (encoding == "JSON_IETF") {
+    val->set_json_ietf_val(value_str);
+  } else if (encoding == "JSON" || is_json) {
+    val->set_json_val(value_str);
+  } else {
+    val->set_string_val(value_str);
+  }
+}
+
+// Map encoding name string to gnmi::Encoding enum value.
+static gnmi::Encoding parse_encoding(const std::string &enc) {
+  if (enc == "PROTO")     return gnmi::PROTO;
+  if (enc == "JSON_IETF") return gnmi::JSON_IETF;
+  if (enc == "ASCII")     return gnmi::ASCII;
+  return gnmi::JSON; // default
+}
+
+// ---------------------------------------------------------------------------
+// gNMI CLI command handlers
+// ---------------------------------------------------------------------------
+// Each handler extracts target/port/prefix/path/value from the parsed
+// argument map, builds the appropriate gnmi proto, serialises it, calls
+// gnmi_client::call(), and prints the result in text-format protobuf.
+//
+// Common argument keys:
+//   target   — IP address or hostname of the peer gNMI device
+//   port     — TCP port (default 9339)
+//   prefix   — common YANG path prefix (default "/")
+//   path     — specific leaf / subtree relative to prefix
+//   value    — new value for SET/UPDATE/REPLACE
+//   encoding — JSON (default), PROTO, JSON_IETF
+
+static std::string get_arg(const std::map<std::string, std::string> &args,
+                            const std::string &key,
+                            const std::string &def = "") {
+  auto it = args.find(key);
+  return it != args.end() ? it->second : def;
+}
+
+// Print a gnmi_client::response.  On success, deserialise body_pb as MsgT
+// and print it in text format.
+template <typename MsgT>
+static void print_gnmi_response(const gnmi_client::response &resp,
+                                 const std::string &op) {
+  if (resp.grpc_status < 0) {
+    std::cout << "[" << op << "] transport error: " << resp.grpc_message
+              << "\n";
+    return;
+  }
+  if (resp.grpc_status != 0) {
+    std::cout << "[" << op << "] gRPC error status=" << resp.grpc_status;
+    if (!resp.grpc_message.empty())
+      std::cout << " message=" << resp.grpc_message;
+    std::cout << "\n";
+    return;
+  }
+  MsgT msg;
+  if (!msg.ParseFromString(resp.body_pb)) {
+    std::cout << "[" << op << "] OK but response proto parse failed ("
+              << resp.body_pb.size() << " bytes)\n";
+    return;
+  }
+  std::string text;
+  google::protobuf::TextFormat::PrintToString(msg, &text);
+  std::cout << "[" << op << "] OK\n" << text;
+}
+
+// GET — retrieve one path from the target.
+static void handle_gnmi_get(const std::map<std::string, std::string> &args) {
+  const std::string host     = get_arg(args, "target", "127.0.0.1");
+  const uint16_t    port     = static_cast<uint16_t>(std::stoi(get_arg(args, "port", "9339")));
+  const std::string prefix   = get_arg(args, "prefix", "/");
+  const std::string path_str = get_arg(args, "path", "");
+  const std::string encoding = get_arg(args, "encoding", "JSON");
+
+  gnmi::GetRequest req;
+  if (prefix != "/" && !prefix.empty())
+    *req.mutable_prefix() = parse_yang_path(prefix);
+  *req.add_path() = parse_yang_path(path_str);
+  req.set_encoding(parse_encoding(encoding));
+
+  std::string req_pb;
+  req.SerializeToString(&req_pb);
+
+  std::cout << "[gnmi_get] -> " << host << ":" << port
+            << " prefix=" << prefix << " path=" << path_str << "\n";
+  const auto resp = gnmi_client::call(host, port, "/gnmi.gNMI/Get", req_pb);
+  print_gnmi_response<gnmi::GetResponse>(resp, "gnmi_get");
+}
+
+// UPDATE — merge the value into the existing configuration at path.
+static void handle_gnmi_update(const std::map<std::string, std::string> &args) {
+  const std::string host     = get_arg(args, "target", "127.0.0.1");
+  const uint16_t    port     = static_cast<uint16_t>(std::stoi(get_arg(args, "port", "9339")));
+  const std::string prefix   = get_arg(args, "prefix", "/");
+  const std::string path_str = get_arg(args, "path", "");
+  const std::string value    = get_arg(args, "value", "");
+  const std::string encoding = get_arg(args, "encoding", "JSON");
+
+  gnmi::SetRequest req;
+  if (prefix != "/" && !prefix.empty())
+    *req.mutable_prefix() = parse_yang_path(prefix);
+
+  auto *upd = req.add_update();
+  *upd->mutable_path() = parse_yang_path(path_str);
+  set_typed_value(upd->mutable_val(), value, encoding);
+
+  std::string req_pb;
+  req.SerializeToString(&req_pb);
+
+  std::cout << "[gnmi_update] -> " << host << ":" << port
+            << " prefix=" << prefix << " path=" << path_str
+            << " value=" << value << "\n";
+  const auto resp = gnmi_client::call(host, port, "/gnmi.gNMI/Set", req_pb);
+  print_gnmi_response<gnmi::SetResponse>(resp, "gnmi_update");
+}
+
+// REPLACE — completely replace the subtree at path with the given value.
+static void handle_gnmi_replace(const std::map<std::string, std::string> &args) {
+  const std::string host     = get_arg(args, "target", "127.0.0.1");
+  const uint16_t    port     = static_cast<uint16_t>(std::stoi(get_arg(args, "port", "9339")));
+  const std::string prefix   = get_arg(args, "prefix", "/");
+  const std::string path_str = get_arg(args, "path", "");
+  const std::string value    = get_arg(args, "value", "{}");
+  const std::string encoding = get_arg(args, "encoding", "JSON");
+
+  gnmi::SetRequest req;
+  if (prefix != "/" && !prefix.empty())
+    *req.mutable_prefix() = parse_yang_path(prefix);
+
+  auto *rep = req.add_replace();
+  *rep->mutable_path() = parse_yang_path(path_str);
+  set_typed_value(rep->mutable_val(), value, encoding);
+
+  std::string req_pb;
+  req.SerializeToString(&req_pb);
+
+  std::cout << "[gnmi_replace] -> " << host << ":" << port
+            << " prefix=" << prefix << " path=" << path_str
+            << " value=" << value << "\n";
+  const auto resp = gnmi_client::call(host, port, "/gnmi.gNMI/Set", req_pb);
+  print_gnmi_response<gnmi::SetResponse>(resp, "gnmi_replace");
+}
+
+// DELETE — remove the node at path from the target configuration.
+static void handle_gnmi_delete(const std::map<std::string, std::string> &args) {
+  const std::string host     = get_arg(args, "target", "127.0.0.1");
+  const uint16_t    port     = static_cast<uint16_t>(std::stoi(get_arg(args, "port", "9339")));
+  const std::string prefix   = get_arg(args, "prefix", "/");
+  const std::string path_str = get_arg(args, "path", "");
+
+  gnmi::SetRequest req;
+  if (prefix != "/" && !prefix.empty())
+    *req.mutable_prefix() = parse_yang_path(prefix);
+  *req.add_delete_() = parse_yang_path(path_str);
+
+  std::string req_pb;
+  req.SerializeToString(&req_pb);
+
+  std::cout << "[gnmi_delete] -> " << host << ":" << port
+            << " prefix=" << prefix << " path=" << path_str << "\n";
+  const auto resp = gnmi_client::call(host, port, "/gnmi.gNMI/Set", req_pb);
+  print_gnmi_response<gnmi::SetResponse>(resp, "gnmi_delete");
+}
+
+// ---------------------------------------------------------------------------
+// Command dispatcher
+// ---------------------------------------------------------------------------
+
 void process_command(const std::string &line) {
   std::stringstream ss(line);
   std::string cmd_name;
@@ -345,18 +568,28 @@ void process_command(const std::string &line) {
     return;
   }
 
+  // Parse "key=value" pairs from the rest of the line.
   std::map<std::string, std::string> arguments;
   std::string pair;
   while (ss >> pair) {
-    size_t pos = pair.find('=');
-    if (pos != std::string::npos) {
-      std::string key = pair.substr(0, pos);
-      std::string val = pair.substr(pos + 1);
-      arguments[key] = val;
-    }
+    const size_t pos = pair.find('=');
+    if (pos != std::string::npos)
+      arguments[pair.substr(0, pos)] = pair.substr(pos + 1);
   }
 
-  apply_to_proto(cmd_name, arguments);
+  // gNMI commands: build proto, gRPC-frame, send to peer device.
+  if (cmd_name == "gnmi_get") {
+    handle_gnmi_get(arguments);
+  } else if (cmd_name == "gnmi_update") {
+    handle_gnmi_update(arguments);
+  } else if (cmd_name == "gnmi_replace") {
+    handle_gnmi_replace(arguments);
+  } else if (cmd_name == "gnmi_delete") {
+    handle_gnmi_delete(arguments);
+  } else {
+    // Generic protobuf command via reflection.
+    apply_to_proto(cmd_name, arguments);
+  }
 }
 
 void apply_to_proto(const std::string &cmd_name,

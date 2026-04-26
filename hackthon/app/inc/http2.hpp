@@ -49,11 +49,20 @@ public:
   std::string drain_send_buf();
 
   // Server-side: submit an HTTP/2 response for stream_id.
+  // Set with_trailers=true when you intend to call submit_trailer() afterwards
+  // (e.g. gRPC uses trailing HEADERS for grpc-status).
   // Returns 0 on success or a negative nghttp2 error code.
   int submit_response(
       int32_t stream_id, int status,
       const std::vector<std::pair<std::string, std::string>> &extra_headers,
-      const std::string &body);
+      const std::string &body,
+      bool with_trailers = false);
+
+  // Server-side: append trailing HEADERS to a stream already opened by
+  // submit_response(with_trailers=true). Sends END_STREAM.
+  int submit_trailer(
+      int32_t stream_id,
+      const std::vector<std::pair<std::string, std::string>> &trailers);
 
   // Client-side: submit an HTTP/2 request.
   // Returns the new stream id (> 0) or a negative nghttp2 error code.
@@ -71,6 +80,7 @@ private:
   struct stream_ctx {
     request req;
     std::string resp_body; // staging buffer for submit_response data provider
+    bool trailer_mode{false}; // when true, data EOF uses NO_END_STREAM (for gRPC trailers)
   };
 
   // Overload for string-literal names (static duration — no temporary created).

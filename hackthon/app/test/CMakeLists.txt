@@ -18,6 +18,8 @@ include_directories(
   ${LIBEVENT_INCLUDE_DIRS}
   ${NGHTTP2_INCLUDE_DIRS}
   ${CMAKE_CURRENT_SOURCE_DIR}/../inc
+  # Generated protobuf headers (gnmi.pb.h etc.) live here at build time.
+  ${CMAKE_CURRENT_BINARY_DIR}/../proto_gen
 )
 
 # Use the parent flag set — stays in sync with the rest of the project.
@@ -30,6 +32,8 @@ set(APP_SOURCES_UNDER_TEST
   ${CMAKE_CURRENT_SOURCE_DIR}/../src/client_app.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/../src/framework.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/../src/fs_app.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/../src/gnmi_client.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/../src/grpc_session.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/../src/http2.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/../src/lua_engine.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/../src/server_app.cpp

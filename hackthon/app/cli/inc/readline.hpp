@@ -3,6 +3,7 @@
 
 #include "completion_helpers.hpp"
 #include "fs_app.hpp"
+#include "gnmi_client.hpp"
 #include "lua_engine.hpp"
 
 #include <fstream>
@@ -15,6 +16,10 @@
 #include <google/protobuf/descriptor.h>
 #include <google/protobuf/dynamic_message.h>
 #include <google/protobuf/message.h>
+#include <google/protobuf/text_format.h>
+
+// Generated gNMI proto header (produced by protoc at build time).
+#include "gnmi/gnmi.pb.h"
 
 #include <iomanip>
 #include <readline/history.h>

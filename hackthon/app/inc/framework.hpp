@@ -91,6 +91,32 @@ public:
     bufferevent_enable(m_buffer_evt_p.get(), events);
   }
 
+  // Outbound TCP client connection.  fd=-1 tells libevent to create the
+  // socket; bufferevent_socket_connect_hostname initiates the async connect.
+  // BEV_EVENT_CONNECTED is delivered to client_event_cb → handle_connect()
+  // when the connection is established.
+  evt_io(const std::string &host, uint16_t port, bool /*outbound*/)
+      : m_from_host(host),
+        m_buffer_evt_p(bufferevent_socket_new(evt_base::instance().get(),
+                                              /*fd=*/-1,
+                                              BEV_OPT_CLOSE_ON_FREE)),
+        m_listener_p(nullptr) {
+    bufferevent_setcb(m_buffer_evt_p.get(), client_read_cb, client_write_cb,
+                      client_event_cb, this);
+    bufferevent_enable(m_buffer_evt_p.get(), EV_READ | EV_WRITE | EV_PERSIST);
+
+    // 5-second read + write timeout so the CLI never hangs indefinitely.
+    const struct timeval tv{5, 0};
+    bufferevent_set_timeouts(m_buffer_evt_p.get(), &tv, &tv);
+
+    // Async DNS + connect. nullptr evdns_base → blocking getaddrinfo,
+    // acceptable on a CLI path.
+    bufferevent_socket_connect_hostname(m_buffer_evt_p.get(), /*evdns=*/nullptr,
+                                        AF_UNSPEC, host.c_str(),
+                                        static_cast<int>(port));
+  }
+
+  // TCP server listener.
   evt_io(const std::string &host, const std::uint16_t &port)
       : m_from_host(host), m_buffer_evt_p(nullptr), m_listener_p(nullptr) {
 

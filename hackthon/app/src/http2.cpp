@@ -102,10 +102,12 @@ nghttp2_nv http2_session::make_nv(const std::string &name,
 int http2_session::submit_response(
     int32_t stream_id, int status,
     const std::vector<std::pair<std::string, std::string>> &extra_headers,
-    const std::string &body) {
+    const std::string &body,
+    bool with_trailers) {
 
   auto &ctx = m_streams[stream_id];
   ctx.resp_body = body;
+  ctx.trailer_mode = with_trailers;
 
   const std::string status_str = std::to_string(status);
   std::vector<nghttp2_nv> nva;
@@ -113,16 +115,30 @@ int http2_session::submit_response(
   for (const auto &[k, v] : extra_headers)
     nva.push_back(make_nv(k, v));
 
-  if (body.empty()) {
+  // Use nullptr provider only when there is no body and no trailers follow
+  // (nullptr causes nghttp2 to set END_STREAM on the HEADERS frame, which
+  // would close the stream before we can send the trailing HEADERS).
+  if (body.empty() && !with_trailers) {
     return nghttp2_submit_response(m_session, stream_id, nva.data(), nva.size(),
                                    nullptr);
   }
 
+  // source.ptr points to the stream_ctx so the provider can also read
+  // trailer_mode (changed from &ctx.resp_body in the original design).
   nghttp2_data_provider prd{};
-  prd.source.ptr = &ctx.resp_body;
+  prd.source.ptr = &ctx;
   prd.read_callback = response_body_read;
   return nghttp2_submit_response(m_session, stream_id, nva.data(), nva.size(),
                                  &prd);
+}
+
+int http2_session::submit_trailer(
+    int32_t stream_id,
+    const std::vector<std::pair<std::string, std::string>> &trailers) {
+  std::vector<nghttp2_nv> nva;
+  for (const auto &[k, v] : trailers)
+    nva.push_back(make_nv(k, v));
+  return nghttp2_submit_trailer(m_session, stream_id, nva.data(), nva.size());
 }
 
 int32_t http2_session::submit_request(
@@ -182,8 +198,11 @@ int http2_session::on_header(nghttp2_session *, const nghttp2_frame *frame,
 
   if (frame->hd.type != NGHTTP2_HEADERS)
     return 0;
+  // Accept request, response, and trailing-HEADERS (NGHTTP2_HCAT_HEADERS)
+  // categories — the last is used by gRPC to deliver grpc-status trailers.
   if (frame->headers.cat != NGHTTP2_HCAT_REQUEST &&
-      frame->headers.cat != NGHTTP2_HCAT_RESPONSE)
+      frame->headers.cat != NGHTTP2_HCAT_RESPONSE &&
+      frame->headers.cat != NGHTTP2_HCAT_HEADERS)
     return 0;
 
   auto it = self->m_streams.find(frame->hd.stream_id);
@@ -255,12 +274,18 @@ ssize_t http2_session::response_body_read(nghttp2_session *, int32_t,
                                           uint32_t *data_flags,
                                           nghttp2_data_source *source,
                                           void *) {
-  auto *body = static_cast<std::string *>(source->ptr);
-  const size_t n = std::min(length, body->size());
-  std::memcpy(buf, body->data(), n);
-  body->erase(0, n);
-  if (body->empty())
+  auto *ctx = static_cast<stream_ctx *>(source->ptr);
+  auto &body = ctx->resp_body;
+  const size_t n = std::min(length, body.size());
+  std::memcpy(buf, body.data(), n);
+  body.erase(0, n);
+  if (body.empty()) {
     *data_flags |= NGHTTP2_DATA_FLAG_EOF;
+    // When trailer_mode is set, tell nghttp2 NOT to add END_STREAM on the
+    // DATA frame — we will close the stream via submit_trailer() instead.
+    if (ctx->trailer_mode)
+      *data_flags |= NGHTTP2_DATA_FLAG_NO_END_STREAM;
+  }
   return static_cast<ssize_t>(n);
 }
 
