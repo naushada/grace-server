@@ -80,7 +80,30 @@ COPY --from=build --chown=edge:cordoba /src/build/app/cli/cli_app /app/cli_app
 COPY --from=build --chown=edge:cordoba /src/app/command/ /app/command/
 COPY --from=build --chown=edge:cordoba /src/app/openvpn/command/ /app/command/
 
-# Default: server mode. Override CMD at runtime for client mode:
-#   docker run ... /app/app --mode=client --server=<ip> --tun=tun0 --status=/run/vpn_status.lua
+# Self-signed TLS certificates for openvpn_server / openvpn_client testing.
+#   /app/certs/ca.pem     — CA certificate  (used by both sides for peer verification)
+#   /app/certs/server.pem — server certificate (CN=vpn-server, signed by CA)
+#   /app/certs/server.key — server private key
+#   /app/certs/client.pem — client certificate (CN=vpn-client, signed by CA)
+#   /app/certs/client.key — client private key
+#
+# These are intentionally self-signed test credentials — do NOT use in production.
+COPY --chown=edge:cordoba certs/ /app/certs/
+
+# Default: server mode (plain TCP).
+#
+# TLS server:
+#   docker run --cap-add NET_ADMIN --device /dev/net/tun marvel:release \
+#     /app/app --mode=server --tls=true \
+#             --cert=/app/certs/server.pem --key=/app/certs/server.key \
+#             --ca=/app/certs/ca.pem
+#
+# TLS client:
+#   docker run --cap-add NET_ADMIN --device /dev/net/tun marvel:release \
+#     /app/app --mode=client --server=<host> \
+#             --tls=true \
+#             --cert=/app/certs/client.pem --key=/app/certs/client.key \
+#             --ca=/app/certs/ca.pem \
+#             --status=/run/vpn_status.lua
 
 CMD ["/app/app"]

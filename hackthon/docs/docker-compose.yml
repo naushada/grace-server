@@ -68,26 +68,55 @@ services:
   # openvpn_client (TLS variant) — optional; comment out if not needed.
   #   Mount a directory containing cert.pem / key.pem / ca.pem.
   # ─────────────────────────────────────────────────────────────────────────
+  # ─────────────────────────────────────────────────────────────────────────
+  # TLS server — uses bundled self-signed certs baked into the image at
+  # /app/certs/ (see Dockerfile COPY certs/).  Profile: tls.
+  # ─────────────────────────────────────────────────────────────────────────
+  vpn-server-tls:
+    image: marvel:release
+    <<: *tun-caps
+    command:
+      - /app/app
+      - --mode=server
+      - --server-ip=10.9.0.1
+      - --pool-start=10.9.0.2
+      - --pool-end=10.9.0.254
+      - --netmask=255.255.255.0
+      - --tls=true
+      - --cert=/app/certs/server.pem
+      - --key=/app/certs/server.key
+      - --ca=/app/certs/ca.pem
+    ports:
+      - "1195:1194"      # TLS tunnel on host port 1195
+      - "58990:58989"    # gNMI gRPC (TLS server)
+    networks:
+      vpn-net:
+        ipv4_address: 172.20.0.5
+    profiles:
+      - tls
+    restart: unless-stopped
+
+  # ─────────────────────────────────────────────────────────────────────────
+  # TLS client — certs baked into image; connects to vpn-server-tls.
+  # ─────────────────────────────────────────────────────────────────────────
   vpn-client-tls:
     image: marvel:release
     <<: *tun-caps
     command:
       - /app/app
       - --mode=client
-      - --server=vpn-server
+      - --server=vpn-server-tls
       - --port=1194
       - --status=/run/vpn_status.lua
       - --tls=true
-      - --cert=/certs/cert.pem
-      - --key=/certs/key.pem
-      - --ca=/certs/ca.pem
-    volumes:
-      - ./certs:/certs:ro
+      - --cert=/app/certs/client.pem
+      - --key=/app/certs/client.key
+      - --ca=/app/certs/ca.pem
     networks:
       vpn-net:
-        ipv4_address: 172.20.0.4
+        ipv4_address: 172.20.0.6
     depends_on:
-      - vpn-server
+      - vpn-server-tls
     profiles:
-      - tls                          # only starts with: docker compose --profile tls up
+      - tls
     restart: unless-stopped
