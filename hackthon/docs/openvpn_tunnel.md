@@ -237,3 +237,64 @@ return {
 ```
 
 Read it from a Lua script via `require()` or load it with `lua_engine`.
+
+---
+
+## 9. Docker Compose — running with `marvel:release`
+
+The `docs/docker-compose.yml` file runs both services from the `marvel:release` image
+on a dedicated bridge network (`172.20.0.0/24`).
+
+### Services
+
+| Service          | Container IP  | Ports exposed         | Profile  |
+|------------------|---------------|-----------------------|----------|
+| `vpn-server`     | 172.20.0.2    | 1194 (tunnel), 58989 (gNMI) | default |
+| `vpn-client`     | 172.20.0.3    | —                     | default  |
+| `vpn-client-tls` | 172.20.0.4    | —                     | `tls`    |
+
+Both services require `CAP_NET_ADMIN` and `/dev/net/tun` — declared once via
+the `x-tun-caps` YAML anchor and merged into each service with `<<: *tun-caps`.
+
+### Start plain (server + client)
+
+```bash
+docker compose -f docs/docker-compose.yml up
+```
+
+### Start with TLS client as well
+
+```bash
+# Generate certs first (self-signed example)
+openssl req -x509 -newkey rsa:2048 -keyout docs/certs/key.pem \
+            -out docs/certs/cert.pem -days 365 -nodes
+
+docker compose -f docs/docker-compose.yml --profile tls up
+```
+
+The TLS client mounts `./certs/` read-only at `/certs` inside the container and
+passes `--tls=true --cert=/certs/cert.pem --key=/certs/key.pem --ca=/certs/ca.pem`.
+
+### How Docker DNS wires client → server
+
+The client uses `--server=vpn-server`. Docker's embedded DNS resolves the service
+name `vpn-server` to `172.20.0.2` automatically — no hardcoded IPs needed.
+
+### Network topology
+
+```
+Docker bridge: vpn-net (172.20.0.0/24)
+
+  ┌─────────────────────────┐      TCP 1194       ┌─────────────────────────┐
+  │  vpn-client             │ ──────────────────► │  vpn-server             │
+  │  eth0: 172.20.0.3       │                     │  eth0: 172.20.0.2       │
+  │  tun0: 10.8.0.3/24      │ ◄── tunnel frames ──│  tun0: 10.8.0.1/24      │
+  └─────────────────────────┘                     └─────────────────────────┘
+          │  (virtual IP traffic)                          │
+          └──────────────── 10.8.0.0/24 ──────────────────┘
+```
+
+- `eth0` carries the encrypted/raw TCP tunnel frames between containers.
+- `tun0` on each side carries the virtual IP traffic (10.8.0.0/24).
+- The server adds a `/32` host route per connected client via `SIOCADDRT`
+  so the kernel routes reply packets back through `tun0` to the right peer.
