@@ -46,6 +46,9 @@ void openvpn_peer::send_frame(uint8_t type, const std::string &payload) {
 }
 
 void openvpn_peer::send_ip_assign() {
+  // Payload format: "<ip> <netmask>"  e.g. "10.8.0.3 255.255.255.0"
+  // Client splits on the first space to obtain both fields independently,
+  // applies them via SIOCSIFADDR + SIOCSIFNETMASK, then raises tunX.
   const std::string payload = m_assigned_ip + " " + m_netmask;
   send_frame(TYPE_IP_ASSIGN, payload);
   std::cout << "[openvpn_peer] IP_ASSIGN " << payload << "\n";

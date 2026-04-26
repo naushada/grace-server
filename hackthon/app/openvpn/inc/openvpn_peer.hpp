@@ -11,12 +11,63 @@ class openvpn_server;
 // Per-client tunnel connection handler.  Inherits evt_io (inbound / server-side
 // constructor) so libevent delivers I/O events through the standard hooks.
 //
-// Frame format (shared with openvpn_tunnel_client):
-//   [type : 1 byte][length : 4 bytes big-endian][payload : length bytes]
+// ═══════════════════════════════════════════════════════════════════════════
+// Tunnel frame format  (TCP stream between openvpn_server ↔ openvpn_client)
+// ═══════════════════════════════════════════════════════════════════════════
 //
-//   0x01  IP_ASSIGN   server → client   payload = assigned IP as ASCII string
-//   0x02  DATA        bidirectional     payload = raw tunnel bytes
-//   0x03  DISCONNECT  client → server   graceful shutdown notification
+//   ┌────────┬────────────────────────┬──────────────────────────────────┐
+//   │ type   │ length (big-endian)    │ payload                          │
+//   │ 1 byte │ 4 bytes                │ <length> bytes                   │
+//   └────────┴────────────────────────┴──────────────────────────────────┘
+//
+//   type 0x01  IP_ASSIGN   direction: server → client (once, on connect)
+//   type 0x02  DATA        direction: bidirectional
+//   type 0x03  DISCONNECT  direction: client → server (graceful teardown)
+//
+// ───────────────────────────────────────────────────────────────────────────
+// IP_ASSIGN payload  (type 0x01)
+// ───────────────────────────────────────────────────────────────────────────
+//   ASCII string:  "<ip> <netmask>\0"
+//   Example:       "10.8.0.3 255.255.255.0"
+//
+//   The client splits on the first space:
+//     field 0 → virtual IP  assigned to tunX  (SIOCSIFADDR)
+//     field 1 → subnet mask applied to tunX   (SIOCSIFNETMASK)
+//   After applying both, the client brings tunX UP|RUNNING.
+//
+// ───────────────────────────────────────────────────────────────────────────
+// DATA payload  (type 0x02)
+// ───────────────────────────────────────────────────────────────────────────
+//   A single raw IPv4 packet, exactly as read from the TUN interface
+//   (IFF_NO_PI — no prepended packet-information header).
+//
+//   Packet structure inside the payload:
+//     ┌─────────────────────────────────────────────┐
+//     │  IPv4 header  (min 20 bytes)                │
+//     │    src  = sender's virtual IP (e.g. 10.8.0.3)
+//     │    dst  = destination virtual IP            │
+//     ├─────────────────────────────────────────────┤
+//     │  Transport header  (TCP / UDP / ICMP …)     │
+//     ├─────────────────────────────────────────────┤
+//     │  Application payload                        │
+//     └─────────────────────────────────────────────┘
+//
+//   Server-side routing:  server_tun_io reads the raw IP packet from its
+//   tunX fd, extracts dst (bytes 16-19 of the IP header), looks up the
+//   owning peer via ip_pool::find_channel(), and calls forward_data() to
+//   wrap it in a DATA frame and send it over the TCP tunnel.
+//
+//   Client-side injection: openvpn_client::handle_read unwraps the DATA
+//   frame and writes the raw IP packet to its tunX fd, injecting it into
+//   the local kernel IP stack so applications see it as normal traffic.
+//
+// ───────────────────────────────────────────────────────────────────────────
+// End-to-end flow example  (gNMI Get from server to client)
+// ───────────────────────────────────────────────────────────────────────────
+//   server app                tunnel                   client (10.8.0.3)
+//   ──────────                ──────                   ─────────────────
+//   gNMI → kernel → tunX → [DATA frame] → TCP → client tunX → kernel
+//                                                              → gNMI svc
 class openvpn_peer : public evt_io {
 public:
   static constexpr uint8_t TYPE_IP_ASSIGN  = 0x01;
