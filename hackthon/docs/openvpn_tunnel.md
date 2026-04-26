@@ -39,7 +39,7 @@ x-tun-caps: &tun-caps
 ## 2. Building the image
 
 ```bash
-docker build -t grace-server .
+docker build -t marvel:release .
 ```
 
 ---
@@ -710,3 +710,135 @@ docker compose -f docs/docker-compose.yml --profile tls --profile gnmi-tls up
 `/gnmi.gNMI/Subscribe` returns `grpc_status=12` (UNIMPLEMENTED) — the
 `grpc_session` currently handles only unary RPCs.  Streaming Subscribe
 requires bidirectional HTTP/2 streams to be wired into `grpc_session.cpp`.
+
+---
+
+## 14. In-container network debugging — ifconfig, ip, tcpdump
+
+The runtime image ships four diagnostic packages (added to the `runtime`
+stage in `Dockerfile`):
+
+| Package | Commands | Purpose |
+|---------|----------|---------|
+| `net-tools` | `ifconfig`, `route`, `netstat` | classic interface/route inspection |
+| `iproute2` | `ip addr`, `ip route`, `ip link` | modern replacement |
+| `iputils-ping` | `ping` | end-to-end L3 reachability through tunnel |
+| `tcpdump` | `tcpdump` | live packet capture on any interface |
+
+`tcpdump` requires `CAP_NET_RAW`.  The `x-tun-caps` anchor in
+`docker-compose.yml` grants both `NET_ADMIN` (TUN/routing) and `NET_RAW`
+(raw-socket capture) to every VPN service.
+
+---
+
+### 14.1 Inspect the TUN interface
+
+After the client receives `IP_ASSIGN` it configures `tun0` and brings it up.
+Confirm with either tool:
+
+```bash
+# classic
+docker exec docs-vpn-client-1 ifconfig tun0
+
+# modern
+docker exec docs-vpn-client-1 ip addr show tun0
+docker exec docs-vpn-client-1 ip route
+```
+
+Expected output (client assigned `10.8.0.3`):
+
+```
+tun0: flags=4305<UP,POINTOPOINT,RUNNING,NOARP,MULTICAST>  mtu 1500
+        inet 10.8.0.3  netmask 255.255.255.0  destination 10.8.0.3
+```
+
+On the server side the TUN device carries the pool address (`10.8.0.1`):
+
+```bash
+docker exec docs-vpn-server-1 ifconfig tun0
+docker exec docs-vpn-server-1 ip route   # host routes for every connected client
+```
+
+---
+
+### 14.2 Capture packets with tcpdump
+
+Two interfaces are interesting:
+
+| Interface | What you see |
+|-----------|-------------|
+| `tun0` | Decrypted IP packets traversing the VPN tunnel (ICMP, TCP, etc.) |
+| `eth0` | Raw TCP frames on port 1194 — your custom TYPE + 4-byte-len framing |
+
+**Watch tunnel traffic (both ends):**
+
+```bash
+# client side — outbound packets entering the tunnel
+docker exec docs-vpn-client-1 tcpdump -i tun0 -n -v
+
+# server side — same packets arriving after kernel delivers them from tun0
+docker exec docs-vpn-server-1 tcpdump -i tun0 -n -v
+```
+
+**Watch the raw VPN framing on the TCP connection:**
+
+```bash
+# hex+ASCII view of port-1194 frames — TYPE byte, 4-byte length, payload
+docker exec docs-vpn-client-1 tcpdump -i eth0 -n port 1194 -X
+```
+
+**Save to a `.pcap` and open in Wireshark on the host:**
+
+```bash
+docker exec docs-vpn-client-1 tcpdump -i tun0 -n -w /tmp/tun0.pcap &
+# ... reproduce traffic ...
+kill %1   # stop the background tcpdump on the host
+docker cp docs-vpn-client-1:/tmp/tun0.pcap ./tun0.pcap
+# open tun0.pcap in Wireshark
+```
+
+Or write and copy in one step:
+
+```bash
+docker exec docs-vpn-client-1 tcpdump -i tun0 -n -c 200 -w /tmp/tun0.pcap \
+  && docker cp docs-vpn-client-1:/tmp/tun0.pcap ./tun0.pcap
+```
+
+(`-c 200` stops after 200 packets so the command returns automatically.)
+
+---
+
+### 14.3 End-to-end ping through the tunnel
+
+With the client at `10.8.0.3` and the server at `10.8.0.1`:
+
+```bash
+docker exec docs-vpn-client-1 ping -c 4 10.8.0.1
+```
+
+A successful reply confirms:
+1. `tun0` is up and correctly addressed on the client.
+2. The server's `tun0` is up and correctly addressed.
+3. The kernel TUN reader on both sides forwards IP packets end-to-end.
+
+To watch the ICMP exchange simultaneously:
+
+```bash
+# terminal 1 — server tun0
+docker exec docs-vpn-server-1 tcpdump -i tun0 -n icmp
+
+# terminal 2 — client fires pings
+docker exec docs-vpn-client-1 ping -c 4 10.8.0.1
+```
+
+---
+
+### 14.4 stdout buffering note (Docker)
+
+When a container's stdout is not a TTY (the normal Docker case), the C++
+runtime switches to 4 KiB block buffering.  Log lines that use `'\n'`
+instead of `std::endl` sit silently in the buffer until it fills.
+
+`main()` calls `std::cout << std::unitbuf;` at startup to force per-write
+flushing for the entire process, so all `[openvpn_client]` / `[main]` lines
+appear immediately in `docker compose logs`.
