@@ -8,6 +8,8 @@
 #include "tls_config.hpp"
 
 #include <iostream>
+#include <memory>
+#include <vector>
 
 // ---------------------------------------------------------------------------
 // gnmi_connection
@@ -166,11 +168,40 @@ gnmi_client::response gnmi_client::call(const std::string &host, uint16_t port,
   // Drive the shared libevent event loop one iteration at a time until the
   // gRPC response is complete (or a timeout / error fires).  Other events
   // already registered (inotify from fs_app, etc.) are processed normally.
+  // MUST be called outside event_base_dispatch (phased approach only).
   while (!conn.done()) {
     event_base_loop(evt_base::instance().get(), EVLOOP_ONCE);
   }
 
   return conn.take_response();
+}
+
+// ---------------------------------------------------------------------------
+// push_async — non-blocking variant safe to call from inside the event loop.
+//
+// gnmi_connection is heap-allocated and stored in s_active so its lifetime
+// spans the whole exchange.  Completed connections (done()==true) are lazily
+// freed on the next push_async call.  The running event_base_dispatch drives
+// the new connection's events without any re-entrancy.
+// ---------------------------------------------------------------------------
+
+static std::vector<std::shared_ptr<gnmi_connection>> s_active;
+
+void gnmi_client::push_async(const std::string &host, uint16_t port,
+                               const std::string &rpc_path,
+                               const std::string &request_pb,
+                               const tls_config &tls) {
+  // Lazy GC: drop finished connections before adding a new one.
+  s_active.erase(
+      std::remove_if(s_active.begin(), s_active.end(),
+                     [](const auto &c) { return c->done(); }),
+      s_active.end());
+
+  s_active.push_back(
+      std::make_shared<gnmi_connection>(host, port, rpc_path, request_pb, tls));
+
+  std::cout << "[gnmi_client] push_async → " << host << ":" << port
+            << " rpc=" << rpc_path << " active=" << s_active.size() << '\n';
 }
 
 #endif // __gnmi_client_cpp__

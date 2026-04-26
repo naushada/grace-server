@@ -48,39 +48,44 @@ static uint16_t get_port_flag(int argc, const char *argv[],
 static void print_usage(const char *prog) {
   std::cerr
     << "Usage:\n"
-    << "  " << prog << " [--mode=server]                          (default)\n"
-    << "  " << prog << " --mode=server\n"
-    << "       Starts the gNMI gRPC server (port 58989) and the OpenVPN\n"
-    << "       TCP tunnel server (port 1194) with a 10.8.0.2-254 IP pool.\n"
+    << "  " << prog << " --mode=server [options]\n"
+    << "       Runs the OpenVPN tunnel server (port 1194) and a gNMI server\n"
+    << "       (port 58989).  When --gnmi-push=true, fires a gNMI Get to each\n"
+    << "       connecting VPN client's gNMI server after --gnmi-push-delay seconds.\n"
     << "\n"
     << "  " << prog << " --mode=client [options]\n"
-    << "       Connects to an openvpn_server, receives a virtual IP,\n"
-    << "       creates a TUN interface, and writes connection state to a\n"
-    << "       Lua status file.\n"
+    << "       Connects to openvpn_server, receives a virtual IP, configures tun0,\n"
+    << "       then starts its own gNMI server on --gnmi-port (default 58989) so\n"
+    << "       the VPN server can push gNMI updates back through the tunnel.\n"
     << "\n"
     << "  Client options:\n"
-    << "    --server=<host>          VPN server address  (default: 127.0.0.1)\n"
-    << "    --port=<port>            VPN server port     (default: 1194)\n"
-    << "    --status=<path>          Lua status file     (default: /run/vpn_status.lua)\n"
-    << "    --tls=true               Enable TLS (default: false)\n"
-    << "    --cert=<path>            PEM certificate file\n"
-    << "    --key=<path>             PEM private key file\n"
-    << "    --ca=<path>              PEM CA certificate (peer verification)\n"
-    << "    --gnmi-probe=true        After VPN connects, fire a gNMI Get through\n"
-    << "                             the tunnel and dump the response; tunnel stays open.\n"
+    << "    --server=<host>          VPN server address        (default: 127.0.0.1)\n"
+    << "    --port=<port>            VPN server port           (default: 1194)\n"
+    << "    --status=<path>          Lua status file           (default: /run/vpn_status.lua)\n"
+    << "    --gnmi-port=<port>       gNMI server listen port   (default: 58989)\n"
+    << "    --tls=true               Enable TLS on VPN tunnel  (default: false)\n"
+    << "    --cert=<path>            PEM certificate\n"
+    << "    --key=<path>             PEM private key\n"
+    << "    --ca=<path>              PEM CA certificate\n"
+    << "    --gnmi-tls=true          Enable TLS on gNMI server (default: false)\n"
+    << "    --gnmi-cert=<path>       PEM server cert for gNMI TLS\n"
+    << "    --gnmi-key=<path>        PEM private key for gNMI TLS\n"
+    << "    --gnmi-ca=<path>         PEM CA cert for gNMI TLS\n"
+    << "    --gnmi-probe=true        Also fire a one-shot gNMI Get to the server VIP\n"
     << "    --server-vip=<ip>        Server-side VPN IP to probe  (default: 10.8.0.1)\n"
-    << "    --gnmi-port=<port>       gNMI port on the server      (default: 58989)\n"
-    << "    --gnmi-tls=true          Use TLS for the gNMI probe connection\n"
-    << "    --gnmi-cert=<path>       PEM client cert for gNMI probe TLS\n"
-    << "    --gnmi-key=<path>        PEM private key for gNMI probe TLS\n"
-    << "    --gnmi-ca=<path>         PEM CA cert for gNMI probe TLS\n"
-    << "  Note: TUN interface name chosen by the kernel (next free tunX).\n"
     << "\n"
     << "  Server options:\n"
-    << "    --gnmi-tls=true          Enable TLS on the gNMI listener (port 58989)\n"
-    << "    --gnmi-cert=<path>       PEM server certificate for gNMI TLS\n"
-    << "    --gnmi-key=<path>        PEM private key for gNMI TLS\n"
-    << "    --gnmi-ca=<path>         PEM CA cert (enables mTLS client auth)\n";
+    << "    --server-ip=<ip>         Server TUN IP             (default: 10.8.0.1)\n"
+    << "    --pool-start=<ip>        First client IP           (default: 10.8.0.2)\n"
+    << "    --pool-end=<ip>          Last client IP            (default: 10.8.0.254)\n"
+    << "    --netmask=<mask>         Tunnel netmask            (default: 255.255.255.0)\n"
+    << "    --tls=true               Enable TLS on VPN tunnel  (default: false)\n"
+    << "    --cert/--key/--ca        PEM files for VPN TLS\n"
+    << "    --gnmi-tls=true          Enable TLS on gNMI server (default: false)\n"
+    << "    --gnmi-cert/--gnmi-key/--gnmi-ca  PEM files for gNMI TLS\n"
+    << "    --gnmi-push=true         Push gNMI Get to each client after tunnel up\n"
+    << "    --gnmi-port=<port>       Client gNMI port to push to  (default: 58989)\n"
+    << "    --gnmi-push-delay=<s>    Seconds to wait before push (default: 2)\n";
 }
 
 // ---------------------------------------------------------------------------
@@ -164,29 +169,39 @@ int main(int argc, const char *argv[]) {
   fs_app fs_mon("/app/command");
 
   if (mode == "client") {
-    const std::string server      = get_flag(argc, argv, "server", "127.0.0.1");
+    const std::string vpn_server  = get_flag(argc, argv, "server", "127.0.0.1");
     const uint16_t    port        = get_port_flag(argc, argv, "port", 1194);
     const std::string status_file = get_flag(argc, argv, "status", "/run/vpn_status.lua");
     const bool        gnmi_probe  = get_flag(argc, argv, "gnmi-probe", "false") == "true";
     const std::string server_vip  = get_flag(argc, argv, "server-vip", "10.8.0.1");
     const uint16_t    gnmi_port   = get_port_flag(argc, argv, "gnmi-port", 58989);
 
-    std::cout << "[main] mode=client server=" << server << " port=" << port
+    std::cout << "[main] mode=client server=" << vpn_server << " port=" << port
               << " tls=" << (tls.enabled ? "ON" : "OFF")
               << (gnmi_probe ? " gnmi-probe=ON" : "") << '\n';
 
-    // vpn_client + event loop must stay in the same scope so the bufferevent
-    // is alive for the entire duration of run_evt_loop.
-    openvpn_client vpn_client(server, port, status_file, tls);
+    // vpn_client + gnmi_svc + event loop must stay in the same scope so their
+    // bufferevents are alive for the entire duration of run_evt_loop.
+    openvpn_client vpn_client(vpn_server, port, status_file, tls);
 
+    // Phase 1: wait for the VPN tunnel and tun0 to come up before binding the
+    // gNMI server — the server will be reachable by openvpn_server via the tunnel.
+    std::cout << "[main] waiting for VPN tunnel...\n";
+    auto *base = evt_base::instance().get();
+    while (!vpn_client.ip_assigned())
+      event_base_loop(base, EVLOOP_ONCE);
+
+    std::cout << "[main] tunnel up, assigned=" << vpn_client.assigned_ip()
+              << " — starting gNMI server on port " << gnmi_port
+              << " tls=" << (gnmi_tls.enabled ? "ON" : "OFF") << '\n';
+
+    // Phase 2: start the gNMI server — now reachable via tun0.
+    // openvpn_server connects here (tunnel IP:gnmi_port) after the push delay.
+    server gnmi_svc("0.0.0.0", gnmi_port, gnmi_tls);
+
+    // Phase 3 (optional): fire a one-shot gNMI probe to the VPN server.
     if (gnmi_probe) {
-      std::cout << "[main] waiting for VPN tunnel...\n";
-      auto *base = evt_base::instance().get();
-      while (!vpn_client.ip_assigned())
-        event_base_loop(base, EVLOOP_ONCE);
-
-      std::cout << "[main] tunnel up, assigned=" << vpn_client.assigned_ip()
-                << " probing " << server_vip << ":" << gnmi_port << "\n";
+      std::cout << "[main] probing " << server_vip << ":" << gnmi_port << "\n";
 
       gnmi::GetRequest req;
       req.mutable_prefix()->set_target("VIEWER");
@@ -211,13 +226,30 @@ int main(int argc, const char *argv[]) {
     const std::string server_ip  = get_flag(argc, argv, "server-ip",  "10.8.0.1");
     const std::string netmask    = get_flag(argc, argv, "netmask",    "255.255.255.0");
 
+    // Build a gNMI GetRequest once; openvpn_server fires it at each connecting client.
+    gnmi_push_cfg gnmi_push;
+    gnmi_push.enabled  = get_flag(argc, argv, "gnmi-push", "false") == "true";
+    gnmi_push.port     = get_port_flag(argc, argv, "gnmi-port", 58989);
+    gnmi_push.tls      = gnmi_tls;
+    gnmi_push.delay_s  = static_cast<int>(
+        std::stoi(get_flag(argc, argv, "gnmi-push-delay", "2")));
+    if (gnmi_push.enabled) {
+      gnmi::GetRequest req;
+      req.mutable_prefix()->set_target("VIEWER");
+      req.add_path()->add_elem()->set_name("interfaces");
+      req.set_encoding(gnmi::JSON);
+      req.SerializeToString(&gnmi_push.request_pb);
+    }
+
     std::cout << "[main] mode=server tls=" << (tls.enabled ? "ON" : "OFF")
               << " gnmi-tls=" << (gnmi_tls.enabled ? "ON" : "OFF")
+              << " gnmi-push=" << (gnmi_push.enabled ? "ON" : "OFF")
               << " pool=" << pool_start << "–" << pool_end << '\n';
 
     // svc_module + vpn must stay in scope for the entire event loop.
     server svc_module("0.0.0.0", 58989, gnmi_tls);
-    openvpn_server vpn("0.0.0.0", 1194, pool_start, pool_end, tls, server_ip, netmask);
+    openvpn_server vpn("0.0.0.0", 1194, pool_start, pool_end, tls,
+                       server_ip, netmask, gnmi_push);
 
     run_evt_loop{}();
   }

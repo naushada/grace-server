@@ -40,6 +40,9 @@ services:
       - --pool-start=10.8.0.2
       - --pool-end=10.8.0.254
       - --netmask=255.255.255.0
+      - --gnmi-push=true        # push a gNMI Get to each client after tunnel up
+      - --gnmi-port=58989       # client gNMI server port (accessible via tunnel)
+      - --gnmi-push-delay=2     # seconds to wait for client gNMI server to start
     ports:
       - "1194:1194"      # OpenVPN tunnel (TCP)
       - "58989:58989"    # gNMI gRPC

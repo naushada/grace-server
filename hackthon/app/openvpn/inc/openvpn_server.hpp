@@ -2,6 +2,7 @@
 #define __openvpn_server_hpp__
 
 #include "framework.hpp"
+#include "gnmi_client.hpp"  // gnmi_push_cfg, gnmi_client::push_async
 #include "tls_config.hpp"
 
 #include <set>
@@ -48,12 +49,14 @@ public:
   using handle_t   = int32_t;
   using peer_map_t = std::unordered_map<handle_t, std::unique_ptr<openvpn_peer>>;
 
-  openvpn_server(const std::string &host, uint16_t port,
-                 const std::string &pool_start  = "10.8.0.2",
-                 const std::string &pool_end    = "10.8.0.254",
-                 const tls_config  &tls         = {},
-                 const std::string &server_ip   = "10.8.0.1",
-                 const std::string &netmask     = "255.255.255.0");
+  openvpn_server(const std::string   &host,
+                 uint16_t             port,
+                 const std::string   &pool_start  = "10.8.0.2",
+                 const std::string   &pool_end    = "10.8.0.254",
+                 const tls_config    &tls         = {},
+                 const std::string   &server_ip   = "10.8.0.1",
+                 const std::string   &netmask     = "255.255.255.0",
+                 const gnmi_push_cfg &gnmi_push   = {});
 
   virtual ~openvpn_server();
 
@@ -67,6 +70,11 @@ private:
   class server_tun_io;
   friend class server_tun_io;
 
+  // Timer callback: fires delay_s seconds after a VPN client connects.
+  // Calls gnmi_client::push_async() to the client's VPN IP — safe inside
+  // the running event loop because push_async is non-blocking.
+  static void gnmi_push_cb(evutil_socket_t, short, void *ctx);
+
   int  open_server_tun(const std::string &server_ip);
   void manage_client_route(const std::string &client_ip, bool add);
 
@@ -76,6 +84,7 @@ private:
   std::string                    m_server_tun_name;
   std::unique_ptr<server_tun_io> m_server_tun_io;
   int                            m_server_tun_fd{-1};
+  gnmi_push_cfg                  m_gnmi_push;
 };
 
 #endif // __openvpn_server_hpp__

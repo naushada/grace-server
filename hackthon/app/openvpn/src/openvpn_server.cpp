@@ -3,6 +3,7 @@
 
 #include "openvpn_server.hpp"
 #include "openvpn_peer.hpp"
+#include "gnmi_client.hpp"
 
 #include <arpa/inet.h>
 #include <cerrno>
@@ -71,17 +72,21 @@ std::string ip_pool::get(int32_t channel) const {
 // openvpn_server
 // ---------------------------------------------------------------------------
 
-openvpn_server::openvpn_server(const std::string &host, uint16_t port,
-                                 const std::string &pool_start,
-                                 const std::string &pool_end,
-                                 const tls_config  &tls,
-                                 const std::string &server_ip,
-                                 const std::string &netmask)
+openvpn_server::openvpn_server(const std::string   &host,
+                                 uint16_t             port,
+                                 const std::string   &pool_start,
+                                 const std::string   &pool_end,
+                                 const tls_config    &tls,
+                                 const std::string   &server_ip,
+                                 const std::string   &netmask,
+                                 const gnmi_push_cfg &gnmi_push)
     : evt_io(host, port, tls.build_server_ctx(), listener_tag{}),
-      m_pool(pool_start, pool_end), m_netmask(netmask) {
+      m_pool(pool_start, pool_end), m_netmask(netmask),
+      m_gnmi_push(gnmi_push) {
   std::cout << "[openvpn_server] " << host << ":" << port
             << " pool=" << pool_start << "–" << pool_end
-            << " tls=" << (tls.enabled ? "ON" : "OFF") << '\n';
+            << " tls=" << (tls.enabled ? "ON" : "OFF")
+            << " gnmi-push=" << (gnmi_push.enabled ? "ON" : "OFF") << '\n';
   open_server_tun(server_ip);
 }
 
@@ -89,6 +94,26 @@ openvpn_server::~openvpn_server() {
   m_server_tun_io.reset();
   if (m_server_tun_fd >= 0) ::close(m_server_tun_fd);
   m_peers.clear();
+}
+
+// Context block passed to gnmi_push_cb via evtimer_new void* arg.
+struct gnmi_push_ctx {
+  openvpn_server *server;
+  std::string     client_ip;
+  struct event   *timer{nullptr};
+};
+
+void openvpn_server::gnmi_push_cb(evutil_socket_t, short, void *arg) {
+  auto *ctx = static_cast<gnmi_push_ctx *>(arg);
+  std::cout << "[openvpn_server] gNMI push → "
+            << ctx->client_ip << ":" << ctx->server->m_gnmi_push.port << '\n';
+  gnmi_client::push_async(ctx->client_ip,
+                           ctx->server->m_gnmi_push.port,
+                           ctx->server->m_gnmi_push.rpc_path,
+                           ctx->server->m_gnmi_push.request_pb,
+                           ctx->server->m_gnmi_push.tls);
+  event_free(ctx->timer);
+  delete ctx;
 }
 
 std::int32_t openvpn_server::handle_connect(const handle_t &channel,
@@ -107,6 +132,18 @@ std::int32_t openvpn_server::handle_connect(const handle_t &channel,
   manage_client_route(ip, true);
   std::cout << "[openvpn_server] accepted " << peer_host
             << " \xe2\x86\x92 " << ip << (has_tls() ? " (TLS)" : "") << '\n';
+
+  // Schedule a gNMI push to the newly-connected client after a short delay
+  // so the client has time to configure its tun0 and start its gNMI server.
+  if (m_gnmi_push.enabled && !m_gnmi_push.request_pb.empty()) {
+    auto *ctx   = new gnmi_push_ctx{this, ip};
+    ctx->timer  = evtimer_new(evt_base::instance().get(), gnmi_push_cb, ctx);
+    const struct timeval tv{static_cast<time_t>(m_gnmi_push.delay_s), 0};
+    evtimer_add(ctx->timer, &tv);
+    std::cout << "[openvpn_server] gNMI push to " << ip
+              << " scheduled in " << m_gnmi_push.delay_s << "s\n";
+  }
+
   return 0;
 }
 
