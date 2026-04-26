@@ -145,8 +145,9 @@ std::int32_t openvpn_peer::handle_read(const std::int32_t & /*channel*/,
 
 std::int32_t openvpn_peer::handle_close(const std::int32_t &channel) {
   std::cout << "[openvpn_peer] closed, releasing " << m_assigned_ip << "\n";
-  // Release IP before notifying parent — parent erases this object.
-  m_parent->pool().release(channel);
+  // openvpn_server::handle_close deletes the route then releases the pool.
+  // Do NOT release the pool here first — get() would return "" and the route
+  // would never be deleted, causing "File exists" on the next reconnect.
   m_parent->handle_close(channel);
   return 0;
 }
@@ -155,7 +156,6 @@ std::int32_t openvpn_peer::handle_event(const std::int32_t &channel,
                                          const std::uint16_t & /*event*/) {
   std::cerr << "[openvpn_peer] timeout channel=" << channel
             << " ip=" << m_assigned_ip << "\n";
-  m_parent->pool().release(channel);
   m_parent->handle_close(channel);
   return 0;
 }

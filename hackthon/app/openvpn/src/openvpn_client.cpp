@@ -77,6 +77,10 @@ std::int32_t openvpn_client::handle_connect(const std::int32_t &ch,
                   &reinterpret_cast<struct sockaddr_in6 *>(&ss)->sin6_addr,
                   peer_ip, sizeof(peer_ip));
   }
+  // The 5s timeout was only needed for the initial connect attempt.
+  // Clear it now so an idle established tunnel is not torn down.
+  bufferevent_set_timeouts(get_bufferevt(), nullptr, nullptr);
+
   std::cout << "[openvpn_client] connected to " << m_server_host
             << " (" << peer_ip << "):" << m_server_port
             << ", waiting for IP_ASSIGN\n";
