@@ -72,9 +72,11 @@ target_link_libraries(gnmi_proto PUBLIC ${Protobuf_LIBRARIES})
 # Main application
 # ---------------------------------------------------------------------------
 include_directories(inc)
+include_directories(openvpn/inc)
 include_directories(${NGHTTP2_INCLUDE_DIRS})
 file(GLOB SOURCES "src/*.cpp")
-add_executable(app ${SOURCES})
+file(GLOB OPENVPN_SOURCES "openvpn/src/*.cpp")
+add_executable(app ${SOURCES} ${OPENVPN_SOURCES})
 target_include_directories(app PRIVATE ${PROTO_GEN_DIR})
 target_link_libraries(app PUBLIC
   gnmi_proto

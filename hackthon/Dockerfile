@@ -77,5 +77,6 @@ COPY --from=build --chown=edge:cordoba /src/build/app/cli/cli_app /app/cli_app
 # CLI has something to auto-complete out of the box. Operators can drop
 # additional .lua files here at runtime — inotify picks them up live.
 COPY --from=build --chown=edge:cordoba /src/app/command/ /app/command/
+COPY --from=build --chown=edge:cordoba /src/app/openvpn/command/ /app/command/
 
 CMD ["/app/app"]

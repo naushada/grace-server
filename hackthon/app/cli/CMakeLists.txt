@@ -17,6 +17,7 @@ set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -std=c++20 -g -Wall -Wextra")
 
 include_directories(inc)
 include_directories(../inc)
+include_directories(../openvpn/inc)
 include_directories(${NGHTTP2_INCLUDE_DIRS})
 # Generated gNMI proto headers (gnmi.pb.h etc.) live here at build time.
 include_directories(${CMAKE_CURRENT_BINARY_DIR}/../../app/proto_gen)
@@ -33,6 +34,7 @@ set(SHARED_SOURCES
   "../src/grpc_session.cpp"
   "../src/http2.cpp"
   "../src/lua_engine.cpp"
+  "../openvpn/src/openvpn_tunnel_client.cpp"
 )
 
 add_executable(cli_app

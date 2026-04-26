@@ -87,7 +87,10 @@ void connected_client::register_gnmi_handlers() {
           return {3, ""};
         }
 
-        std::cout << "[Get] path_count=" << req.path_size() << "\n";
+        // role is carried in prefix.target(); default to VIEWER if absent.
+        const std::string &role = req.prefix().target();
+        std::cout << "[Get] role=" << (role.empty() ? "VIEWER" : role)
+                  << " path_count=" << req.path_size() << "\n";
 
         gnmi::GetResponse resp;
         // For each requested path add an empty Notification so the caller
@@ -115,7 +118,16 @@ void connected_client::register_gnmi_handlers() {
           return {3, ""};
         }
 
-        std::cout << "[Set] update_count=" << req.update_size()
+        // RBAC: only ADMIN may perform Set.  role is in prefix.target();
+        // absent or any value other than "ADMIN" is treated as VIEWER.
+        const std::string &role = req.prefix().target();
+        if (role != "ADMIN") {
+          std::cerr << "[Set] PERMISSION_DENIED role="
+                    << (role.empty() ? "VIEWER(default)" : role) << "\n";
+          return {7, "PERMISSION_DENIED: ADMIN role required for Set"};
+        }
+
+        std::cout << "[Set] role=ADMIN update_count=" << req.update_size()
                   << " replace_count=" << req.replace_size()
                   << " delete_count=" << req.delete__size() << "\n";
 

@@ -2,6 +2,7 @@
 #define __readline_cpp__
 
 #include "readline.hpp"
+#include "openvpn_tunnel_client.hpp"
 
 #include <algorithm>
 #include <cstring>
@@ -448,10 +449,16 @@ static void handle_gnmi_get(const std::map<std::string, std::string> &args) {
   const std::string prefix   = get_arg(args, "prefix", "/");
   const std::string path_str = get_arg(args, "path", "");
   const std::string encoding = get_arg(args, "encoding", "JSON");
+  const std::string role     = get_arg(args, "role", "VIEWER");
 
   gnmi::GetRequest req;
-  if (prefix != "/" && !prefix.empty())
-    *req.mutable_prefix() = parse_yang_path(prefix);
+  // Always populate prefix so target (role) is transmitted to the server.
+  {
+    auto *pfx = req.mutable_prefix();
+    if (prefix != "/" && !prefix.empty())
+      *pfx = parse_yang_path(prefix);
+    pfx->set_target(role);
+  }
   *req.add_path() = parse_yang_path(path_str);
   req.set_encoding(parse_encoding(encoding));
 
@@ -465,18 +472,36 @@ static void handle_gnmi_get(const std::map<std::string, std::string> &args) {
 }
 
 // UPDATE — merge the value into the existing configuration at path.
+// Requires role=ADMIN; routes through VPN tunnel when tunnel_host is set.
 static void handle_gnmi_update(const std::map<std::string, std::string> &args) {
-  const std::string host     = get_arg(args, "target", "127.0.0.1");
-  const uint16_t    port     = static_cast<uint16_t>(std::stoi(get_arg(args, "port", "9339")));
-  const std::string prefix   = get_arg(args, "prefix", "/");
-  const std::string path_str = get_arg(args, "path", "");
-  const std::string value    = get_arg(args, "value", "");
-  const std::string encoding = get_arg(args, "encoding", "JSON");
+  const std::string host        = get_arg(args, "target", "127.0.0.1");
+  const uint16_t    port        = static_cast<uint16_t>(std::stoi(get_arg(args, "port", "9339")));
+  const std::string prefix      = get_arg(args, "prefix", "/");
+  const std::string path_str    = get_arg(args, "path", "");
+  const std::string value       = get_arg(args, "value", "");
+  const std::string encoding    = get_arg(args, "encoding", "JSON");
+  const std::string role        = get_arg(args, "role", "ADMIN");
+  const std::string tunnel_host = get_arg(args, "tunnel_host", "");
+  const uint16_t    tunnel_port = static_cast<uint16_t>(
+      std::stoi(get_arg(args, "tunnel_port", "1194")));
+
+  // Connect through VPN tunnel before sending the update.
+  if (!tunnel_host.empty()) {
+    const auto tr = openvpn_tunnel_client::connect(tunnel_host, tunnel_port);
+    if (!tr.ok) {
+      std::cout << "[gnmi_update] VPN tunnel error: " << tr.message << "\n";
+      return;
+    }
+    std::cout << "[gnmi_update] via VPN assigned=" << tr.assigned_ip << "\n";
+  }
 
   gnmi::SetRequest req;
-  if (prefix != "/" && !prefix.empty())
-    *req.mutable_prefix() = parse_yang_path(prefix);
-
+  {
+    auto *pfx = req.mutable_prefix();
+    if (prefix != "/" && !prefix.empty())
+      *pfx = parse_yang_path(prefix);
+    pfx->set_target(role);
+  }
   auto *upd = req.add_update();
   *upd->mutable_path() = parse_yang_path(path_str);
   set_typed_value(upd->mutable_val(), value, encoding);
@@ -485,25 +510,42 @@ static void handle_gnmi_update(const std::map<std::string, std::string> &args) {
   req.SerializeToString(&req_pb);
 
   std::cout << "[gnmi_update] -> " << host << ":" << port
-            << " prefix=" << prefix << " path=" << path_str
-            << " value=" << value << "\n";
+            << " role=" << role << " prefix=" << prefix
+            << " path=" << path_str << " value=" << value << "\n";
   const auto resp = gnmi_client::call(host, port, "/gnmi.gNMI/Set", req_pb);
   print_gnmi_response<gnmi::SetResponse>(resp, "gnmi_update");
 }
 
 // REPLACE — completely replace the subtree at path with the given value.
+// Requires role=ADMIN; routes through VPN tunnel when tunnel_host is set.
 static void handle_gnmi_replace(const std::map<std::string, std::string> &args) {
-  const std::string host     = get_arg(args, "target", "127.0.0.1");
-  const uint16_t    port     = static_cast<uint16_t>(std::stoi(get_arg(args, "port", "9339")));
-  const std::string prefix   = get_arg(args, "prefix", "/");
-  const std::string path_str = get_arg(args, "path", "");
-  const std::string value    = get_arg(args, "value", "{}");
-  const std::string encoding = get_arg(args, "encoding", "JSON");
+  const std::string host        = get_arg(args, "target", "127.0.0.1");
+  const uint16_t    port        = static_cast<uint16_t>(std::stoi(get_arg(args, "port", "9339")));
+  const std::string prefix      = get_arg(args, "prefix", "/");
+  const std::string path_str    = get_arg(args, "path", "");
+  const std::string value       = get_arg(args, "value", "{}");
+  const std::string encoding    = get_arg(args, "encoding", "JSON");
+  const std::string role        = get_arg(args, "role", "ADMIN");
+  const std::string tunnel_host = get_arg(args, "tunnel_host", "");
+  const uint16_t    tunnel_port = static_cast<uint16_t>(
+      std::stoi(get_arg(args, "tunnel_port", "1194")));
+
+  if (!tunnel_host.empty()) {
+    const auto tr = openvpn_tunnel_client::connect(tunnel_host, tunnel_port);
+    if (!tr.ok) {
+      std::cout << "[gnmi_replace] VPN tunnel error: " << tr.message << "\n";
+      return;
+    }
+    std::cout << "[gnmi_replace] via VPN assigned=" << tr.assigned_ip << "\n";
+  }
 
   gnmi::SetRequest req;
-  if (prefix != "/" && !prefix.empty())
-    *req.mutable_prefix() = parse_yang_path(prefix);
-
+  {
+    auto *pfx = req.mutable_prefix();
+    if (prefix != "/" && !prefix.empty())
+      *pfx = parse_yang_path(prefix);
+    pfx->set_target(role);
+  }
   auto *rep = req.add_replace();
   *rep->mutable_path() = parse_yang_path(path_str);
   set_typed_value(rep->mutable_val(), value, encoding);
@@ -512,29 +554,48 @@ static void handle_gnmi_replace(const std::map<std::string, std::string> &args) 
   req.SerializeToString(&req_pb);
 
   std::cout << "[gnmi_replace] -> " << host << ":" << port
-            << " prefix=" << prefix << " path=" << path_str
-            << " value=" << value << "\n";
+            << " role=" << role << " prefix=" << prefix
+            << " path=" << path_str << " value=" << value << "\n";
   const auto resp = gnmi_client::call(host, port, "/gnmi.gNMI/Set", req_pb);
   print_gnmi_response<gnmi::SetResponse>(resp, "gnmi_replace");
 }
 
 // DELETE — remove the node at path from the target configuration.
+// Requires role=ADMIN; routes through VPN tunnel when tunnel_host is set.
 static void handle_gnmi_delete(const std::map<std::string, std::string> &args) {
-  const std::string host     = get_arg(args, "target", "127.0.0.1");
-  const uint16_t    port     = static_cast<uint16_t>(std::stoi(get_arg(args, "port", "9339")));
-  const std::string prefix   = get_arg(args, "prefix", "/");
-  const std::string path_str = get_arg(args, "path", "");
+  const std::string host        = get_arg(args, "target", "127.0.0.1");
+  const uint16_t    port        = static_cast<uint16_t>(std::stoi(get_arg(args, "port", "9339")));
+  const std::string prefix      = get_arg(args, "prefix", "/");
+  const std::string path_str    = get_arg(args, "path", "");
+  const std::string role        = get_arg(args, "role", "ADMIN");
+  const std::string tunnel_host = get_arg(args, "tunnel_host", "");
+  const uint16_t    tunnel_port = static_cast<uint16_t>(
+      std::stoi(get_arg(args, "tunnel_port", "1194")));
+
+  if (!tunnel_host.empty()) {
+    const auto tr = openvpn_tunnel_client::connect(tunnel_host, tunnel_port);
+    if (!tr.ok) {
+      std::cout << "[gnmi_delete] VPN tunnel error: " << tr.message << "\n";
+      return;
+    }
+    std::cout << "[gnmi_delete] via VPN assigned=" << tr.assigned_ip << "\n";
+  }
 
   gnmi::SetRequest req;
-  if (prefix != "/" && !prefix.empty())
-    *req.mutable_prefix() = parse_yang_path(prefix);
+  {
+    auto *pfx = req.mutable_prefix();
+    if (prefix != "/" && !prefix.empty())
+      *pfx = parse_yang_path(prefix);
+    pfx->set_target(role);
+  }
   *req.add_delete_() = parse_yang_path(path_str);
 
   std::string req_pb;
   req.SerializeToString(&req_pb);
 
   std::cout << "[gnmi_delete] -> " << host << ":" << port
-            << " prefix=" << prefix << " path=" << path_str << "\n";
+            << " role=" << role << " prefix=" << prefix
+            << " path=" << path_str << "\n";
   const auto resp = gnmi_client::call(host, port, "/gnmi.gNMI/Set", req_pb);
   print_gnmi_response<gnmi::SetResponse>(resp, "gnmi_delete");
 }
