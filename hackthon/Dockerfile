@@ -50,6 +50,7 @@ ENV DEBIAN_FRONTEND=noninteractive
 #   - gdb:                                        kept for in-container debugging
 RUN apt-get update && apt-get install -y \
     libevent-2.1-7 \
+    libevent-openssl-2.1-7 \
     libnghttp2-14 \
     libprotobuf23 \
     libreadline8 \

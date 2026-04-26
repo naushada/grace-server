@@ -6,6 +6,7 @@ find_package(Threads REQUIRED)
 find_package(GTest REQUIRED)
 find_package(Protobuf REQUIRED)
 pkg_check_modules(LIBEVENT REQUIRED libevent)
+pkg_check_modules(LIBEVENT_OPENSSL REQUIRED libevent_openssl)
 pkg_check_modules(NGHTTP2 REQUIRED libnghttp2)
 
 find_package(Lua REQUIRED)
@@ -84,6 +85,7 @@ target_link_libraries(app PUBLIC
   ssl
   crypto
   ${LIBEVENT_LIBRARIES}
+  ${LIBEVENT_OPENSSL_LIBRARIES}
   ${NGHTTP2_LIBRARIES}
   ${LUA_LIBRARIES})
 

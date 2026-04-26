@@ -4,6 +4,7 @@ find_package(GTest REQUIRED)
 find_package(Threads REQUIRED)
 find_package(PkgConfig REQUIRED)
 pkg_check_modules(LIBEVENT REQUIRED libevent)
+pkg_check_modules(LIBEVENT_OPENSSL REQUIRED libevent_openssl)
 
 include(GoogleTest)
 
@@ -37,6 +38,7 @@ target_link_libraries(openvpn_tests PRIVATE
   GTest::gtest_main
   Threads::Threads
   ${LIBEVENT_LIBRARIES}
+  ${LIBEVENT_OPENSSL_LIBRARIES}
   ${LUA_LIBRARIES}
   ssl
   crypto
