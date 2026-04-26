@@ -67,11 +67,13 @@ private:
   class server_tun_io;
   friend class server_tun_io;
 
-  int open_server_tun(const std::string &server_ip);
+  int  open_server_tun(const std::string &server_ip);
+  void manage_client_route(const std::string &client_ip, bool add);
 
   ip_pool                        m_pool;
   peer_map_t                     m_peers;
   std::string                    m_netmask;
+  std::string                    m_server_tun_name;
   std::unique_ptr<server_tun_io> m_server_tun_io;
   int                            m_server_tun_fd{-1};
 };

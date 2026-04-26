@@ -14,6 +14,7 @@
 #include <linux/if.h>
 #include <linux/if_tun.h>
 #include <linux/sockios.h>
+#include <net/route.h>
 #include <netinet/in.h>
 #include <sys/ioctl.h>
 #include <sys/socket.h>
@@ -103,12 +104,15 @@ std::int32_t openvpn_server::handle_connect(const handle_t &channel,
   auto *bev = wrap_accepted(channel);
   auto peer = std::make_unique<openvpn_peer>(bev, peer_host, this, ip, m_netmask);
   m_peers.emplace(channel, std::move(peer));
+  manage_client_route(ip, true);
   std::cout << "[openvpn_server] accepted " << peer_host
             << " \xe2\x86\x92 " << ip << (has_tls() ? " (TLS)" : "") << '\n';
   return 0;
 }
 
 std::int32_t openvpn_server::handle_close(const handle_t &channel) {
+  const std::string ip = m_pool.get(channel);
+  if (!ip.empty()) manage_client_route(ip, false);
   m_pool.release(channel);
   m_peers.erase(channel);
   return 0;
@@ -165,6 +169,7 @@ int openvpn_server::open_server_tun(const std::string &server_ip) {
     std::cerr << "[openvpn_server] TUNSETIFF: " << strerror(errno) << '\n';
     ::close(m_server_tun_fd); m_server_tun_fd = -1; return -1;
   }
+  m_server_tun_name = ifr.ifr_name;
   // Assign server IP and bring up
   int sock = ::socket(AF_INET, SOCK_DGRAM, 0);
   auto *sin = reinterpret_cast<struct sockaddr_in *>(&ifr.ifr_addr);
@@ -182,6 +187,30 @@ int openvpn_server::open_server_tun(const std::string &server_ip) {
   m_server_tun_io = std::make_unique<server_tun_io>(m_server_tun_fd, *this);
 #endif
   return 0;
+}
+
+void openvpn_server::manage_client_route(const std::string &client_ip, bool add) {
+#ifdef __linux__
+  if (m_server_tun_name.empty()) return;
+  struct rtentry rt{};
+  auto set_addr = [](struct sockaddr &sa, const std::string &ip) {
+    auto *s = reinterpret_cast<struct sockaddr_in *>(&sa);
+    s->sin_family = AF_INET;
+    inet_pton(AF_INET, ip.c_str(), &s->sin_addr);
+  };
+  set_addr(rt.rt_dst,     client_ip);
+  set_addr(rt.rt_genmask, "255.255.255.255"); // host route
+  rt.rt_flags = RTF_UP | RTF_HOST;
+  rt.rt_dev   = const_cast<char *>(m_server_tun_name.c_str());
+  int sock = ::socket(AF_INET, SOCK_DGRAM, 0);
+  if (::ioctl(sock, add ? SIOCADDRT : SIOCDELRT, &rt) < 0)
+    std::cerr << "[openvpn_server] route " << (add ? "add" : "del")
+              << " " << client_ip << ": " << strerror(errno) << '\n';
+  else
+    std::cout << "[openvpn_server] route " << (add ? "added" : "removed")
+              << " host " << client_ip << " dev " << m_server_tun_name << '\n';
+  ::close(sock);
+#endif
 }
 
 #endif // __openvpn_server_cpp__
