@@ -8,10 +8,14 @@
 #include <iostream>
 
 #ifdef __linux__
+#include <arpa/inet.h>
 #include <fcntl.h>
 #include <linux/if.h>
 #include <linux/if_tun.h>
+#include <linux/sockios.h>
+#include <netinet/in.h>
 #include <sys/ioctl.h>
+#include <sys/socket.h>
 #include <unistd.h>
 #endif
 
@@ -127,8 +131,10 @@ size_t openvpn_client::process_frames() {
       m_tun_fd = open_tun();
       if (m_tun_fd < 0)
         std::cerr << "[openvpn_client] TUN unavailable (need CAP_NET_ADMIN)\n";
-      else
+      else {
         std::cout << "[openvpn_client] kernel assigned " << m_tun_name << "\n";
+        assign_tun_ip(m_assigned_ip);
+      }
       write_status_lua(m_status_file, m_assigned_ip, m_tun_name, "Connected",
                         std::time(nullptr));
       break;
@@ -171,6 +177,41 @@ int openvpn_client::open_tun() {
   return fd;
 #else
   return -1;
+#endif
+}
+
+void openvpn_client::assign_tun_ip(const std::string &ip) {
+#ifdef __linux__
+  int sock = ::socket(AF_INET, SOCK_DGRAM, 0);
+  if (sock < 0) {
+    std::cerr << "[openvpn_client] assign_tun_ip: socket: " << strerror(errno) << "\n";
+    return;
+  }
+
+  struct ifreq ifr{};
+  strncpy(ifr.ifr_name, m_tun_name.c_str(), IFNAMSIZ - 1);
+  auto *sin = reinterpret_cast<struct sockaddr_in *>(&ifr.ifr_addr);
+  sin->sin_family = AF_INET;
+
+  // IP address
+  inet_pton(AF_INET, ip.c_str(), &sin->sin_addr);
+  if (::ioctl(sock, SIOCSIFADDR, &ifr) < 0)
+    std::cerr << "[openvpn_client] SIOCSIFADDR: " << strerror(errno) << "\n";
+
+  // Netmask /24
+  inet_pton(AF_INET, "255.255.255.0", &sin->sin_addr);
+  if (::ioctl(sock, SIOCSIFNETMASK, &ifr) < 0)
+    std::cerr << "[openvpn_client] SIOCSIFNETMASK: " << strerror(errno) << "\n";
+
+  // Bring the interface up
+  if (::ioctl(sock, SIOCGIFFLAGS, &ifr) == 0) {
+    ifr.ifr_flags |= IFF_UP | IFF_RUNNING;
+    if (::ioctl(sock, SIOCSIFFLAGS, &ifr) < 0)
+      std::cerr << "[openvpn_client] SIOCSIFFLAGS: " << strerror(errno) << "\n";
+  }
+
+  ::close(sock);
+  std::cout << "[openvpn_client] " << m_tun_name << " configured: " << ip << "/24 UP\n";
 #endif
 }
 
