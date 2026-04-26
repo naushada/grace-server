@@ -55,8 +55,8 @@ static void print_usage(const char *prog) {
     << "  Client options:\n"
     << "    --server=<host>          VPN server address  (default: 127.0.0.1)\n"
     << "    --port=<port>            VPN server port     (default: 1194)\n"
-    << "    --tun=<ifname>           TUN device name     (default: tun0)\n"
-    << "    --status=<path>          Lua status file     (default: /run/vpn_status.lua)\n";
+    << "    --status=<path>          Lua status file     (default: /run/vpn_status.lua)\n"
+    << "  Note: the TUN interface name is chosen by the kernel (next free tunX).\n";
 }
 
 // ---------------------------------------------------------------------------
@@ -79,21 +79,18 @@ int main(int argc, const char *argv[]) {
     // ------------------------------------------------------------------
     const std::string server      = get_flag(argc, argv, "server", "127.0.0.1");
     const uint16_t    port        = get_port_flag(argc, argv, "port", 1194);
-    const std::string tun_name    = get_flag(argc, argv, "tun",    "tun0");
     const std::string status_file = get_flag(argc, argv, "status",
                                               "/run/vpn_status.lua");
 
     std::cout << "[main] mode=client server=" << server
               << " port=" << port
-              << " tun=" << tun_name
               << " status=" << status_file << "\n";
+    std::cout << "[main] TUN interface will be assigned by the kernel\n";
 
-    // fs_app watches /app/command for Lua command reloads.
     fs_app fs_mon("/app/command");
 
-    // openvpn_client connects and drives the shared event loop.
-    // After IP_ASSIGN it creates tun_name and writes status_file.
-    openvpn_client vpn_client(server, port, tun_name, status_file);
+    // openvpn_client connects; kernel picks the tunX name after IP_ASSIGN.
+    openvpn_client vpn_client(server, port, status_file);
 
     run_evt_loop main_loop;
     main_loop();

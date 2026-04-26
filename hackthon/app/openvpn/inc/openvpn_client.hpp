@@ -33,16 +33,20 @@ public:
   static constexpr uint8_t TYPE_DISCONNECT = 0x03;
   static constexpr size_t  HEADER_LEN      = 5; // 1 (type) + 4 (length BE)
 
-  // host/port  — openvpn_server to connect to
-  // tun_name   — e.g. "tun0"; used in TUNSETIFF ioctl
+  // host/port   — openvpn_server to connect to
   // status_file — path where the Lua status table is written
+  //
+  // The TUN interface name is NOT a parameter: we pass an empty ifr_name to
+  // the TUNSETIFF ioctl and let the kernel assign the next free tunX.
+  // The actual name is stored in tun_if() after IP_ASSIGN is received.
   openvpn_client(const std::string &host, uint16_t port,
-                  std::string tun_name   = "tun0",
                   std::string status_file = "/tmp/vpn_status.lua");
 
   virtual ~openvpn_client();
 
   const std::string &assigned_ip()  const { return m_assigned_ip; }
+  // Kernel-assigned interface name ("tun1", "tun2", …); empty until IP_ASSIGN.
+  const std::string &tun_if()       const { return m_tun_name; }
   bool               ip_assigned()  const { return m_ip_assigned; }
 
   // -------------------------------------------------------------------------
@@ -73,16 +77,19 @@ public:
 
   // Write (or overwrite) a Lua status file with the current VPN state.
   //   path       — file to write
-  //   service_ip — the virtual IP assigned to this client, or "" if down
+  //   service_ip — virtual IP assigned by the server, or "" if down
+  //   tun_if     — kernel-assigned TUN interface name, or "" if down
   //   status     — "Connected" or "Down"
   //   timestamp  — UTC seconds since epoch (use std::time(nullptr))
   static void write_status_lua(const std::string &path,
                                 const std::string &service_ip,
+                                const std::string &tun_if,
                                 const std::string &status,
                                 std::time_t        timestamp);
 
 private:
-  // Open /dev/net/tun (Linux) and bind it to m_tun_name.
+  // Open /dev/net/tun (Linux) with an empty ifr_name so the kernel picks
+  // the next free tunX.  Stores the kernel-assigned name in m_tun_name.
   // Returns the open fd on success, -1 on failure or non-Linux platform.
   int  open_tun();
   void close_tun();

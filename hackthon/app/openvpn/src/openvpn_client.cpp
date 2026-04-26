@@ -21,9 +21,8 @@
 // ---------------------------------------------------------------------------
 
 openvpn_client::openvpn_client(const std::string &host, uint16_t port,
-                                 std::string tun_name, std::string status_file)
+                                 std::string status_file)
     : evt_io(host, port, /*outbound=*/true),
-      m_tun_name(std::move(tun_name)),
       m_status_file(std::move(status_file)) {
   std::cout << "[openvpn_client] connecting to " << host << ":" << port << "\n";
 }
@@ -58,7 +57,8 @@ std::int32_t openvpn_client::handle_read(const std::int32_t & /*channel*/,
 std::int32_t openvpn_client::handle_close(const std::int32_t & /*channel*/) {
   std::cerr << "[openvpn_client] connection closed\n";
   if (m_ip_assigned)
-    write_status_lua(m_status_file, m_assigned_ip, "Down", std::time(nullptr));
+    write_status_lua(m_status_file, m_assigned_ip, m_tun_name, "Down",
+                     std::time(nullptr));
   close_tun();
   return 0;
 }
@@ -67,7 +67,8 @@ std::int32_t openvpn_client::handle_event(const std::int32_t & /*channel*/,
                                             const std::uint16_t & /*event*/) {
   std::cerr << "[openvpn_client] timeout\n";
   if (m_ip_assigned)
-    write_status_lua(m_status_file, m_assigned_ip, "Down", std::time(nullptr));
+    write_status_lua(m_status_file, m_assigned_ip, m_tun_name, "Down",
+                     std::time(nullptr));
   close_tun();
   return 0;
 }
@@ -131,16 +132,16 @@ size_t openvpn_client::process_frames() {
       m_ip_assigned  = true;
       std::cout << "[openvpn_client] IP_ASSIGN received: " << m_assigned_ip << "\n";
 
-      m_tun_fd = open_tun();
+      m_tun_fd = open_tun(); // kernel picks the interface name
       if (m_tun_fd < 0)
-        std::cerr << "[openvpn_client] WARNING: could not create "
-                  << m_tun_name << " (need CAP_NET_ADMIN or Linux)\n";
+        std::cerr << "[openvpn_client] WARNING: could not create TUN "
+                     "(need CAP_NET_ADMIN and Linux)\n";
       else
-        std::cout << "[openvpn_client] created " << m_tun_name
-                  << " with IP " << m_assigned_ip << "\n";
+        std::cout << "[openvpn_client] kernel assigned " << m_tun_name
+                  << " for IP " << m_assigned_ip << "\n";
 
-      write_status_lua(m_status_file, m_assigned_ip, "Connected",
-                        std::time(nullptr));
+      write_status_lua(m_status_file, m_assigned_ip, m_tun_name,
+                        "Connected", std::time(nullptr));
       break;
 
     case TYPE_DATA:
@@ -153,7 +154,7 @@ size_t openvpn_client::process_frames() {
 
     case TYPE_DISCONNECT:
       std::cout << "[openvpn_client] server sent DISCONNECT\n";
-      write_status_lua(m_status_file, m_assigned_ip, "Down",
+      write_status_lua(m_status_file, m_assigned_ip, m_tun_name, "Down",
                         std::time(nullptr));
       close_tun();
       break;
@@ -176,22 +177,24 @@ int openvpn_client::open_tun() {
 #ifdef __linux__
   int fd = ::open("/dev/net/tun", O_RDWR);
   if (fd < 0) {
-    std::cerr << "[openvpn_client] open /dev/net/tun failed: "
+    std::cerr << "[openvpn_client] open /dev/net/tun: "
               << std::strerror(errno) << "\n";
     return -1;
   }
   struct ifreq ifr{};
   ifr.ifr_flags = IFF_TUN | IFF_NO_PI;
-  std::strncpy(ifr.ifr_name, m_tun_name.c_str(), IFNAMSIZ - 1);
+  // Leave ifr_name zeroed — kernel picks the next free tunX and writes
+  // the assigned name back into ifr_name after the ioctl succeeds.
   if (::ioctl(fd, TUNSETIFF, &ifr) < 0) {
-    std::cerr << "[openvpn_client] TUNSETIFF failed: "
-              << std::strerror(errno) << "\n";
+    std::cerr << "[openvpn_client] TUNSETIFF: " << std::strerror(errno) << "\n";
     ::close(fd);
     return -1;
   }
+  // Store the kernel-chosen interface name (e.g. "tun0", "tun1", ...).
+  m_tun_name = ifr.ifr_name;
   return fd;
 #else
-  return -1; // not supported on this platform
+  return -1;
 #endif
 }
 
@@ -210,6 +213,7 @@ void openvpn_client::close_tun() {
 
 void openvpn_client::write_status_lua(const std::string &path,
                                         const std::string &service_ip,
+                                        const std::string &tun_if,
                                         const std::string &status,
                                         std::time_t        timestamp) {
   std::ofstream f(path, std::ios::trunc);
@@ -221,12 +225,13 @@ void openvpn_client::write_status_lua(const std::string &path,
     << "return {\n"
     << "  vpn_status = {\n"
     << "    service_ip = \"" << service_ip << "\",\n"
-    << "    status     = \"" << status << "\",\n"
-    << "    timestamp  = "  << static_cast<long long>(timestamp) << ",\n"
+    << "    tun_if     = \"" << tun_if     << "\",\n"
+    << "    status     = \"" << status     << "\",\n"
+    << "    timestamp  = "   << static_cast<long long>(timestamp) << ",\n"
     << "  },\n"
     << "}\n";
   std::cout << "[openvpn_client] status=" << status
-            << " ip=" << service_ip
+            << " ip=" << service_ip << " tun=" << tun_if
             << " written to " << path << "\n";
 }
 

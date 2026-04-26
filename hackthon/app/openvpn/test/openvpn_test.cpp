@@ -173,33 +173,46 @@ protected:
 };
 
 TEST_F(StatusLuaTest, ConnectedStatusContainsAllFields) {
-  openvpn_client::write_status_lua(m_path, "10.8.0.3", "Connected", 1700000000);
+  openvpn_client::write_status_lua(m_path, "10.8.0.3", "tun2", "Connected",
+                                    1700000000);
   const auto content = read_file();
-  EXPECT_NE(content.find("service_ip"), std::string::npos);
-  EXPECT_NE(content.find("10.8.0.3"),  std::string::npos);
-  EXPECT_NE(content.find("Connected"), std::string::npos);
-  EXPECT_NE(content.find("1700000000"),std::string::npos);
-  EXPECT_NE(content.find("status"),    std::string::npos);
-  EXPECT_NE(content.find("timestamp"), std::string::npos);
+  EXPECT_NE(content.find("service_ip"),  std::string::npos);
+  EXPECT_NE(content.find("10.8.0.3"),    std::string::npos);
+  EXPECT_NE(content.find("tun_if"),      std::string::npos);
+  EXPECT_NE(content.find("tun2"),        std::string::npos);
+  EXPECT_NE(content.find("Connected"),   std::string::npos);
+  EXPECT_NE(content.find("1700000000"),  std::string::npos);
+  EXPECT_NE(content.find("status"),      std::string::npos);
+  EXPECT_NE(content.find("timestamp"),   std::string::npos);
 }
 
 TEST_F(StatusLuaTest, DownStatusIsWritten) {
-  openvpn_client::write_status_lua(m_path, "10.8.0.3", "Down", 1700000001);
+  openvpn_client::write_status_lua(m_path, "10.8.0.3", "tun0", "Down",
+                                    1700000001);
   const auto content = read_file();
   EXPECT_NE(content.find("Down"), std::string::npos);
 }
 
 TEST_F(StatusLuaTest, OutputBeginsWithReturn) {
-  openvpn_client::write_status_lua(m_path, "10.8.0.7", "Connected", 0);
+  openvpn_client::write_status_lua(m_path, "10.8.0.7", "tun1", "Connected",
+                                    0);
   const auto content = read_file();
-  // Must be loadable Lua — starts with either a comment or "return"
-  EXPECT_TRUE(content.find("return") != std::string::npos);
+  EXPECT_NE(content.find("return"), std::string::npos);
 }
 
 TEST_F(StatusLuaTest, VpnStatusTableKey) {
-  openvpn_client::write_status_lua(m_path, "10.8.0.9", "Connected", 42);
+  openvpn_client::write_status_lua(m_path, "10.8.0.9", "tun3", "Connected",
+                                    42);
   const auto content = read_file();
   EXPECT_NE(content.find("vpn_status"), std::string::npos);
+}
+
+TEST_F(StatusLuaTest, TunIfFieldPresent) {
+  openvpn_client::write_status_lua(m_path, "10.8.0.5", "tun99", "Connected",
+                                    100);
+  const auto content = read_file();
+  // The kernel-assigned interface name must be in the file.
+  EXPECT_NE(content.find("tun99"), std::string::npos);
 }
 
 // ==========================================================================
