@@ -1,6 +1,6 @@
 -- OpenVPN-like TCP tunnel server configuration.
 --
--- Usage at the Tarana> prompt:
+-- Usage at the Marvel> prompt:
 --   openvpn_server listen_host=<ip> listen_port=<port> pool_network=<net> pool_start=<n> pool_end=<n>
 --
 -- listen_host  - IP address the tunnel server binds to (default "0.0.0.0" = all interfaces).

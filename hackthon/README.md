@@ -146,16 +146,16 @@ Key predicates like `[name=eth0]` are parsed and encoded into
 
 ```
 # Fetch the operational status of interface eth0
-Tarana> gnmi_get target=192.168.1.1 prefix=/interfaces/interface[name=eth0] path=state/oper-status
+Marvel> gnmi_get target=192.168.1.1 prefix=/interfaces/interface[name=eth0] path=state/oper-status
 
 # Update the description of interface eth0
-Tarana> gnmi_update target=192.168.1.1 prefix=/interfaces/interface[name=eth0] path=config/description value=uplink-to-spine
+Marvel> gnmi_update target=192.168.1.1 prefix=/interfaces/interface[name=eth0] path=config/description value=uplink-to-spine
 
 # Replace the entire config subtree of eth0
-Tarana> gnmi_replace target=192.168.1.1 prefix=/interfaces path=/interface[name=eth0]/config value={"description":"new-uplink","enabled":true}
+Marvel> gnmi_replace target=192.168.1.1 prefix=/interfaces path=/interface[name=eth0]/config value={"description":"new-uplink","enabled":true}
 
 # Delete interface eth0 from the configuration
-Tarana> gnmi_delete target=192.168.1.1 prefix=/interfaces path=/interface[name=eth0]
+Marvel> gnmi_delete target=192.168.1.1 prefix=/interfaces path=/interface[name=eth0]
 ```
 
 ### How it works (CLI → peer device)

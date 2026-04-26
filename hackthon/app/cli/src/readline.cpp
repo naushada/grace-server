@@ -733,7 +733,7 @@ void serialise_to_binary(const google::protobuf::Message &msg) {
 // ---------------------------------------------------------------------------
 void run_cli() {
   char *input;
-  const char *prompt = "Tarana> ";
+  const char *prompt = "Marvel> ";
 
   while ((input = readline(prompt)) != nullptr) {
     if (*input) {

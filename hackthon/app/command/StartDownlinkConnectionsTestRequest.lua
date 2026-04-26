@@ -1,7 +1,7 @@
 -- Sample command definition consumed by lua_file::process_create_luafile.
 --
 -- The file must `return` a single Lua table whose first-level key is the
--- command name the user will type at the Tarana> prompt. Everything under
+-- command name the user will type at the Marvel> prompt. Everything under
 -- that key becomes the parameter tree that Tab completion walks.
 --
 -- Layout assumed by the CLI:

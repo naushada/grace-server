@@ -1,6 +1,6 @@
 -- gNMI Get command.
 --
--- Usage at the Tarana> prompt:
+-- Usage at the Marvel> prompt:
 --   gnmi_get target=<ip> port=<port> prefix=<yang-path> path=<yang-path> encoding=<JSON|PROTO|JSON_IETF> role=<VIEWER|ADMIN>
 --
 -- prefix   - common YANG path prefix shared by all paths in this request.

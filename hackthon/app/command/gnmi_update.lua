@@ -11,7 +11,7 @@
 -- virtual IP from the pool, then proceeds with the gNMI Set.  Leave
 -- tunnel_host empty to skip the tunnel (dev/testing only).
 --
--- Usage at the Tarana> prompt:
+-- Usage at the Marvel> prompt:
 --   gnmi_update target=<ip> port=<port> prefix=<yang-path> path=<yang-path> value=<json>
 --               encoding=<JSON|JSON_IETF> role=ADMIN tunnel_host=<ip> tunnel_port=<port>
 
