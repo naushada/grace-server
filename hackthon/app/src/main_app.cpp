@@ -172,11 +172,11 @@ int main(int argc, const char *argv[]) {
               << " tls=" << (tls.enabled ? "ON" : "OFF")
               << (gnmi_probe ? " gnmi-probe=ON" : "") << '\n';
 
+    // vpn_client + event loop must stay in the same scope so the bufferevent
+    // is alive for the entire duration of run_evt_loop.
     openvpn_client vpn_client(server, port, status_file, tls);
 
     if (gnmi_probe) {
-      // Phase 1 — pump the event loop one iteration at a time until
-      // IP_ASSIGN is processed and tun0 is configured.
       std::cout << "[main] waiting for VPN tunnel...\n";
       auto *base = evt_base::instance().get();
       while (!vpn_client.ip_assigned())
@@ -185,9 +185,6 @@ int main(int argc, const char *argv[]) {
       std::cout << "[main] tunnel up, assigned=" << vpn_client.assigned_ip()
                 << " probing " << server_vip << ":" << gnmi_port << "\n";
 
-      // Phase 2 — fire a gNMI Get through the tunnel.
-      // gnmi_client::call() also uses event_base_loop(EVLOOP_ONCE) internally;
-      // it is safe here because Phase 1 has returned (no nested dispatch).
       gnmi::GetRequest req;
       req.mutable_prefix()->set_target("VIEWER");
       auto *path = req.add_path();
@@ -200,10 +197,10 @@ int main(int argc, const char *argv[]) {
       const auto resp = gnmi_client::call(server_vip, gnmi_port,
                                            "/gnmi.gNMI/Get", req_pb, gnmi_tls);
       dump_gnmi_response(resp);
-
-      // Phase 3 — fall through to run_evt_loop{}() below; tunnel stays open.
       std::cout << "[main] probe done, tunnel remains open\n";
     }
+
+    run_evt_loop{}();
 
   } else {
     const std::string pool_start = get_flag(argc, argv, "pool-start", "10.8.0.2");
@@ -215,11 +212,13 @@ int main(int argc, const char *argv[]) {
               << " gnmi-tls=" << (gnmi_tls.enabled ? "ON" : "OFF")
               << " pool=" << pool_start << "–" << pool_end << '\n';
 
+    // svc_module + vpn must stay in scope for the entire event loop.
     server svc_module("0.0.0.0", 58989, gnmi_tls);
     openvpn_server vpn("0.0.0.0", 1194, pool_start, pool_end, tls, server_ip, netmask);
+
+    run_evt_loop{}();
   }
 
-  run_evt_loop{}();
   return 0;
 }
 
