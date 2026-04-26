@@ -9,7 +9,8 @@ version: "3.9"
 x-tun-caps: &tun-caps
   user: root
   cap_add:
-    - NET_ADMIN
+    - NET_ADMIN   # TUNSETIFF, SIOCADDRT/SIOCDELRT
+    - NET_RAW     # tcpdump raw-socket capture
   devices:
     - /dev/net/tun:/dev/net/tun
 

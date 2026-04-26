@@ -56,8 +56,12 @@ RUN apt-get update && apt-get install -y \
     libreadline8 \
     libssl3 \
     zlib1g \
-    gdb \
     liblua5.4-0 \
+    gdb \
+    net-tools \
+    iproute2 \
+    iputils-ping \
+    tcpdump \
   && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
