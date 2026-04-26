@@ -8,11 +8,15 @@
 #include <ctime>
 #include <string>
 
-// Persistent outbound VPN tunnel client.
+extern "C" {
+#include <event2/event.h>
+}
+
+// Persistent outbound VPN tunnel client with automatic reconnect.
 //
-// TLS is optional: when tls.enabled is true the outbound bufferevent is built
-// as a bufferevent_openssl_socket, passed to the protected evt_io(bev, host)
-// constructor via the static make_bev() helper in the initialiser list.
+// On connect failure or timeout, schedules a RECONNECT_DELAY_S second
+// libevent timer then re-calls bufferevent_socket_connect_hostname on the
+// existing bufferevent so the event loop stays alive across retries.
 //
 // Lua status file is written via lua_file::write_table (single Lua write path).
 class openvpn_client : public evt_io {
@@ -21,6 +25,7 @@ public:
   static constexpr uint8_t TYPE_DATA       = 0x02;
   static constexpr uint8_t TYPE_DISCONNECT = 0x03;
   static constexpr size_t  HEADER_LEN      = 5;
+  static constexpr int     RECONNECT_DELAY_S = 3;
 
   openvpn_client(const std::string &host, uint16_t port,
                   std::string        status_file = "/tmp/vpn_status.lua",
@@ -42,15 +47,10 @@ public:
                              const std::uint16_t &event) override;
   std::int32_t handle_write(const std::int32_t &channel) override;
 
-  // --------------------------------------------------------------------------
-  // Static helpers — exposed for unit-testability
-  // --------------------------------------------------------------------------
   static std::string encode_frame(uint8_t type, const std::string &payload);
   static bool try_decode_frame(const std::string &buf, size_t offset,
                                 uint8_t &out_type, std::string &out_payload,
                                 size_t &out_consumed);
-
-  // All Lua output is routed through lua_file::write_table.
   static void write_status_lua(const std::string &path,
                                 const std::string &service_ip,
                                 const std::string &tun_if,
@@ -67,11 +67,24 @@ private:
   size_t process_frames();
   void   send_frame(uint8_t type, const std::string &payload);
 
+  // Schedule a reconnect attempt after RECONNECT_DELAY_S seconds.
+  void schedule_reconnect();
+  // libevent timer callback — fires after the delay and reconnects.
+  static void reconnect_cb(evutil_socket_t, short, void *ctx);
+
+  struct event_deleter {
+    void operator()(struct event *e) const noexcept { event_free(e); }
+  };
+
+  std::string              m_server_host;
+  uint16_t                 m_server_port{0};
+  tls_config               m_tls;
   std::string              m_tun_name;
   std::string              m_status_file;
   std::string              m_assigned_ip;
   std::string              m_recv_buf;
   std::unique_ptr<tun_io>  m_tun_io;
+  std::unique_ptr<struct event, event_deleter> m_reconnect_timer;
   int                      m_tun_fd{-1};
   bool                     m_ip_assigned{false};
 };

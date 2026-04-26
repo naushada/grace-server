@@ -45,6 +45,12 @@ services:
     networks:
       vpn-net:
         ipv4_address: 172.20.0.2
+    healthcheck:
+      test: ["CMD", "sh", "-c", "cat /dev/null > /dev/tcp/127.0.0.1/1194"]
+      interval: 2s
+      timeout: 2s
+      retries: 15
+      start_period: 3s
     restart: unless-stopped
 
   # ─────────────────────────────────────────────────────────────────────────
@@ -67,7 +73,8 @@ services:
       vpn-net:
         ipv4_address: 172.20.0.3
     depends_on:
-      - vpn-server
+      vpn-server:
+        condition: service_healthy
     restart: unless-stopped
 
   # ─────────────────────────────────────────────────────────────────────────
@@ -200,6 +207,12 @@ services:
     networks:
       vpn-net:
         ipv4_address: 172.20.0.5
+    healthcheck:
+      test: ["CMD", "sh", "-c", "cat /dev/null > /dev/tcp/127.0.0.1/1194"]
+      interval: 2s
+      timeout: 2s
+      retries: 15
+      start_period: 3s
     profiles:
       - tls
     restart: unless-stopped
@@ -224,7 +237,8 @@ services:
       vpn-net:
         ipv4_address: 172.20.0.6
     depends_on:
-      - vpn-server-tls
+      vpn-server-tls:
+        condition: service_healthy
     profiles:
       - tls
     restart: unless-stopped

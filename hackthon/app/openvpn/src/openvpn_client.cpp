@@ -19,6 +19,8 @@
 #include <unistd.h>
 #endif
 
+#include <event2/bufferevent.h>
+
 // tun_io — wraps the TUN fd in evt_io so libevent delivers reads via handle_read.
 class openvpn_client::tun_io : public evt_io {
 public:
@@ -45,6 +47,7 @@ openvpn_client::openvpn_client(const std::string &host, uint16_t port,
                                  std::string status_file,
                                  const tls_config &tls)
     : evt_io(host, port, tls.build_client_ctx()),
+      m_server_host(host), m_server_port(port), m_tls(tls),
       m_status_file(std::move(status_file)) {
   std::cout << "[openvpn_client] connecting to " << host << ":" << port
             << " tls=" << (tls.enabled ? "ON" : "OFF") << '\n';
@@ -58,9 +61,24 @@ openvpn_client::~openvpn_client() {
 // evt_io hooks
 // ---------------------------------------------------------------------------
 
-std::int32_t openvpn_client::handle_connect(const std::int32_t & /*ch*/,
-                                              const std::string &peer) {
-  std::cout << "[openvpn_client] connected to " << peer
+std::int32_t openvpn_client::handle_connect(const std::int32_t &ch,
+                                              const std::string & /*peer*/) {
+  // client_event_cb passes an empty peer string — resolve actual IP from fd.
+  char peer_ip[INET6_ADDRSTRLEN] = "<unknown>";
+  struct sockaddr_storage ss{};
+  socklen_t len = sizeof(ss);
+  if (::getpeername(ch, reinterpret_cast<struct sockaddr *>(&ss), &len) == 0) {
+    if (ss.ss_family == AF_INET)
+      ::inet_ntop(AF_INET,
+                  &reinterpret_cast<struct sockaddr_in *>(&ss)->sin_addr,
+                  peer_ip, sizeof(peer_ip));
+    else if (ss.ss_family == AF_INET6)
+      ::inet_ntop(AF_INET6,
+                  &reinterpret_cast<struct sockaddr_in6 *>(&ss)->sin6_addr,
+                  peer_ip, sizeof(peer_ip));
+  }
+  std::cout << "[openvpn_client] connected to " << m_server_host
+            << " (" << peer_ip << "):" << m_server_port
             << ", waiting for IP_ASSIGN\n";
   return 0;
 }
@@ -81,17 +99,44 @@ std::int32_t openvpn_client::handle_close(const std::int32_t & /*ch*/) {
     write_status_lua(m_status_file, m_assigned_ip, m_tun_name, "Down",
                      std::time(nullptr));
   close_tun();
+  m_ip_assigned = false;
+  m_assigned_ip.clear();
+  m_recv_buf.clear();
+  schedule_reconnect();
   return 0;
 }
 
 std::int32_t openvpn_client::handle_event(const std::int32_t & /*ch*/,
                                             const std::uint16_t & /*ev*/) {
-  std::cerr << "[openvpn_client] timeout\n";
+  std::cerr << "[openvpn_client] timeout/error\n";
   if (m_ip_assigned)
     write_status_lua(m_status_file, m_assigned_ip, m_tun_name, "Down",
                      std::time(nullptr));
   close_tun();
+  m_ip_assigned = false;
+  m_assigned_ip.clear();
+  m_recv_buf.clear();
+  schedule_reconnect();
   return 0;
+}
+
+void openvpn_client::schedule_reconnect() {
+  std::cout << "[openvpn_client] reconnecting in " << RECONNECT_DELAY_S
+            << "s...\n";
+  m_reconnect_timer.reset(
+      evtimer_new(evt_base::instance().get(), reconnect_cb, this));
+  const struct timeval tv{RECONNECT_DELAY_S, 0};
+  evtimer_add(m_reconnect_timer.get(), &tv);
+}
+
+void openvpn_client::reconnect_cb(evutil_socket_t, short, void *ctx) {
+  auto *self = static_cast<openvpn_client *>(ctx);
+  std::cout << "[openvpn_client] retrying " << self->m_server_host
+            << ":" << self->m_server_port << "\n";
+  bufferevent_socket_connect_hostname(self->get_bufferevt(), nullptr,
+                                      AF_UNSPEC,
+                                      self->m_server_host.c_str(),
+                                      self->m_server_port);
 }
 
 std::int32_t openvpn_client::handle_write(const std::int32_t & /*ch*/) {
