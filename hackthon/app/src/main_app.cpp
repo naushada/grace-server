@@ -4,14 +4,19 @@
 #include "client_app.hpp"
 #include "framework.hpp"
 #include "fs_app.hpp"
+#include "gnmi_client.hpp"
 #include "openvpn_client.hpp"
 #include "openvpn_server.hpp"
 #include "server_app.hpp"
 #include "tls_config.hpp"
 
+#include "gnmi/gnmi.pb.h"
+
+#include <iomanip>
 #include <cstdint>
 #include <cstring>
 #include <iostream>
+#include <sstream>
 #include <string>
 
 // ---------------------------------------------------------------------------
@@ -61,7 +66,58 @@ static void print_usage(const char *prog) {
     << "    --cert=<path>            PEM certificate file\n"
     << "    --key=<path>             PEM private key file\n"
     << "    --ca=<path>              PEM CA certificate (peer verification)\n"
+    << "    --gnmi-probe=true        After VPN connects, fire a gNMI Get through\n"
+    << "                             the tunnel and dump the response; tunnel stays open.\n"
+    << "    --server-vip=<ip>        Server-side VPN IP to probe  (default: 10.8.0.1)\n"
+    << "    --gnmi-port=<port>       gNMI port on the server      (default: 58989)\n"
     << "  Note: TUN interface name chosen by the kernel (next free tunX).\n";
+}
+
+// ---------------------------------------------------------------------------
+// gNMI probe — fires after the VPN tunnel is up.
+//
+// Design: phased event loop (sequential, NOT nested):
+//
+//   Phase 1  while (!vpn.ip_assigned()) event_base_loop(EVLOOP_ONCE)
+//            ↳ drives the openvpn_client bufferevent until IP_ASSIGN arrives
+//              and tun0 is configured
+//
+//   Phase 2  gnmi_client::call(server_vip, gnmi_port, "/gnmi.gNMI/Get", req)
+//            ↳ internally loops event_base_loop(EVLOOP_ONCE) until response
+//              arrives — safe because Phase 1 has already returned, no nesting
+//
+//   Phase 3  event_base_dispatch(base)
+//            ↳ keeps the tunnel alive; tun I/O and reconnect logic continue
+//
+// event_base_loop(EVLOOP_ONCE) is NOT re-entrant — calling it from within an
+// already-running dispatch would be undefined behaviour.  The phased approach
+// avoids that by never calling it from inside an event callback.
+// ---------------------------------------------------------------------------
+
+static void dump_gnmi_response(const gnmi_client::response &r) {
+  std::cout << "[gnmi-probe] grpc_status=" << r.grpc_status;
+  if (!r.grpc_message.empty())
+    std::cout << " message=\"" << r.grpc_message << '"';
+
+  if (r.grpc_status == 0 && !r.body_pb.empty()) {
+    gnmi::GetResponse resp;
+    if (resp.ParseFromString(r.body_pb)) {
+      std::cout << " notification_count=" << resp.notification_size();
+      for (int i = 0; i < resp.notification_size(); ++i) {
+        const auto &n = resp.notification(i);
+        std::cout << "\n  [" << i << "] timestamp=" << n.timestamp()
+                  << " update_count=" << n.update_size();
+      }
+    } else {
+      // Fallback: hex dump of raw proto bytes
+      std::ostringstream hex;
+      hex << std::hex << std::setfill('0');
+      for (unsigned char c : r.body_pb)
+        hex << std::setw(2) << static_cast<int>(c);
+      std::cout << " body_hex=" << hex.str();
+    }
+  }
+  std::cout << '\n';
 }
 
 // ---------------------------------------------------------------------------
@@ -91,11 +147,46 @@ int main(int argc, const char *argv[]) {
     const std::string server      = get_flag(argc, argv, "server", "127.0.0.1");
     const uint16_t    port        = get_port_flag(argc, argv, "port", 1194);
     const std::string status_file = get_flag(argc, argv, "status", "/run/vpn_status.lua");
+    const bool        gnmi_probe  = get_flag(argc, argv, "gnmi-probe", "false") == "true";
+    const std::string server_vip  = get_flag(argc, argv, "server-vip", "10.8.0.1");
+    const uint16_t    gnmi_port   = get_port_flag(argc, argv, "gnmi-port", 58989);
 
     std::cout << "[main] mode=client server=" << server << " port=" << port
-              << " tls=" << (tls.enabled ? "ON" : "OFF") << '\n';
+              << " tls=" << (tls.enabled ? "ON" : "OFF")
+              << (gnmi_probe ? " gnmi-probe=ON" : "") << '\n';
 
     openvpn_client vpn_client(server, port, status_file, tls);
+
+    if (gnmi_probe) {
+      // Phase 1 — pump the event loop one iteration at a time until
+      // IP_ASSIGN is processed and tun0 is configured.
+      std::cout << "[main] waiting for VPN tunnel...\n";
+      auto *base = evt_base::instance().get();
+      while (!vpn_client.ip_assigned())
+        event_base_loop(base, EVLOOP_ONCE);
+
+      std::cout << "[main] tunnel up, assigned=" << vpn_client.assigned_ip()
+                << " probing " << server_vip << ":" << gnmi_port << "\n";
+
+      // Phase 2 — fire a gNMI Get through the tunnel.
+      // gnmi_client::call() also uses event_base_loop(EVLOOP_ONCE) internally;
+      // it is safe here because Phase 1 has returned (no nested dispatch).
+      gnmi::GetRequest req;
+      req.mutable_prefix()->set_target("VIEWER");
+      auto *path = req.add_path();
+      path->add_elem()->set_name("interfaces");
+      req.set_encoding(gnmi::JSON);
+
+      std::string req_pb;
+      req.SerializeToString(&req_pb);
+
+      const auto resp = gnmi_client::call(server_vip, gnmi_port,
+                                           "/gnmi.gNMI/Get", req_pb);
+      dump_gnmi_response(resp);
+
+      // Phase 3 — fall through to run_evt_loop{}() below; tunnel stays open.
+      std::cout << "[main] probe done, tunnel remains open\n";
+    }
 
   } else {
     const std::string pool_start = get_flag(argc, argv, "pool-start", "10.8.0.2");
