@@ -128,6 +128,29 @@ int32_t ip_pool::find_channel(const std::string &ip) const {
 // Server TUN — receives IP packets from local stack, routes to right peer
 // ---------------------------------------------------------------------------
 
+// server_tun_io — wraps server TUN fd in evt_io; routes inbound IP packets to peers.
+class openvpn_server::server_tun_io : public evt_io {
+public:
+  server_tun_io(evutil_socket_t fd, openvpn_server &owner)
+      : evt_io(fd, "tun"), m_owner(owner) {}
+
+  std::int32_t handle_read(const std::int32_t &, const std::string &data,
+                            const bool &dry_run) override {
+    if (dry_run || data.size() < 20) return 0;
+    char dst[INET_ADDRSTRLEN];
+    inet_ntop(AF_INET, data.data() + 16, dst, sizeof(dst));
+    const int32_t ch = m_owner.m_pool.find_channel(dst);
+    if (ch >= 0) {
+      auto it = m_owner.m_peers.find(ch);
+      if (it != m_owner.m_peers.end())
+        it->second->forward_data(data);
+    }
+    return 0;
+  }
+private:
+  openvpn_server &m_owner;
+};
+
 int openvpn_server::open_server_tun(const std::string &server_ip) {
 #ifdef __linux__
   m_server_tun_fd = ::open("/dev/net/tun", O_RDWR);
@@ -159,28 +182,5 @@ int openvpn_server::open_server_tun(const std::string &server_ip) {
 #endif
   return 0;
 }
-
-// server_tun_io — wraps server TUN fd in evt_io; routes inbound IP packets to peers.
-class openvpn_server::server_tun_io : public evt_io {
-public:
-  server_tun_io(evutil_socket_t fd, openvpn_server &owner)
-      : evt_io(fd, "tun"), m_owner(owner) {}
-
-  std::int32_t handle_read(const std::int32_t &, const std::string &data,
-                            const bool &dry_run) override {
-    if (dry_run || data.size() < 20) return 0;
-    char dst[INET_ADDRSTRLEN];
-    inet_ntop(AF_INET, data.data() + 16, dst, sizeof(dst));
-    const int32_t ch = m_owner.m_pool.find_channel(dst);
-    if (ch >= 0) {
-      auto it = m_owner.m_peers.find(ch);
-      if (it != m_owner.m_peers.end())
-        it->second->forward_data(data);
-    }
-    return 0;
-  }
-private:
-  openvpn_server &m_owner;
-};
 
 #endif // __openvpn_server_cpp__

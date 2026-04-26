@@ -19,6 +19,22 @@
 #include <unistd.h>
 #endif
 
+// tun_io — wraps the TUN fd in evt_io so libevent delivers reads via handle_read.
+class openvpn_client::tun_io : public evt_io {
+public:
+  tun_io(evutil_socket_t fd, openvpn_client &owner)
+      : evt_io(fd, "tun"), m_owner(owner) {}
+
+  std::int32_t handle_read(const std::int32_t &, const std::string &data,
+                            const bool &dry_run) override {
+    if (!dry_run && !data.empty())
+      m_owner.send_frame(openvpn_client::TYPE_DATA, data);
+    return 0;
+  }
+private:
+  openvpn_client &m_owner;
+};
+
 // ---------------------------------------------------------------------------
 // Construction / destruction
 // ---------------------------------------------------------------------------
@@ -215,22 +231,6 @@ void openvpn_client::assign_tun_ip(const std::string &ip) {
   std::cout << "[openvpn_client] " << m_tun_name << " configured: " << ip << "/24 UP\n";
 #endif
 }
-
-// tun_io — wraps the TUN fd in evt_io so libevent delivers reads via handle_read.
-class openvpn_client::tun_io : public evt_io {
-public:
-  tun_io(evutil_socket_t fd, openvpn_client &owner)
-      : evt_io(fd, "tun"), m_owner(owner) {}
-
-  std::int32_t handle_read(const std::int32_t &, const std::string &data,
-                            const bool &dry_run) override {
-    if (!dry_run && !data.empty())
-      m_owner.send_frame(openvpn_client::TYPE_DATA, data);
-    return 0;
-  }
-private:
-  openvpn_client &m_owner;
-};
 
 void openvpn_client::close_tun() {
 #ifdef __linux__
