@@ -79,4 +79,7 @@ COPY --from=build --chown=edge:cordoba /src/build/app/cli/cli_app /app/cli_app
 COPY --from=build --chown=edge:cordoba /src/app/command/ /app/command/
 COPY --from=build --chown=edge:cordoba /src/app/openvpn/command/ /app/command/
 
+# Default: server mode. Override CMD at runtime for client mode:
+#   docker run ... /app/app --mode=client --server=<ip> --tun=tun0 --status=/run/vpn_status.lua
+
 CMD ["/app/app"]

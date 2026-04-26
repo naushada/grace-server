@@ -92,4 +92,5 @@ target_link_libraries(app PUBLIC
 # ---------------------------------------------------------------------------
 if(BUILD_TESTING OR PROJECT_IS_TOP_LEVEL)
   add_subdirectory(test)
+  add_subdirectory(openvpn/test)
 endif()
