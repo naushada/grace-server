@@ -46,7 +46,7 @@ services:
       vpn-net:
         ipv4_address: 172.20.0.2
     healthcheck:
-      test: ["CMD", "sh", "-c", "cat /dev/null > /dev/tcp/127.0.0.1/1194"]
+      test: ["CMD", "bash", "-c", "echo >/dev/tcp/127.0.0.1/1194"]
       interval: 2s
       timeout: 2s
       retries: 15
@@ -208,7 +208,7 @@ services:
       vpn-net:
         ipv4_address: 172.20.0.5
     healthcheck:
-      test: ["CMD", "sh", "-c", "cat /dev/null > /dev/tcp/127.0.0.1/1194"]
+      test: ["CMD", "bash", "-c", "echo >/dev/tcp/127.0.0.1/1194"]
       interval: 2s
       timeout: 2s
       retries: 15

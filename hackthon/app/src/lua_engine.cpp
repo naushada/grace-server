@@ -152,7 +152,6 @@ void lua_file::dump_table(const table_type &table, int indent) {
 
 void lua_file::dump_commands() {
   for (const auto &[key, value] : m_commands) {
-    std::cout << "key:" << key << std::endl;
     dump_table(value);
   }
 }
