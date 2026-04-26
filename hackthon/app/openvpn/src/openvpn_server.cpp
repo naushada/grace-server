@@ -4,25 +4,40 @@
 #include "openvpn_server.hpp"
 #include "openvpn_peer.hpp"
 
+#include <arpa/inet.h>
 #include <iostream>
 
 // ---------------------------------------------------------------------------
 // ip_pool
 // ---------------------------------------------------------------------------
 
-ip_pool::ip_pool(const std::string &network, uint8_t start, uint8_t end)
-    : m_network(network) {
-  for (uint8_t h = start; h <= end; ++h)
-    m_free.insert(h);
+uint32_t ip_pool::to_u32(const std::string &ip) {
+  struct in_addr a{};
+  inet_pton(AF_INET, ip.c_str(), &a);
+  return ntohl(a.s_addr); // host byte order for arithmetic comparison
+}
+
+std::string ip_pool::to_str(uint32_t addr) {
+  struct in_addr a{};
+  a.s_addr = htonl(addr);
+  char buf[INET_ADDRSTRLEN];
+  inet_ntop(AF_INET, &a, buf, sizeof(buf));
+  return buf;
+}
+
+ip_pool::ip_pool(const std::string &start_ip, const std::string &end_ip) {
+  const uint32_t lo = to_u32(start_ip);
+  const uint32_t hi = to_u32(end_ip);
+  for (uint32_t a = lo; a <= hi; ++a)
+    m_free.insert(a);
 }
 
 std::string ip_pool::assign(int32_t channel) {
-  if (m_free.empty())
-    return {};
-  const uint8_t octet = *m_free.begin();
+  if (m_free.empty()) return {};
+  const uint32_t addr = *m_free.begin();
   m_free.erase(m_free.begin());
-  m_assigned[channel] = octet;
-  return m_network + "." + std::to_string(octet);
+  m_assigned[channel] = addr;
+  return to_str(addr);
 }
 
 void ip_pool::release(int32_t channel) {
@@ -35,9 +50,7 @@ void ip_pool::release(int32_t channel) {
 
 std::string ip_pool::get(int32_t channel) const {
   auto it = m_assigned.find(channel);
-  return (it != m_assigned.end())
-             ? m_network + "." + std::to_string(it->second)
-             : std::string{};
+  return it != m_assigned.end() ? to_str(it->second) : std::string{};
 }
 
 // ---------------------------------------------------------------------------
@@ -45,13 +58,20 @@ std::string ip_pool::get(int32_t channel) const {
 // ---------------------------------------------------------------------------
 
 openvpn_server::openvpn_server(const std::string &host, uint16_t port,
-                                 const std::string &pool_network,
-                                 uint8_t pool_start, uint8_t pool_end)
+                                 const std::string &pool_start,
+                                 const std::string &pool_end,
+                                 const tls_config  &tls)
     : evt_io(host, port),
-      m_pool(pool_network, pool_start, pool_end) {
-  std::cout << "[openvpn_server] listening " << host << ":" << port
-            << "  pool=" << pool_network << "." << int(pool_start)
-            << "-" << pool_network << "." << int(pool_end) << "\n";
+      m_pool(pool_start, pool_end),
+      m_ssl_ctx(tls.build_server_ctx()) {
+  std::cout << "[openvpn_server] " << host << ":" << port
+            << " pool=" << pool_start << "–" << pool_end
+            << " tls=" << (m_ssl_ctx ? "ON" : "OFF") << "\n";
+}
+
+openvpn_server::~openvpn_server() {
+  m_peers.clear();
+  if (m_ssl_ctx) SSL_CTX_free(m_ssl_ctx);
 }
 
 std::int32_t openvpn_server::handle_connect(const handle_t &channel,
@@ -61,9 +81,24 @@ std::int32_t openvpn_server::handle_connect(const handle_t &channel,
     std::cerr << "[openvpn_server] pool exhausted, rejecting " << peer_host << "\n";
     return -1;
   }
-  auto peer = std::make_unique<openvpn_peer>(channel, peer_host, this, ip);
+
+  std::unique_ptr<openvpn_peer> peer;
+
+  if (m_ssl_ctx) {
+    // Wrap the accepted fd in a TLS bufferevent.  The peer uses the
+    // protected evt_io(bufferevent*, peer_host) constructor.
+    SSL *ssl = SSL_new(m_ssl_ctx);
+    auto *bev = bufferevent_openssl_socket_new(
+        evt_base::instance().get(), channel, ssl,
+        BUFFEREVENT_SSL_ACCEPTING, BEV_OPT_CLOSE_ON_FREE);
+    peer = std::make_unique<openvpn_peer>(bev, peer_host, this, ip);
+  } else {
+    peer = std::make_unique<openvpn_peer>(channel, peer_host, this, ip);
+  }
+
   m_peers.emplace(channel, std::move(peer));
-  std::cout << "[openvpn_server] accepted " << peer_host << " → " << ip << "\n";
+  std::cout << "[openvpn_server] accepted " << peer_host
+            << " → " << ip << (m_ssl_ctx ? " (TLS)" : "") << "\n";
   return 0;
 }
 

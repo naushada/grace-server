@@ -7,6 +7,7 @@
 #include "openvpn_client.hpp"
 #include "openvpn_server.hpp"
 #include "server_app.hpp"
+#include "tls_config.hpp"
 
 #include <cstdint>
 #include <cstring>
@@ -56,7 +57,11 @@ static void print_usage(const char *prog) {
     << "    --server=<host>          VPN server address  (default: 127.0.0.1)\n"
     << "    --port=<port>            VPN server port     (default: 1194)\n"
     << "    --status=<path>          Lua status file     (default: /run/vpn_status.lua)\n"
-    << "  Note: the TUN interface name is chosen by the kernel (next free tunX).\n";
+    << "    --tls=true               Enable TLS (default: false)\n"
+    << "    --cert=<path>            PEM certificate file\n"
+    << "    --key=<path>             PEM private key file\n"
+    << "    --ca=<path>              PEM CA certificate (peer verification)\n"
+    << "  Note: TUN interface name chosen by the kernel (next free tunX).\n";
 }
 
 // ---------------------------------------------------------------------------
@@ -81,16 +86,18 @@ int main(int argc, const char *argv[]) {
     const uint16_t    port        = get_port_flag(argc, argv, "port", 1194);
     const std::string status_file = get_flag(argc, argv, "status",
                                               "/run/vpn_status.lua");
+    const tls_config  tls{
+      get_flag(argc, argv, "tls", "false") == "true",
+      get_flag(argc, argv, "cert", ""),
+      get_flag(argc, argv, "key",  ""),
+      get_flag(argc, argv, "ca",   ""),
+    };
 
-    std::cout << "[main] mode=client server=" << server
-              << " port=" << port
-              << " status=" << status_file << "\n";
-    std::cout << "[main] TUN interface will be assigned by the kernel\n";
+    std::cout << "[main] mode=client server=" << server << " port=" << port
+              << " tls=" << (tls.enabled ? "ON" : "OFF") << "\n";
 
     fs_app fs_mon("/app/command");
-
-    // openvpn_client connects; kernel picks the tunX name after IP_ASSIGN.
-    openvpn_client vpn_client(server, port, status_file);
+    openvpn_client vpn_client(server, port, status_file, tls);
 
     run_evt_loop main_loop;
     main_loop();
@@ -103,13 +110,21 @@ int main(int argc, const char *argv[]) {
 
     fs_app fs_mon("/app/command");
 
-    // gNMI gRPC server — accepts connections from CLI and peer devices.
+    const tls_config tls{
+      get_flag(argc, argv, "tls", "false") == "true",
+      get_flag(argc, argv, "cert", ""),
+      get_flag(argc, argv, "key",  ""),
+      get_flag(argc, argv, "ca",   ""),
+    };
+    const std::string pool_start = get_flag(argc, argv, "pool-start", "10.8.0.2");
+    const std::string pool_end   = get_flag(argc, argv, "pool-end",   "10.8.0.254");
+
     server svc_module("0.0.0.0", 58989);
     std::cout << "[main] gNMI server on port 58989\n";
 
-    // OpenVPN TCP tunnel server — CLI update commands connect here first
-    // to receive a virtual IP before sending the gNMI Set request.
-    openvpn_server vpn("0.0.0.0", 1194);
+    openvpn_server vpn("0.0.0.0", 1194, pool_start, pool_end, tls);
+    std::cout << "[main] VPN server pool=" << pool_start << "–" << pool_end
+              << " tls=" << (tls.enabled ? "ON" : "OFF") << "\n";
 
     run_evt_loop main_loop;
     main_loop();

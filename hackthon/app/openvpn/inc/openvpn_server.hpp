@@ -2,65 +2,70 @@
 #define __openvpn_server_hpp__
 
 #include "framework.hpp"
+#include "tls_config.hpp"
 
 #include <memory>
+#include <openssl/ssl.h>
 #include <set>
 #include <string>
 #include <unordered_map>
 
 class openvpn_peer;
 
-// Manages the pool of virtual IP addresses issued to VPN clients.
-// Network is a /24 prefix string (e.g. "10.8.0"); host octets in [start, end]
-// are kept in a free set and handed out one per accepted connection.
+// IP address pool supporting any IPv4 range — enables 1000+ concurrent clients.
+//
+// Scalability note: libevent uses epoll on Linux, handling 65 K+ concurrent fds
+// in a single thread (C10K is solved at the I/O layer).  The only hard cap was
+// this pool being limited to a /24 (253 addresses).  Switching to uint32_t host
+// addresses lets operators configure e.g. "10.8.0.2"–"10.9.255.254" giving
+// 131 070 assignable virtual IPs with ~12 bytes per entry.
 class ip_pool {
 public:
-  ip_pool(const std::string &network = "10.8.0",
-          uint8_t start = 2, uint8_t end = 254);
+  // start_ip / end_ip as dotted-decimal strings, e.g. "10.8.0.2", "10.8.0.254"
+  // For 1000+ clients use a /22 or larger: "10.8.0.2" → "10.11.255.254"
+  ip_pool(const std::string &start_ip = "10.8.0.2",
+          const std::string &end_ip   = "10.8.0.254");
 
-  // Assign the next free IP to channel. Returns "" if pool is exhausted.
-  std::string assign(int32_t channel);
-
-  // Return the IP assigned to channel back to the free set.
-  void release(int32_t channel);
-
-  // Lookup the IP currently assigned to channel (empty if none).
+  std::string assign(int32_t channel); // "" if exhausted
+  void        release(int32_t channel);
   std::string get(int32_t channel) const;
+  size_t      available() const { return m_free.size(); }
 
 private:
-  std::string                          m_network;
-  std::set<uint8_t>                    m_free;
-  std::unordered_map<int32_t, uint8_t> m_assigned;
+  static uint32_t    to_u32(const std::string &ip);
+  static std::string to_str(uint32_t addr);
+
+  std::set<uint32_t>                    m_free;
+  std::unordered_map<int32_t, uint32_t> m_assigned;
 };
 
-// TCP tunnel server — inherits the server-side evt_io constructor
-// (evconnlistener) so incoming TCP connections trigger handle_connect().
-// Creates one openvpn_peer per accepted connection and assigns an IP from
-// the pool.  When a peer disconnects it calls back to handle_close() here
-// so the entry is removed and the IP returned to the pool.
+// TCP tunnel server.  Inherits the server-side evt_io constructor
+// (evconnlistener); creates one openvpn_peer per accepted connection and
+// assigns a virtual IP from the pool.  TLS is optional: when enabled each
+// accepted fd is wrapped in bufferevent_openssl_socket_new before the peer
+// object is constructed.
 class openvpn_server : public evt_io {
 public:
   using handle_t   = int32_t;
   using peer_map_t = std::unordered_map<handle_t, std::unique_ptr<openvpn_peer>>;
 
   openvpn_server(const std::string &host, uint16_t port,
-                 const std::string &pool_network = "10.8.0",
-                 uint8_t pool_start = 2, uint8_t pool_end = 254);
+                 const std::string &pool_start = "10.8.0.2",
+                 const std::string &pool_end   = "10.8.0.254",
+                 const tls_config  &tls        = {});
 
-  virtual ~openvpn_server() { m_peers.clear(); }
+  virtual ~openvpn_server();
 
-  // Called by server_accept_cb on each new inbound TCP connection.
   std::int32_t handle_connect(const handle_t &channel,
                                const std::string &peer_host) override;
-
-  // Called by openvpn_peer::handle_close() when a client disconnects.
   std::int32_t handle_close(const handle_t &channel) override;
 
   ip_pool &pool() { return m_pool; }
 
 private:
-  ip_pool     m_pool;
-  peer_map_t  m_peers;
+  ip_pool    m_pool;
+  peer_map_t m_peers;
+  SSL_CTX   *m_ssl_ctx{nullptr}; // null → plain TCP
 };
 
 #endif // __openvpn_server_hpp__

@@ -24,8 +24,15 @@ public:
   static constexpr uint8_t TYPE_DISCONNECT = 0x03;
   static constexpr size_t  HEADER_LEN      = 5; // 1 (type) + 4 (length)
 
+  // Plain TCP: framework creates the bufferevent from the accepted fd.
   openvpn_peer(int32_t channel, const std::string &peer_host,
                openvpn_server *parent, const std::string &assigned_ip);
+
+  // TLS: caller supplies the pre-built SSL bufferevent; uses the protected
+  // evt_io(bufferevent*, peer_host) constructor.
+  openvpn_peer(struct bufferevent *bev, const std::string &peer_host,
+               openvpn_server *parent, const std::string &assigned_ip);
+
   virtual ~openvpn_peer() = default;
 
   const std::string &assigned_ip() const { return m_assigned_ip; }

@@ -9,10 +9,13 @@ include(GoogleTest)
 
 set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -std=c++20 -g -Wall -Wextra")
 
+find_package(Lua REQUIRED)
+
 include_directories(
   ${LIBEVENT_INCLUDE_DIRS}
-  ${CMAKE_CURRENT_SOURCE_DIR}/../inc       # openvpn_client.hpp, openvpn_server.hpp
-  ${CMAKE_CURRENT_SOURCE_DIR}/../../inc    # framework.hpp
+  ${LUA_INCLUDE_DIR}
+  ${CMAKE_CURRENT_SOURCE_DIR}/../inc       # openvpn headers + tls_config.hpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/../../inc    # framework.hpp, lua_engine.hpp
 )
 
 # Production sources exercised by the tests.
@@ -21,6 +24,7 @@ set(OPENVPN_SRCS_UNDER_TEST
   ${CMAKE_CURRENT_SOURCE_DIR}/../src/openvpn_server.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/../src/openvpn_peer.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/../../src/framework.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/../../src/lua_engine.cpp
 )
 
 add_executable(openvpn_tests
@@ -33,6 +37,7 @@ target_link_libraries(openvpn_tests PRIVATE
   GTest::gtest_main
   Threads::Threads
   ${LIBEVENT_LIBRARIES}
+  ${LUA_LIBRARIES}
   ssl
   crypto
 )

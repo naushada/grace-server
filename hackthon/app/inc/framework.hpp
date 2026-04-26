@@ -10,6 +10,7 @@ extern "C" {
 #include <cstddef>
 #include <event2/buffer.h>
 #include <event2/bufferevent.h>
+#include <event2/bufferevent_ssl.h>
 #include <event2/event.h>
 #include <event2/listener.h>
 #include <event2/util.h>
@@ -152,6 +153,20 @@ public:
   virtual std::int32_t handle_accept(const std::int32_t &channel,
                                      const std::string &peer_host);
 
+protected:
+  // For subclasses that need a pre-built bufferevent (e.g. TLS).
+  // The caller creates the bufferevent (plain or SSL), then delegates here.
+  // This constructor takes ownership and wires the standard callbacks.
+  evt_io(struct bufferevent *bev, const std::string &peer_host)
+      : m_from_host(peer_host),
+        m_buffer_evt_p(bev),
+        m_listener_p(nullptr) {
+    bufferevent_setcb(bev, client_read_cb, client_write_cb,
+                      client_event_cb, this);
+    bufferevent_enable(bev, EV_READ | EV_WRITE | EV_PERSIST);
+  }
+
+public:
   ~evt_io() {
     if (m_buffer_evt_p)
       m_buffer_evt_p.reset(nullptr);

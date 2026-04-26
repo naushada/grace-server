@@ -2,10 +2,10 @@
 #define __openvpn_client_cpp__
 
 #include "openvpn_client.hpp"
+#include "lua_engine.hpp"
 
 #include <arpa/inet.h>
 #include <cstring>
-#include <fstream>
 #include <iostream>
 
 #ifdef __linux__
@@ -17,44 +17,74 @@
 #endif
 
 // ---------------------------------------------------------------------------
+// make_bev — builds outbound bufferevent before base-ctor runs
+// ---------------------------------------------------------------------------
+
+struct bufferevent *openvpn_client::make_bev(const std::string &host,
+                                               uint16_t port,
+                                               SSL_CTX *ssl_ctx) {
+  struct bufferevent *bev = nullptr;
+  const struct timeval tv{5, 0};
+
+  if (ssl_ctx) {
+    SSL *ssl = SSL_new(ssl_ctx);
+    bev = bufferevent_openssl_socket_new(evt_base::instance().get(), -1, ssl,
+                                          BUFFEREVENT_SSL_CONNECTING,
+                                          BEV_OPT_CLOSE_ON_FREE);
+  } else {
+    bev = bufferevent_socket_new(evt_base::instance().get(), -1,
+                                  BEV_OPT_CLOSE_ON_FREE);
+  }
+
+  bufferevent_set_timeouts(bev, &tv, &tv);
+  bufferevent_socket_connect_hostname(bev, nullptr, AF_UNSPEC,
+                                       host.c_str(), port);
+  return bev;
+}
+
+// ---------------------------------------------------------------------------
 // Construction / destruction
 // ---------------------------------------------------------------------------
 
 openvpn_client::openvpn_client(const std::string &host, uint16_t port,
-                                 std::string status_file)
-    : evt_io(host, port, /*outbound=*/true),
-      m_status_file(std::move(status_file)) {
-  std::cout << "[openvpn_client] connecting to " << host << ":" << port << "\n";
+                                 std::string status_file,
+                                 const tls_config &tls)
+    : evt_io(make_bev(host, port,
+                       tls.enabled ? tls.build_client_ctx() : nullptr),
+              host),
+      m_status_file(std::move(status_file)),
+      m_ssl_ctx(tls.enabled ? tls.build_client_ctx() : nullptr) {
+  std::cout << "[openvpn_client] connecting to " << host << ":" << port
+            << " tls=" << (tls.enabled ? "ON" : "OFF") << "\n";
 }
 
 openvpn_client::~openvpn_client() {
   close_tun();
+  if (m_ssl_ctx) SSL_CTX_free(m_ssl_ctx);
 }
 
 // ---------------------------------------------------------------------------
-// evt_io hook overrides
+// evt_io hooks
 // ---------------------------------------------------------------------------
 
-std::int32_t openvpn_client::handle_connect(const std::int32_t & /*channel*/,
-                                              const std::string &peer_host) {
-  std::cout << "[openvpn_client] TCP connected to " << peer_host
+std::int32_t openvpn_client::handle_connect(const std::int32_t & /*ch*/,
+                                              const std::string &peer) {
+  std::cout << "[openvpn_client] connected to " << peer
             << ", waiting for IP_ASSIGN\n";
   return 0;
 }
 
-std::int32_t openvpn_client::handle_read(const std::int32_t & /*channel*/,
+std::int32_t openvpn_client::handle_read(const std::int32_t & /*ch*/,
                                            const std::string &data,
                                            const bool &dry_run) {
-  if (dry_run)
-    return 0;
-
+  if (dry_run) return 0;
   m_recv_buf.append(data);
   const size_t consumed = process_frames();
   m_recv_buf.erase(0, consumed);
   return static_cast<int32_t>(consumed);
 }
 
-std::int32_t openvpn_client::handle_close(const std::int32_t & /*channel*/) {
+std::int32_t openvpn_client::handle_close(const std::int32_t & /*ch*/) {
   std::cerr << "[openvpn_client] connection closed\n";
   if (m_ip_assigned)
     write_status_lua(m_status_file, m_assigned_ip, m_tun_name, "Down",
@@ -63,8 +93,8 @@ std::int32_t openvpn_client::handle_close(const std::int32_t & /*channel*/) {
   return 0;
 }
 
-std::int32_t openvpn_client::handle_event(const std::int32_t & /*channel*/,
-                                            const std::uint16_t & /*event*/) {
+std::int32_t openvpn_client::handle_event(const std::int32_t & /*ch*/,
+                                            const std::uint16_t & /*ev*/) {
   std::cerr << "[openvpn_client] timeout\n";
   if (m_ip_assigned)
     write_status_lua(m_status_file, m_assigned_ip, m_tun_name, "Down",
@@ -73,7 +103,7 @@ std::int32_t openvpn_client::handle_event(const std::int32_t & /*channel*/,
   return 0;
 }
 
-std::int32_t openvpn_client::handle_write(const std::int32_t & /*channel*/) {
+std::int32_t openvpn_client::handle_write(const std::int32_t & /*ch*/) {
   return 0;
 }
 
@@ -96,13 +126,11 @@ bool openvpn_client::try_decode_frame(const std::string &buf, size_t offset,
                                        uint8_t &out_type,
                                        std::string &out_payload,
                                        size_t &out_consumed) {
-  if (buf.size() - offset < HEADER_LEN)
-    return false;
+  if (buf.size() - offset < HEADER_LEN) return false;
   uint32_t len_be = 0;
   std::memcpy(&len_be, buf.data() + offset + 1, 4);
   const uint32_t len = ntohl(len_be);
-  if (buf.size() - offset < HEADER_LEN + len)
-    return false;
+  if (buf.size() - offset < HEADER_LEN + len) return false;
   out_type     = static_cast<uint8_t>(buf[offset]);
   out_payload  = buf.substr(offset + HEADER_LEN, len);
   out_consumed = HEADER_LEN + len;
@@ -110,87 +138,64 @@ bool openvpn_client::try_decode_frame(const std::string &buf, size_t offset,
 }
 
 void openvpn_client::send_frame(uint8_t type, const std::string &payload) {
-  const auto frame = encode_frame(type, payload);
-  tx(frame.data(), frame.size());
+  const auto f = encode_frame(type, payload);
+  tx(f.data(), f.size());
 }
 
 size_t openvpn_client::process_frames() {
   size_t consumed = 0;
-
   while (true) {
-    uint8_t     type{};
-    std::string payload;
-    size_t      used{};
-
-    if (!try_decode_frame(m_recv_buf, consumed, type, payload, used))
-      break;
+    uint8_t t{}; std::string p{}; size_t used{};
+    if (!try_decode_frame(m_recv_buf, consumed, t, p, used)) break;
     consumed += used;
-
-    switch (type) {
+    switch (t) {
     case TYPE_IP_ASSIGN:
-      m_assigned_ip  = payload;
-      m_ip_assigned  = true;
-      std::cout << "[openvpn_client] IP_ASSIGN received: " << m_assigned_ip << "\n";
-
-      m_tun_fd = open_tun(); // kernel picks the interface name
+      m_assigned_ip = p;
+      m_ip_assigned = true;
+      std::cout << "[openvpn_client] IP_ASSIGN: " << m_assigned_ip << "\n";
+      m_tun_fd = open_tun();
       if (m_tun_fd < 0)
-        std::cerr << "[openvpn_client] WARNING: could not create TUN "
-                     "(need CAP_NET_ADMIN and Linux)\n";
+        std::cerr << "[openvpn_client] TUN unavailable (need CAP_NET_ADMIN)\n";
       else
-        std::cout << "[openvpn_client] kernel assigned " << m_tun_name
-                  << " for IP " << m_assigned_ip << "\n";
-
-      write_status_lua(m_status_file, m_assigned_ip, m_tun_name,
-                        "Connected", std::time(nullptr));
+        std::cout << "[openvpn_client] kernel assigned " << m_tun_name << "\n";
+      write_status_lua(m_status_file, m_assigned_ip, m_tun_name, "Connected",
+                        std::time(nullptr));
       break;
-
     case TYPE_DATA:
-      if (m_tun_fd >= 0) {
 #ifdef __linux__
-        ::write(m_tun_fd, payload.data(), payload.size());
+      if (m_tun_fd >= 0) ::write(m_tun_fd, p.data(), p.size());
 #endif
-      }
       break;
-
     case TYPE_DISCONNECT:
-      std::cout << "[openvpn_client] server sent DISCONNECT\n";
+      std::cout << "[openvpn_client] DISCONNECT from server\n";
       write_status_lua(m_status_file, m_assigned_ip, m_tun_name, "Down",
                         std::time(nullptr));
       close_tun();
       break;
-
     default:
-      std::cerr << "[openvpn_client] unknown frame type 0x"
-                << std::hex << int(type) << std::dec << "\n";
+      std::cerr << "[openvpn_client] unknown frame 0x"
+                << std::hex << int(t) << std::dec << "\n";
       break;
     }
   }
-
   return consumed;
 }
 
 // ---------------------------------------------------------------------------
-// TUN interface
+// TUN interface — kernel chooses the name
 // ---------------------------------------------------------------------------
 
 int openvpn_client::open_tun() {
 #ifdef __linux__
   int fd = ::open("/dev/net/tun", O_RDWR);
-  if (fd < 0) {
-    std::cerr << "[openvpn_client] open /dev/net/tun: "
-              << std::strerror(errno) << "\n";
-    return -1;
-  }
+  if (fd < 0) { std::cerr << "[openvpn_client] open tun: " << strerror(errno) << "\n"; return -1; }
   struct ifreq ifr{};
   ifr.ifr_flags = IFF_TUN | IFF_NO_PI;
-  // Leave ifr_name zeroed — kernel picks the next free tunX and writes
-  // the assigned name back into ifr_name after the ioctl succeeds.
+  // Empty name → kernel assigns next free tunX; reads actual name back.
   if (::ioctl(fd, TUNSETIFF, &ifr) < 0) {
-    std::cerr << "[openvpn_client] TUNSETIFF: " << std::strerror(errno) << "\n";
-    ::close(fd);
-    return -1;
+    std::cerr << "[openvpn_client] TUNSETIFF: " << strerror(errno) << "\n";
+    ::close(fd); return -1;
   }
-  // Store the kernel-chosen interface name (e.g. "tun0", "tun1", ...).
   m_tun_name = ifr.ifr_name;
   return fd;
 #else
@@ -199,40 +204,26 @@ int openvpn_client::open_tun() {
 }
 
 void openvpn_client::close_tun() {
-  if (m_tun_fd >= 0) {
 #ifdef __linux__
-    ::close(m_tun_fd);
+  if (m_tun_fd >= 0) { ::close(m_tun_fd); m_tun_fd = -1; }
 #endif
-    m_tun_fd = -1;
-  }
 }
 
 // ---------------------------------------------------------------------------
-// Status Lua writer
+// Status Lua — all Lua file I/O via lua_file::write_table
 // ---------------------------------------------------------------------------
 
 void openvpn_client::write_status_lua(const std::string &path,
                                         const std::string &service_ip,
                                         const std::string &tun_if,
                                         const std::string &status,
-                                        std::time_t        timestamp) {
-  std::ofstream f(path, std::ios::trunc);
-  if (!f) {
-    std::cerr << "[openvpn_client] cannot write status file: " << path << "\n";
-    return;
-  }
-  f << "-- VPN connection status — written by openvpn_client\n"
-    << "return {\n"
-    << "  vpn_status = {\n"
-    << "    service_ip = \"" << service_ip << "\",\n"
-    << "    tun_if     = \"" << tun_if     << "\",\n"
-    << "    status     = \"" << status     << "\",\n"
-    << "    timestamp  = "   << static_cast<long long>(timestamp) << ",\n"
-    << "  },\n"
-    << "}\n";
-  std::cout << "[openvpn_client] status=" << status
-            << " ip=" << service_ip << " tun=" << tun_if
-            << " written to " << path << "\n";
+                                        std::time_t        ts) {
+  lua_file::write_table(path, "vpn_status", {
+    {"service_ip", "\"" + service_ip + "\""},
+    {"tun_if",     "\"" + tun_if     + "\""},
+    {"status",     "\"" + status     + "\""},
+    {"timestamp",  std::to_string(static_cast<long long>(ts))},
+  });
 }
 
 #endif // __openvpn_client_cpp__

@@ -2,11 +2,13 @@
 #define __lua_engine_hpp__
 
 #include <algorithm>
+#include <fstream>
 #include <iostream>
 #include <lua.hpp>
 #include <map>
 #include <memory>
 #include <string>
+#include <utility>
 #include <variant>
 #include <vector>
 
@@ -78,6 +80,14 @@ public:
   void dump_commands();
   void dump_table(const table_type &table, int indent = 0);
   const std::map<std::string, lua_file::table_type> &commands() const;
+
+  // Write a single-table Lua file.  Each field pair is (key, lua_value) where
+  // lua_value is already valid Lua syntax (quoted strings include the quotes;
+  // numbers are bare).  The file is valid `return { top_key = { ... } }` Lua.
+  static void write_table(
+      const std::string &path,
+      const std::string &top_key,
+      const std::vector<std::pair<std::string, std::string>> &fields);
 
 private:
   std::unique_ptr<lua_State, custom_deleter> m_luaL;

@@ -21,6 +21,15 @@ openvpn_peer::openvpn_peer(int32_t channel, const std::string &peer_host,
   send_ip_assign();
 }
 
+openvpn_peer::openvpn_peer(struct bufferevent *bev, const std::string &peer_host,
+                             openvpn_server *parent,
+                             const std::string &assigned_ip)
+    : evt_io(bev, peer_host),    // protected pre-built-bev ctor
+      m_parent(parent),
+      m_assigned_ip(assigned_ip) {
+  send_ip_assign();
+}
+
 // ---------------------------------------------------------------------------
 // Frame helpers
 // ---------------------------------------------------------------------------

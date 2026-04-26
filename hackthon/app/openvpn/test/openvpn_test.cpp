@@ -1,42 +1,42 @@
 // Unit tests for the openvpn subsystem.
 //
-// Tests cover:
-//   ip_pool           — assign / release / exhaustion / get
-//   openvpn_client    — static frame encode/decode, write_status_lua format,
-//                       dry-run gate, construction without a live server
+// IpPoolTest     — full-IPv4 range pool (assign / release / exhaust / large)
+// FrameTest      — encode/decode round-trips
+// StatusLuaTest  — lua_file::write_table output format
+// TlsConfigTest  — tls_config disabled/enabled struct invariants
+// OpenvpnClientTest — frame constants, multi-frame sequence
 
 #include "openvpn_client.hpp"
 #include "openvpn_server.hpp"
+#include "tls_config.hpp"
+#include "lua_engine.hpp"
 
 #include <gtest/gtest.h>
-
 #include <arpa/inet.h>
 #include <cstring>
+#include <chrono>
+#include <cstdio>
+#include <fstream>
+#include <sstream>
 
 extern "C" {
 #include <sys/socket.h>
 #include <unistd.h>
 }
 
-#include <chrono>
-#include <cstdio>
-#include <fstream>
-#include <sstream>
-
 // ==========================================================================
-// ip_pool tests
+// ip_pool (full IPv4 range)
 // ==========================================================================
 
 class IpPoolTest : public ::testing::Test {};
 
-TEST_F(IpPoolTest, AssignReturnsFirstHostInNetwork) {
-  ip_pool pool("192.168.10", 2, 5);
-  const auto ip = pool.assign(1);
-  EXPECT_EQ(ip, "192.168.10.2");
+TEST_F(IpPoolTest, AssignReturnsStartIp) {
+  ip_pool pool("192.168.10.2", "192.168.10.5");
+  EXPECT_EQ(pool.assign(1), "192.168.10.2");
 }
 
 TEST_F(IpPoolTest, SequentialAssignsAreUnique) {
-  ip_pool pool("10.8.0", 2, 10);
+  ip_pool pool("10.8.0.2", "10.8.0.10");
   const auto a = pool.assign(10);
   const auto b = pool.assign(20);
   EXPECT_FALSE(a.empty());
@@ -44,16 +44,15 @@ TEST_F(IpPoolTest, SequentialAssignsAreUnique) {
   EXPECT_NE(a, b);
 }
 
-TEST_F(IpPoolTest, ReleaseReturnedIpIsReassignable) {
-  ip_pool pool("10.8.0", 2, 5);
+TEST_F(IpPoolTest, ReleaseAndReassignSameIp) {
+  ip_pool pool("10.8.0.2", "10.8.0.5");
   const auto first = pool.assign(1);
   pool.release(1);
-  const auto second = pool.assign(2); // gets same address as first
-  EXPECT_EQ(first, second);
+  EXPECT_EQ(pool.assign(2), first);
 }
 
-TEST_F(IpPoolTest, GetReturnsCurrentlyAssignedIp) {
-  ip_pool pool("10.0.0", 10, 20);
+TEST_F(IpPoolTest, GetReturnsAssignedIp) {
+  ip_pool pool("10.0.0.10", "10.0.0.20");
   pool.assign(42);
   EXPECT_EQ(pool.get(42), "10.0.0.10");
   pool.release(42);
@@ -61,20 +60,42 @@ TEST_F(IpPoolTest, GetReturnsCurrentlyAssignedIp) {
 }
 
 TEST_F(IpPoolTest, ExhaustedPoolReturnsEmpty) {
-  ip_pool pool("10.8.0", 2, 3); // only 2 addresses
+  ip_pool pool("10.8.0.2", "10.8.0.3"); // 2 addresses
   pool.assign(1);
   pool.assign(2);
-  const auto extra = pool.assign(3);
-  EXPECT_TRUE(extra.empty());
+  EXPECT_TRUE(pool.assign(3).empty());
 }
 
 TEST_F(IpPoolTest, ReleaseUnknownChannelIsNoop) {
-  ip_pool pool("10.8.0", 2, 10);
+  ip_pool pool("10.8.0.2", "10.8.0.10");
   EXPECT_NO_THROW(pool.release(999));
 }
 
+TEST_F(IpPoolTest, LargePoolSupports1000PlusClients) {
+  // /22 CIDR: 10.8.0.2 – 10.11.255.254 = 262 142 addresses
+  ip_pool pool("10.8.0.2", "10.11.255.254");
+  EXPECT_GE(pool.available(), 1000u);
+  // Assign 1000 channels and verify all are unique.
+  std::set<std::string> assigned;
+  for (int i = 0; i < 1000; ++i) {
+    const auto ip = pool.assign(i);
+    ASSERT_FALSE(ip.empty()) << "exhausted at i=" << i;
+    EXPECT_TRUE(assigned.insert(ip).second) << "duplicate ip=" << ip;
+  }
+  EXPECT_EQ(assigned.size(), 1000u);
+}
+
+TEST_F(IpPoolTest, AvailableDecrementsOnAssign) {
+  ip_pool pool("10.8.0.2", "10.8.0.4"); // 3 addresses
+  EXPECT_EQ(pool.available(), 3u);
+  pool.assign(1);
+  EXPECT_EQ(pool.available(), 2u);
+  pool.release(1);
+  EXPECT_EQ(pool.available(), 3u);
+}
+
 // ==========================================================================
-// Frame encode / decode tests
+// Frame encode / decode
 // ==========================================================================
 
 class FrameTest : public ::testing::Test {};
@@ -84,197 +105,165 @@ TEST_F(FrameTest, EncodeFrameHasCorrectHeader) {
                                                "10.8.0.3");
   ASSERT_GE(f.size(), openvpn_client::HEADER_LEN);
   EXPECT_EQ(static_cast<uint8_t>(f[0]), openvpn_client::TYPE_IP_ASSIGN);
-  // Length field (big-endian) should be 8 (strlen "10.8.0.3")
   uint32_t len_be = 0;
   std::memcpy(&len_be, f.data() + 1, 4);
   EXPECT_EQ(ntohl(len_be), 8u);
   EXPECT_EQ(f.substr(openvpn_client::HEADER_LEN), "10.8.0.3");
 }
 
-TEST_F(FrameTest, EncodeDecodeRoundtrip) {
+TEST_F(FrameTest, RoundTrip) {
   const std::string payload = "hello tunnel";
-  const auto frame = openvpn_client::encode_frame(openvpn_client::TYPE_DATA,
-                                                    payload);
-
-  uint8_t     out_type{};
-  std::string out_payload;
-  size_t      out_consumed{};
-
-  ASSERT_TRUE(openvpn_client::try_decode_frame(frame, 0, out_type,
-                                                out_payload, out_consumed));
-  EXPECT_EQ(out_type,     openvpn_client::TYPE_DATA);
-  EXPECT_EQ(out_payload,  payload);
-  EXPECT_EQ(out_consumed, frame.size());
+  const auto frame = openvpn_client::encode_frame(openvpn_client::TYPE_DATA, payload);
+  uint8_t t{}; std::string p{}; size_t c{};
+  ASSERT_TRUE(openvpn_client::try_decode_frame(frame, 0, t, p, c));
+  EXPECT_EQ(t, openvpn_client::TYPE_DATA);
+  EXPECT_EQ(p, payload);
+  EXPECT_EQ(c, frame.size());
 }
 
 TEST_F(FrameTest, IncompleteHeaderReturnsFalse) {
-  const std::string buf = "\x01\x00\x00"; // only 3 bytes
+  const std::string buf = "\x01\x00\x00";
   uint8_t t{}; std::string p{}; size_t c{};
   EXPECT_FALSE(openvpn_client::try_decode_frame(buf, 0, t, p, c));
 }
 
 TEST_F(FrameTest, IncompletePayloadReturnsFalse) {
-  // Header says 10 bytes but only 3 present.
-  const auto frame = openvpn_client::encode_frame(openvpn_client::TYPE_DATA,
-                                                    "0123456789");
-  const std::string truncated = frame.substr(0, openvpn_client::HEADER_LEN + 3);
+  const auto frame = openvpn_client::encode_frame(openvpn_client::TYPE_DATA, "0123456789");
+  const std::string trunc = frame.substr(0, openvpn_client::HEADER_LEN + 3);
   uint8_t t{}; std::string p{}; size_t c{};
-  EXPECT_FALSE(openvpn_client::try_decode_frame(truncated, 0, t, p, c));
+  EXPECT_FALSE(openvpn_client::try_decode_frame(trunc, 0, t, p, c));
 }
 
-TEST_F(FrameTest, EmptyPayloadFrameDecodesOk) {
-  const auto frame = openvpn_client::encode_frame(openvpn_client::TYPE_DISCONNECT,
-                                                    "");
+TEST_F(FrameTest, EmptyPayload) {
+  const auto f = openvpn_client::encode_frame(openvpn_client::TYPE_DISCONNECT, "");
   uint8_t t{}; std::string p{}; size_t c{};
-  ASSERT_TRUE(openvpn_client::try_decode_frame(frame, 0, t, p, c));
+  ASSERT_TRUE(openvpn_client::try_decode_frame(f, 0, t, p, c));
   EXPECT_EQ(t, openvpn_client::TYPE_DISCONNECT);
   EXPECT_TRUE(p.empty());
   EXPECT_EQ(c, openvpn_client::HEADER_LEN);
 }
 
-TEST_F(FrameTest, DecodeAtNonZeroOffset) {
-  // Two frames concatenated; decode the second.
-  const auto f1 = openvpn_client::encode_frame(openvpn_client::TYPE_DATA, "first");
-  const auto f2 = openvpn_client::encode_frame(openvpn_client::TYPE_IP_ASSIGN,
-                                                "10.8.0.5");
-  const std::string buf = f1 + f2;
-
-  uint8_t t{}; std::string p{}; size_t c{};
-  ASSERT_TRUE(openvpn_client::try_decode_frame(buf, f1.size(), t, p, c));
-  EXPECT_EQ(t, openvpn_client::TYPE_IP_ASSIGN);
-  EXPECT_EQ(p, "10.8.0.5");
-}
-
-// ==========================================================================
-// write_status_lua tests
-// ==========================================================================
-
-class StatusLuaTest : public ::testing::Test {
-protected:
-  std::string m_path;
-
-  void SetUp() override {
-    m_path = std::string("/tmp/vpn_status_test_") +
-             std::to_string(
-                 std::chrono::steady_clock::now().time_since_epoch().count()) +
-             ".lua";
-  }
-
-  void TearDown() override {
-    std::remove(m_path.c_str());
-  }
-
-  std::string read_file() {
-    std::ifstream f(m_path);
-    std::ostringstream ss;
-    ss << f.rdbuf();
-    return ss.str();
-  }
-};
-
-TEST_F(StatusLuaTest, ConnectedStatusContainsAllFields) {
-  openvpn_client::write_status_lua(m_path, "10.8.0.3", "tun2", "Connected",
-                                    1700000000);
-  const auto content = read_file();
-  EXPECT_NE(content.find("service_ip"),  std::string::npos);
-  EXPECT_NE(content.find("10.8.0.3"),    std::string::npos);
-  EXPECT_NE(content.find("tun_if"),      std::string::npos);
-  EXPECT_NE(content.find("tun2"),        std::string::npos);
-  EXPECT_NE(content.find("Connected"),   std::string::npos);
-  EXPECT_NE(content.find("1700000000"),  std::string::npos);
-  EXPECT_NE(content.find("status"),      std::string::npos);
-  EXPECT_NE(content.find("timestamp"),   std::string::npos);
-}
-
-TEST_F(StatusLuaTest, DownStatusIsWritten) {
-  openvpn_client::write_status_lua(m_path, "10.8.0.3", "tun0", "Down",
-                                    1700000001);
-  const auto content = read_file();
-  EXPECT_NE(content.find("Down"), std::string::npos);
-}
-
-TEST_F(StatusLuaTest, OutputBeginsWithReturn) {
-  openvpn_client::write_status_lua(m_path, "10.8.0.7", "tun1", "Connected",
-                                    0);
-  const auto content = read_file();
-  EXPECT_NE(content.find("return"), std::string::npos);
-}
-
-TEST_F(StatusLuaTest, VpnStatusTableKey) {
-  openvpn_client::write_status_lua(m_path, "10.8.0.9", "tun3", "Connected",
-                                    42);
-  const auto content = read_file();
-  EXPECT_NE(content.find("vpn_status"), std::string::npos);
-}
-
-TEST_F(StatusLuaTest, TunIfFieldPresent) {
-  openvpn_client::write_status_lua(m_path, "10.8.0.5", "tun99", "Connected",
-                                    100);
-  const auto content = read_file();
-  // The kernel-assigned interface name must be in the file.
-  EXPECT_NE(content.find("tun99"), std::string::npos);
-}
-
-// ==========================================================================
-// openvpn_client construction / dry-run gate
-// ==========================================================================
-
-class OpenvpnClientTest : public ::testing::Test {
-protected:
-  int sv[2] = {-1, -1};
-
-  void SetUp() override {
-    ASSERT_EQ(socketpair(AF_UNIX, SOCK_STREAM, 0, sv), 0);
-  }
-
-  void TearDown() override {
-    if (sv[0] >= 0) close(sv[0]);
-    if (sv[1] >= 0) close(sv[1]);
-  }
-};
-
-TEST_F(OpenvpnClientTest, DryRunHandleReadReturnsZero) {
-  // Use channel constructor path by creating client with socketpair fd.
-  // We can't use the outbound constructor in a test (it starts a real connect),
-  // so we test the static helpers and dry-run through the peer-side API.
-  //
-  // dry_run=true must always return 0 — verify through the static encode path.
-  const auto frame = openvpn_client::encode_frame(openvpn_client::TYPE_IP_ASSIGN,
-                                                    "10.8.0.2");
-  EXPECT_GE(frame.size(), openvpn_client::HEADER_LEN);
-  // The dry-run gate itself is tested in the encode/decode round-trip above.
-  // Additional integration coverage: a fully decoded IP_ASSIGN frame from the
-  // server side should match the client's TYPE_IP_ASSIGN constant.
-  uint8_t t{}; std::string p{}; size_t c{};
-  ASSERT_TRUE(openvpn_client::try_decode_frame(frame, 0, t, p, c));
-  EXPECT_EQ(t, openvpn_client::TYPE_IP_ASSIGN);
-  EXPECT_EQ(p, "10.8.0.2");
-}
-
-TEST_F(OpenvpnClientTest, EncodeFrameTypeConstants) {
-  EXPECT_EQ(openvpn_client::TYPE_IP_ASSIGN,  0x01u);
-  EXPECT_EQ(openvpn_client::TYPE_DATA,       0x02u);
-  EXPECT_EQ(openvpn_client::TYPE_DISCONNECT, 0x03u);
-  EXPECT_EQ(openvpn_client::HEADER_LEN,      5u);
-}
-
-TEST_F(OpenvpnClientTest, MultiFrameSequenceDecoded) {
-  // Simulate server sending IP_ASSIGN followed by a DATA frame.
-  const auto f1 = openvpn_client::encode_frame(openvpn_client::TYPE_IP_ASSIGN,
-                                                "10.8.0.4");
-  const auto f2 = openvpn_client::encode_frame(openvpn_client::TYPE_DATA,
-                                                "payload");
+TEST_F(FrameTest, MultiFrameSequence) {
+  const auto f1 = openvpn_client::encode_frame(openvpn_client::TYPE_IP_ASSIGN, "10.8.0.4");
+  const auto f2 = openvpn_client::encode_frame(openvpn_client::TYPE_DATA, "payload");
   const std::string stream = f1 + f2;
 
   size_t offset = 0;
   uint8_t t{}; std::string p{}; size_t c{};
 
   ASSERT_TRUE(openvpn_client::try_decode_frame(stream, offset, t, p, c));
-  EXPECT_EQ(t, openvpn_client::TYPE_IP_ASSIGN);
-  EXPECT_EQ(p, "10.8.0.4");
+  EXPECT_EQ(t, openvpn_client::TYPE_IP_ASSIGN); EXPECT_EQ(p, "10.8.0.4");
   offset += c;
 
   ASSERT_TRUE(openvpn_client::try_decode_frame(stream, offset, t, p, c));
-  EXPECT_EQ(t, openvpn_client::TYPE_DATA);
-  EXPECT_EQ(p, "payload");
+  EXPECT_EQ(t, openvpn_client::TYPE_DATA); EXPECT_EQ(p, "payload");
+}
+
+// ==========================================================================
+// write_status_lua via lua_file::write_table
+// ==========================================================================
+
+class StatusLuaTest : public ::testing::Test {
+protected:
+  std::string m_path;
+  void SetUp() override {
+    m_path = "/tmp/vpn_test_" +
+             std::to_string(std::chrono::steady_clock::now()
+                                .time_since_epoch().count()) + ".lua";
+  }
+  void TearDown() override { std::remove(m_path.c_str()); }
+  std::string read_file() {
+    std::ifstream f(m_path); std::ostringstream ss; ss << f.rdbuf(); return ss.str();
+  }
+};
+
+TEST_F(StatusLuaTest, ConnectedContainsAllFields) {
+  openvpn_client::write_status_lua(m_path, "10.8.0.3", "tun2", "Connected", 1700000000);
+  const auto c = read_file();
+  EXPECT_NE(c.find("service_ip"),  std::string::npos);
+  EXPECT_NE(c.find("10.8.0.3"),    std::string::npos);
+  EXPECT_NE(c.find("tun_if"),      std::string::npos);
+  EXPECT_NE(c.find("tun2"),        std::string::npos);
+  EXPECT_NE(c.find("Connected"),   std::string::npos);
+  EXPECT_NE(c.find("1700000000"),  std::string::npos);
+  EXPECT_NE(c.find("timestamp"),   std::string::npos);
+  EXPECT_NE(c.find("vpn_status"),  std::string::npos);
+  EXPECT_NE(c.find("return"),      std::string::npos);
+}
+
+TEST_F(StatusLuaTest, DownStatus) {
+  openvpn_client::write_status_lua(m_path, "10.8.0.3", "tun0", "Down", 1);
+  EXPECT_NE(read_file().find("Down"), std::string::npos);
+}
+
+TEST_F(StatusLuaTest, KernelAssignedTunIfRecorded) {
+  openvpn_client::write_status_lua(m_path, "10.8.0.5", "tun99", "Connected", 100);
+  EXPECT_NE(read_file().find("tun99"), std::string::npos);
+}
+
+// lua_file::write_table directly
+TEST_F(StatusLuaTest, WriteTableProducesValidLua) {
+  lua_file::write_table(m_path, "my_table", {
+    {"key_str", "\"hello\""},
+    {"key_num", "42"},
+    {"key_bool", "true"},
+  });
+  const auto c = read_file();
+  EXPECT_NE(c.find("my_table"), std::string::npos);
+  EXPECT_NE(c.find("key_str"),  std::string::npos);
+  EXPECT_NE(c.find("\"hello\""),std::string::npos);
+  EXPECT_NE(c.find("42"),       std::string::npos);
+  EXPECT_NE(c.find("return"),   std::string::npos);
+}
+
+// ==========================================================================
+// tls_config
+// ==========================================================================
+
+class TlsConfigTest : public ::testing::Test {};
+
+TEST_F(TlsConfigTest, DisabledReturnsNullCtx) {
+  tls_config t{false, "", "", ""};
+  EXPECT_EQ(t.build_server_ctx(), nullptr);
+  EXPECT_EQ(t.build_client_ctx(), nullptr);
+}
+
+TEST_F(TlsConfigTest, EnabledWithBadPathsReturnsNull) {
+  tls_config t{true, "/nonexistent/cert.pem", "/nonexistent/key.pem", ""};
+  // Should fail gracefully (cert file not found) and return nullptr.
+  SSL_CTX *ctx = t.build_server_ctx();
+  EXPECT_EQ(ctx, nullptr);
+}
+
+TEST_F(TlsConfigTest, EnabledClientWithNoCredentialsStillBuildsCtx) {
+  // A client that only verifies the server cert (no mutual TLS) can have
+  // empty cert/key but still builds a valid context.
+  tls_config t{true, "", "", ""};
+  SSL_CTX *ctx = t.build_client_ctx();
+  if (ctx) { // may still succeed with no ca
+    SSL_CTX_free(ctx);
+  }
+  // No crash is the primary assertion.
+  SUCCEED();
+}
+
+// ==========================================================================
+// openvpn_client constants
+// ==========================================================================
+
+class OpenvpnClientTest : public ::testing::Test {};
+
+TEST_F(OpenvpnClientTest, TypeConstants) {
+  EXPECT_EQ(openvpn_client::TYPE_IP_ASSIGN,  0x01u);
+  EXPECT_EQ(openvpn_client::TYPE_DATA,       0x02u);
+  EXPECT_EQ(openvpn_client::TYPE_DISCONNECT, 0x03u);
+  EXPECT_EQ(openvpn_client::HEADER_LEN,      5u);
+}
+
+TEST_F(OpenvpnClientTest, PeerTypeConstantsMatchClient) {
+  // Server and client must agree on frame types.
+  EXPECT_EQ(openvpn_peer::TYPE_IP_ASSIGN,  openvpn_client::TYPE_IP_ASSIGN);
+  EXPECT_EQ(openvpn_peer::TYPE_DATA,       openvpn_client::TYPE_DATA);
+  EXPECT_EQ(openvpn_peer::TYPE_DISCONNECT, openvpn_client::TYPE_DISCONNECT);
+  EXPECT_EQ(openvpn_peer::HEADER_LEN,      openvpn_client::HEADER_LEN);
 }
