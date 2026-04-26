@@ -78,58 +78,37 @@ int main(int argc, const char *argv[]) {
     return 1;
   }
 
+  // Shared across both modes.
+  const tls_config tls{
+    get_flag(argc, argv, "tls", "false") == "true",
+    get_flag(argc, argv, "cert", ""),
+    get_flag(argc, argv, "key",  ""),
+    get_flag(argc, argv, "ca",   ""),
+  };
+  fs_app fs_mon("/app/command");
+
   if (mode == "client") {
-    // ------------------------------------------------------------------
-    // Client mode — connect to tunnel server, get virtual IP, run loop.
-    // ------------------------------------------------------------------
     const std::string server      = get_flag(argc, argv, "server", "127.0.0.1");
     const uint16_t    port        = get_port_flag(argc, argv, "port", 1194);
-    const std::string status_file = get_flag(argc, argv, "status",
-                                              "/run/vpn_status.lua");
-    const tls_config  tls{
-      get_flag(argc, argv, "tls", "false") == "true",
-      get_flag(argc, argv, "cert", ""),
-      get_flag(argc, argv, "key",  ""),
-      get_flag(argc, argv, "ca",   ""),
-    };
+    const std::string status_file = get_flag(argc, argv, "status", "/run/vpn_status.lua");
 
     std::cout << "[main] mode=client server=" << server << " port=" << port
-              << " tls=" << (tls.enabled ? "ON" : "OFF") << "\n";
+              << " tls=" << (tls.enabled ? "ON" : "OFF") << '\n';
 
-    fs_app fs_mon("/app/command");
     openvpn_client vpn_client(server, port, status_file, tls);
 
-    run_evt_loop main_loop;
-    main_loop();
-
   } else {
-    // ------------------------------------------------------------------
-    // Server mode (default) — gNMI + OpenVPN server.
-    // ------------------------------------------------------------------
-    std::cout << "[main] mode=server\n";
-
-    fs_app fs_mon("/app/command");
-
-    const tls_config tls{
-      get_flag(argc, argv, "tls", "false") == "true",
-      get_flag(argc, argv, "cert", ""),
-      get_flag(argc, argv, "key",  ""),
-      get_flag(argc, argv, "ca",   ""),
-    };
     const std::string pool_start = get_flag(argc, argv, "pool-start", "10.8.0.2");
     const std::string pool_end   = get_flag(argc, argv, "pool-end",   "10.8.0.254");
 
+    std::cout << "[main] mode=server tls=" << (tls.enabled ? "ON" : "OFF")
+              << " pool=" << pool_start << "–" << pool_end << '\n';
+
     server svc_module("0.0.0.0", 58989);
-    std::cout << "[main] gNMI server on port 58989\n";
-
     openvpn_server vpn("0.0.0.0", 1194, pool_start, pool_end, tls);
-    std::cout << "[main] VPN server pool=" << pool_start << "–" << pool_end
-              << " tls=" << (tls.enabled ? "ON" : "OFF") << "\n";
-
-    run_evt_loop main_loop;
-    main_loop();
   }
 
+  run_evt_loop{}();
   return 0;
 }
 
