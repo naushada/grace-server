@@ -36,6 +36,7 @@ public:
   virtual ~openvpn_peer() = default;
 
   const std::string &assigned_ip() const { return m_assigned_ip; }
+  void forward_data(const std::string &pkt) { send_frame(TYPE_DATA, pkt); }
 
   std::int32_t handle_read(const std::int32_t &channel,
                            const std::string &data,

@@ -27,6 +27,7 @@ public:
   std::string assign(int32_t channel); // "" if exhausted
   void        release(int32_t channel);
   std::string get(int32_t channel) const;
+  int32_t     find_channel(const std::string &ip) const; // -1 if not found
   size_t      available() const { return m_free.size(); }
 
 private:
@@ -48,9 +49,10 @@ public:
   using peer_map_t = std::unordered_map<handle_t, std::unique_ptr<openvpn_peer>>;
 
   openvpn_server(const std::string &host, uint16_t port,
-                 const std::string &pool_start = "10.8.0.2",
-                 const std::string &pool_end   = "10.8.0.254",
-                 const tls_config  &tls        = {});
+                 const std::string &pool_start  = "10.8.0.2",
+                 const std::string &pool_end    = "10.8.0.254",
+                 const tls_config  &tls         = {},
+                 const std::string &server_ip   = "10.8.0.1");
 
   virtual ~openvpn_server();
 
@@ -61,9 +63,13 @@ public:
   ip_pool &pool() { return m_pool; }
 
 private:
-  ip_pool    m_pool;
-  peer_map_t m_peers;
-  // TLS context lives in evt_io::m_ssl_ctx; use wrap_accepted() in handle_connect.
+  static void server_tun_read_cb(evutil_socket_t fd, short, void *ctx);
+  int open_server_tun(const std::string &server_ip);
+
+  ip_pool       m_pool;
+  peer_map_t    m_peers;
+  int           m_server_tun_fd{-1};
+  struct event *m_server_tun_event{nullptr};
 };
 
 #endif // __openvpn_server_hpp__
