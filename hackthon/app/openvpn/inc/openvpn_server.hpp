@@ -4,8 +4,6 @@
 #include "framework.hpp"
 #include "tls_config.hpp"
 
-#include <memory>
-#include <openssl/ssl.h>
 #include <set>
 #include <string>
 #include <unordered_map>
@@ -65,7 +63,7 @@ public:
 private:
   ip_pool    m_pool;
   peer_map_t m_peers;
-  SSL_CTX   *m_ssl_ctx{nullptr}; // null → plain TCP
+  // TLS context lives in evt_io::m_ssl_ctx; use wrap_accepted() in handle_connect.
 };
 
 #endif // __openvpn_server_hpp__

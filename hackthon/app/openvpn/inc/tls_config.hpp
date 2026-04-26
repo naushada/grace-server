@@ -1,7 +1,10 @@
 #ifndef __tls_config_hpp__
 #define __tls_config_hpp__
 
-#include <openssl/ssl.h>
+// ssl_ctx_ptr / ssl_ctx_deleter live in framework.hpp (alongside other RAII
+// wrappers) so that evt_io can use them without depending on this header.
+#include "framework.hpp"
+
 #include <iostream>
 #include <string>
 
@@ -15,39 +18,37 @@ struct tls_config {
   std::string ca_file;   // CA certificate for peer verification
 
   // Build a server-side SSL_CTX (TLS_server_method).
-  // Returns nullptr when disabled or on configuration error.
-  SSL_CTX *build_server_ctx() const {
+  // Returns empty unique_ptr when disabled or on configuration error.
+  ssl_ctx_ptr build_server_ctx() const {
     if (!enabled) return nullptr;
-    SSL_CTX *ctx = SSL_CTX_new(TLS_server_method());
+    ssl_ctx_ptr ctx{SSL_CTX_new(TLS_server_method())};
     if (!ctx) return nullptr;
-    if (SSL_CTX_use_certificate_file(ctx, cert_file.c_str(),
+    if (SSL_CTX_use_certificate_file(ctx.get(), cert_file.c_str(),
                                       SSL_FILETYPE_PEM) != 1 ||
-        SSL_CTX_use_PrivateKey_file(ctx, key_file.c_str(),
+        SSL_CTX_use_PrivateKey_file(ctx.get(), key_file.c_str(),
                                      SSL_FILETYPE_PEM) != 1) {
       std::cerr << "[tls] server ctx: cert/key load failed\n";
-      SSL_CTX_free(ctx);
       return nullptr;
     }
     if (!ca_file.empty())
-      SSL_CTX_load_verify_locations(ctx, ca_file.c_str(), nullptr);
+      SSL_CTX_load_verify_locations(ctx.get(), ca_file.c_str(), nullptr);
     return ctx;
   }
 
   // Build a client-side SSL_CTX (TLS_client_method).
-  // Returns nullptr when disabled or on configuration error.
-  SSL_CTX *build_client_ctx() const {
+  // Returns empty unique_ptr when disabled or on configuration error.
+  ssl_ctx_ptr build_client_ctx() const {
     if (!enabled) return nullptr;
-    SSL_CTX *ctx = SSL_CTX_new(TLS_client_method());
+    ssl_ctx_ptr ctx{SSL_CTX_new(TLS_client_method())};
     if (!ctx) return nullptr;
     if (!ca_file.empty())
-      SSL_CTX_load_verify_locations(ctx, ca_file.c_str(), nullptr);
+      SSL_CTX_load_verify_locations(ctx.get(), ca_file.c_str(), nullptr);
     if (!cert_file.empty() && !key_file.empty()) {
-      if (SSL_CTX_use_certificate_file(ctx, cert_file.c_str(),
+      if (SSL_CTX_use_certificate_file(ctx.get(), cert_file.c_str(),
                                         SSL_FILETYPE_PEM) != 1 ||
-          SSL_CTX_use_PrivateKey_file(ctx, key_file.c_str(),
+          SSL_CTX_use_PrivateKey_file(ctx.get(), key_file.c_str(),
                                        SSL_FILETYPE_PEM) != 1) {
         std::cerr << "[tls] client ctx: cert/key load failed\n";
-        SSL_CTX_free(ctx);
         return nullptr;
       }
     }

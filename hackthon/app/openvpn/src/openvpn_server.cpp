@@ -61,44 +61,32 @@ openvpn_server::openvpn_server(const std::string &host, uint16_t port,
                                  const std::string &pool_start,
                                  const std::string &pool_end,
                                  const tls_config  &tls)
-    : evt_io(host, port),
-      m_pool(pool_start, pool_end),
-      m_ssl_ctx(tls.build_server_ctx()) {
+    : evt_io(host, port, tls.build_server_ctx(), listener_tag{}),
+      m_pool(pool_start, pool_end) {
   std::cout << "[openvpn_server] " << host << ":" << port
             << " pool=" << pool_start << "–" << pool_end
-            << " tls=" << (m_ssl_ctx ? "ON" : "OFF") << "\n";
+            << " tls=" << (tls.enabled ? "ON" : "OFF") << '\n';
 }
 
 openvpn_server::~openvpn_server() {
   m_peers.clear();
-  if (m_ssl_ctx) SSL_CTX_free(m_ssl_ctx);
 }
 
 std::int32_t openvpn_server::handle_connect(const handle_t &channel,
                                               const std::string &peer_host) {
   const std::string ip = m_pool.assign(channel);
   if (ip.empty()) {
-    std::cerr << "[openvpn_server] pool exhausted, rejecting " << peer_host << "\n";
+    std::cerr << "[openvpn_server] pool exhausted, rejecting " << peer_host << '\n';
     return -1;
   }
 
-  std::unique_ptr<openvpn_peer> peer;
-
-  if (m_ssl_ctx) {
-    // Wrap the accepted fd in a TLS bufferevent.  The peer uses the
-    // protected evt_io(bufferevent*, peer_host) constructor.
-    SSL *ssl = SSL_new(m_ssl_ctx);
-    auto *bev = bufferevent_openssl_socket_new(
-        evt_base::instance().get(), channel, ssl,
-        BUFFEREVENT_SSL_ACCEPTING, BEV_OPT_CLOSE_ON_FREE);
-    peer = std::make_unique<openvpn_peer>(bev, peer_host, this, ip);
-  } else {
-    peer = std::make_unique<openvpn_peer>(channel, peer_host, this, ip);
-  }
-
+  // wrap_accepted() is in evt_io: returns a TLS bev when the server was
+  // constructed with a TLS ctx, plain socket bev otherwise.
+  auto *bev = wrap_accepted(channel);
+  auto peer = std::make_unique<openvpn_peer>(bev, peer_host, this, ip);
   m_peers.emplace(channel, std::move(peer));
   std::cout << "[openvpn_server] accepted " << peer_host
-            << " → " << ip << (m_ssl_ctx ? " (TLS)" : "") << "\n";
+            << " \xe2\x86\x92 " << ip << (has_tls() ? " (TLS)" : "") << '\n';
   return 0;
 }
 

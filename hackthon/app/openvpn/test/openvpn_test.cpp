@@ -232,18 +232,15 @@ TEST_F(TlsConfigTest, DisabledReturnsNullCtx) {
 TEST_F(TlsConfigTest, EnabledWithBadPathsReturnsNull) {
   tls_config t{true, "/nonexistent/cert.pem", "/nonexistent/key.pem", ""};
   // Should fail gracefully (cert file not found) and return nullptr.
-  SSL_CTX *ctx = t.build_server_ctx();
-  EXPECT_EQ(ctx, nullptr);
+  EXPECT_EQ(t.build_server_ctx(), nullptr);
 }
 
 TEST_F(TlsConfigTest, EnabledClientWithNoCredentialsStillBuildsCtx) {
   // A client that only verifies the server cert (no mutual TLS) can have
   // empty cert/key but still builds a valid context.
   tls_config t{true, "", "", ""};
-  SSL_CTX *ctx = t.build_client_ctx();
-  if (ctx) { // may still succeed with no ca
-    SSL_CTX_free(ctx);
-  }
+  ssl_ctx_ptr ctx = t.build_client_ctx();
+  // ctx may be non-null (no ca required) — unique_ptr releases it on scope exit.
   // No crash is the primary assertion.
   SUCCEED();
 }

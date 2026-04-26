@@ -8,6 +8,7 @@
 extern "C" {
 #include <arpa/inet.h>
 #include <cstddef>
+#include <netdb.h>
 #include <event2/buffer.h>
 #include <event2/bufferevent.h>
 #include <event2/bufferevent_ssl.h>
@@ -15,6 +16,19 @@ extern "C" {
 #include <event2/listener.h>
 #include <event2/util.h>
 }
+
+#include <openssl/ssl.h>
+
+// RAII wrapper for SSL_CTX — shared by the framework (evt_io TLS support) and
+// tls_config (which builds the context from cert/key/ca paths).
+struct ssl_ctx_deleter {
+  void operator()(SSL_CTX *ctx) const noexcept { SSL_CTX_free(ctx); }
+};
+using ssl_ctx_ptr = std::unique_ptr<SSL_CTX, ssl_ctx_deleter>;
+
+// Tag type that selects the server-listener evt_io constructor overload,
+// disambiguating it from the outbound-client constructor of the same arity.
+struct listener_tag {};
 
 extern "C" {
 // Client related callback
@@ -92,10 +106,7 @@ public:
     bufferevent_enable(m_buffer_evt_p.get(), events);
   }
 
-  // Outbound TCP client connection.  fd=-1 tells libevent to create the
-  // socket; bufferevent_socket_connect_hostname initiates the async connect.
-  // BEV_EVENT_CONNECTED is delivered to client_event_cb → handle_connect()
-  // when the connection is established.
+  // Outbound plain TCP client connection.
   evt_io(const std::string &host, uint16_t port, bool /*outbound*/)
       : m_from_host(host),
         m_buffer_evt_p(bufferevent_socket_new(evt_base::instance().get(),
@@ -105,36 +116,53 @@ public:
     bufferevent_setcb(m_buffer_evt_p.get(), client_read_cb, client_write_cb,
                       client_event_cb, this);
     bufferevent_enable(m_buffer_evt_p.get(), EV_READ | EV_WRITE | EV_PERSIST);
-
-    // 5-second read + write timeout so the CLI never hangs indefinitely.
     const struct timeval tv{5, 0};
     bufferevent_set_timeouts(m_buffer_evt_p.get(), &tv, &tv);
-
-    // Async DNS + connect. nullptr evdns_base → blocking getaddrinfo,
-    // acceptable on a CLI path.
     bufferevent_socket_connect_hostname(m_buffer_evt_p.get(), /*evdns=*/nullptr,
                                         AF_UNSPEC, host.c_str(),
                                         static_cast<int>(port));
   }
 
-  // TCP server listener.
+  // Outbound TLS (or plain when ctx is null) client connection.
+  // Callers pass tls_config::build_client_ctx() which returns nullptr when TLS
+  // is disabled — this constructor degrades gracefully to plain TCP in that case.
+  evt_io(const std::string &host, uint16_t port, ssl_ctx_ptr ctx)
+      : m_from_host(host),
+        m_buffer_evt_p(nullptr),
+        m_listener_p(nullptr),
+        m_ssl_ctx(std::move(ctx)) {
+    struct bufferevent *bev;
+    if (m_ssl_ctx) {
+      SSL *ssl = SSL_new(m_ssl_ctx.get());
+      bev = bufferevent_openssl_socket_new(evt_base::instance().get(), -1, ssl,
+                                            BUFFEREVENT_SSL_CONNECTING,
+                                            BEV_OPT_CLOSE_ON_FREE);
+    } else {
+      bev = bufferevent_socket_new(evt_base::instance().get(), -1,
+                                    BEV_OPT_CLOSE_ON_FREE);
+    }
+    m_buffer_evt_p.reset(bev);
+    const struct timeval tv{5, 0};
+    bufferevent_set_timeouts(bev, &tv, &tv);
+    bufferevent_setcb(bev, client_read_cb, client_write_cb, client_event_cb, this);
+    bufferevent_enable(bev, EV_READ | EV_WRITE | EV_PERSIST);
+    bufferevent_socket_connect_hostname(bev, nullptr, AF_UNSPEC, host.c_str(),
+                                         static_cast<int>(port));
+  }
+
+  // Plain TCP server listener.
   evt_io(const std::string &host, const std::uint16_t &port)
       : m_from_host(host), m_buffer_evt_p(nullptr), m_listener_p(nullptr) {
+    init_listener(host, port);
+  }
 
-    struct addrinfo *result;
-    struct sockaddr_in self_addr;
-    auto s = getaddrinfo(host.data(), std::to_string(port).c_str(), nullptr,
-                         &result);
-    if (!s) {
-      self_addr = *((struct sockaddr_in *)(result->ai_addr));
-      freeaddrinfo(result);
-      // TCP server listener
-      m_listener_p.reset(evconnlistener_new_bind(
-          evt_base::instance().get(), server_accept_cb,
-          this /*This is for *ctx*/,
-          (LEV_OPT_CLOSE_ON_FREE | LEV_OPT_REUSEABLE | LEV_OPT_CLOSE_ON_EXEC),
-          32 /*backlog*/, (struct sockaddr *)&self_addr, sizeof(self_addr)));
-    }
+  // TLS server listener. listener_tag disambiguates from the outbound TLS
+  // client constructor which has the same (host, port, ssl_ctx_ptr) signature.
+  evt_io(const std::string &host, const std::uint16_t &port,
+         ssl_ctx_ptr ssl_ctx, listener_tag)
+      : m_from_host(host), m_buffer_evt_p(nullptr), m_listener_p(nullptr),
+        m_ssl_ctx(std::move(ssl_ctx)) {
+    init_listener(host, port);
   }
 
   std::int32_t tx(const char *buffer, const size_t &len) {
@@ -154,9 +182,8 @@ public:
                                      const std::string &peer_host);
 
 protected:
-  // For subclasses that need a pre-built bufferevent (e.g. TLS).
-  // The caller creates the bufferevent (plain or SSL), then delegates here.
-  // This constructor takes ownership and wires the standard callbacks.
+  // For inbound peers constructed from a pre-built bufferevent (plain or TLS).
+  // openvpn_peer uses this after openvpn_server calls wrap_accepted().
   evt_io(struct bufferevent *bev, const std::string &peer_host)
       : m_from_host(peer_host),
         m_buffer_evt_p(bev),
@@ -165,6 +192,22 @@ protected:
                       client_event_cb, this);
     bufferevent_enable(bev, EV_READ | EV_WRITE | EV_PERSIST);
   }
+
+  // Wraps an accepted fd in a bufferevent appropriate for this listener.
+  // Returns a TLS-accepting bev when this server was created with a TLS ctx;
+  // returns a plain socket bev otherwise.  Used by server-side handle_connect.
+  struct bufferevent *wrap_accepted(evutil_socket_t fd) const {
+    if (m_ssl_ctx) {
+      SSL *ssl = SSL_new(m_ssl_ctx.get());
+      return bufferevent_openssl_socket_new(evt_base::instance().get(), fd, ssl,
+                                             BUFFEREVENT_SSL_ACCEPTING,
+                                             BEV_OPT_CLOSE_ON_FREE);
+    }
+    return bufferevent_socket_new(evt_base::instance().get(), fd,
+                                   BEV_OPT_CLOSE_ON_FREE);
+  }
+
+  bool has_tls() const noexcept { return m_ssl_ctx != nullptr; }
 
 public:
   ~evt_io() {
@@ -189,9 +232,23 @@ private:
     }
   };
 
+  void init_listener(const std::string &host, uint16_t port) {
+    struct addrinfo *result;
+    struct sockaddr_in self_addr;
+    if (!getaddrinfo(host.data(), std::to_string(port).c_str(), nullptr, &result)) {
+      self_addr = *reinterpret_cast<struct sockaddr_in *>(result->ai_addr);
+      freeaddrinfo(result);
+      m_listener_p.reset(evconnlistener_new_bind(
+          evt_base::instance().get(), server_accept_cb, this,
+          LEV_OPT_CLOSE_ON_FREE | LEV_OPT_REUSEABLE | LEV_OPT_CLOSE_ON_EXEC,
+          32, reinterpret_cast<struct sockaddr *>(&self_addr), sizeof(self_addr)));
+    }
+  }
+
   std::string m_from_host;
   std::unique_ptr<struct bufferevent, custom_deleter> m_buffer_evt_p;
   std::unique_ptr<struct evconnlistener, custom_deleter_listener> m_listener_p;
+  ssl_ctx_ptr m_ssl_ctx;
 };
 
 struct run_evt_loop {

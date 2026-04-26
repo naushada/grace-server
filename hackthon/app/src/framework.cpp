@@ -2,9 +2,7 @@
 #define __framework_cpp__
 
 #include "framework.hpp"
-#include "client_app.hpp"
 #include "fs_app.hpp"
-#include "server_app.hpp"
 
 extern "C" {
 #include <netdb.h>
@@ -68,8 +66,8 @@ void server_accept_cb(struct evconnlistener *listener, evutil_socket_t fd,
   auto res = getnameinfo(address, socklen, host, sizeof(host), nullptr, 0,
                          NI_NUMERICHOST);
   if (!res) {
-    auto srv = static_cast<server *>(ctx);
-    srv->handle_connect(fd, host);
+    auto io = static_cast<evt_io *>(ctx);
+    io->handle_connect(fd, host);
   }
 }
 

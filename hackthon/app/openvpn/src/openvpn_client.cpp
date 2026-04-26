@@ -4,7 +4,6 @@
 #include "openvpn_client.hpp"
 #include "lua_engine.hpp"
 
-#include <arpa/inet.h>
 #include <cstring>
 #include <iostream>
 
@@ -17,50 +16,22 @@
 #endif
 
 // ---------------------------------------------------------------------------
-// make_bev — builds outbound bufferevent before base-ctor runs
-// ---------------------------------------------------------------------------
-
-struct bufferevent *openvpn_client::make_bev(const std::string &host,
-                                               uint16_t port,
-                                               SSL_CTX *ssl_ctx) {
-  struct bufferevent *bev = nullptr;
-  const struct timeval tv{5, 0};
-
-  if (ssl_ctx) {
-    SSL *ssl = SSL_new(ssl_ctx);
-    bev = bufferevent_openssl_socket_new(evt_base::instance().get(), -1, ssl,
-                                          BUFFEREVENT_SSL_CONNECTING,
-                                          BEV_OPT_CLOSE_ON_FREE);
-  } else {
-    bev = bufferevent_socket_new(evt_base::instance().get(), -1,
-                                  BEV_OPT_CLOSE_ON_FREE);
-  }
-
-  bufferevent_set_timeouts(bev, &tv, &tv);
-  bufferevent_socket_connect_hostname(bev, nullptr, AF_UNSPEC,
-                                       host.c_str(), port);
-  return bev;
-}
-
-// ---------------------------------------------------------------------------
 // Construction / destruction
 // ---------------------------------------------------------------------------
 
+// evt_io(host, port, ssl_ctx_ptr) handles both plain TCP (null ctx) and TLS
+// (non-null ctx) outbound connections — no TLS wiring needed here.
 openvpn_client::openvpn_client(const std::string &host, uint16_t port,
                                  std::string status_file,
                                  const tls_config &tls)
-    : evt_io(make_bev(host, port,
-                       tls.enabled ? tls.build_client_ctx() : nullptr),
-              host),
-      m_status_file(std::move(status_file)),
-      m_ssl_ctx(tls.enabled ? tls.build_client_ctx() : nullptr) {
+    : evt_io(host, port, tls.build_client_ctx()),
+      m_status_file(std::move(status_file)) {
   std::cout << "[openvpn_client] connecting to " << host << ":" << port
-            << " tls=" << (tls.enabled ? "ON" : "OFF") << "\n";
+            << " tls=" << (tls.enabled ? "ON" : "OFF") << '\n';
 }
 
 openvpn_client::~openvpn_client() {
   close_tun();
-  if (m_ssl_ctx) SSL_CTX_free(m_ssl_ctx);
 }
 
 // ---------------------------------------------------------------------------

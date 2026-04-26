@@ -6,7 +6,6 @@
 
 #include <cstdint>
 #include <ctime>
-#include <openssl/ssl.h>
 #include <string>
 
 // Persistent outbound VPN tunnel client.
@@ -59,11 +58,6 @@ public:
                                 std::time_t        timestamp);
 
 private:
-  // Build the outbound bufferevent before delegating to evt_io(bev, host).
-  // Plain TCP when ssl_ctx==nullptr; TLS (BUFFEREVENT_SSL_CONNECTING) otherwise.
-  static struct bufferevent *make_bev(const std::string &host, uint16_t port,
-                                      SSL_CTX *ssl_ctx);
-
   int    open_tun();
   void   close_tun();
   size_t process_frames();
@@ -73,7 +67,6 @@ private:
   std::string m_status_file;
   std::string m_assigned_ip;
   std::string m_recv_buf;
-  SSL_CTX    *m_ssl_ctx{nullptr};
   int         m_tun_fd{-1};
   bool        m_ip_assigned{false};
 };
