@@ -6,6 +6,7 @@
 
 #include "client_app.hpp"
 #include "server_app.hpp"
+#include "tls_config.hpp"
 
 #include <gtest/gtest.h>
 
@@ -77,6 +78,49 @@ TEST_F(ServerTest, ConnectedClientParentPointsBackToServer) {
   auto it = srv->clients().find(channel);
   ASSERT_NE(it, srv->clients().end());
   EXPECT_EQ(&it->second->parent(), srv.get());
+}
+
+// ---------------------------------------------------------------------------
+// TLS server tests — verify that the TLS ctor builds the listener without
+// crashing.  We do not run the event loop so no actual TLS handshake occurs;
+// the tests just confirm the object lifecycle is correct.
+// ---------------------------------------------------------------------------
+
+TEST(ServerTlsTest, PlainTlsConfigDisabledBehavesLikePlainServer) {
+  tls_config tls;           // enabled = false by default
+  tls.cert_file = "";
+  tls.key_file  = "";
+  tls.ca_file   = "";
+  // TLS disabled → evt_io(host, port, nullptr, listener_tag{}) → plain TCP
+  auto srv = std::make_unique<server>("127.0.0.1", 0, tls);
+  EXPECT_TRUE(srv->clients().empty());
+}
+
+TEST(ServerTlsTest, TlsEnabledWithCertsCreatesServer) {
+  // Use the test certificates baked into the source tree.
+  // In CI the build runs from /src so relative path works; in-container
+  // they are at /app/certs/.  Try both.
+  const std::string base =
+      []() -> std::string {
+        for (auto &p : {"certs", "/app/certs", "../../certs"}) {
+          std::string f = std::string(p) + "/server.pem";
+          if (::access(f.c_str(), R_OK) == 0) return p;
+        }
+        return "";
+      }();
+
+  if (base.empty()) {
+    GTEST_SKIP() << "test certs not found — skipping TLS server ctor test";
+  }
+
+  tls_config tls;
+  tls.enabled   = true;
+  tls.cert_file = base + "/server.pem";
+  tls.key_file  = base + "/server.key";
+  tls.ca_file   = base + "/ca.pem";
+
+  auto srv = std::make_unique<server>("127.0.0.1", 0, tls);
+  EXPECT_TRUE(srv->clients().empty());
 }
 
 } // namespace

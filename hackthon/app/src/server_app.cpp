@@ -7,8 +7,10 @@
 
 std::int32_t server::handle_connect(const std::int32_t &channel,
                                     const std::string &peer_host) {
-
-  auto clnt = std::make_unique<connected_client>(channel, peer_host, this);
+  // wrap_accepted() returns a TLS bufferevent when this server was constructed
+  // with a TLS ctx; otherwise returns a plain socket bufferevent.
+  auto *bev = wrap_accepted(channel);
+  auto clnt = std::make_unique<connected_client>(bev, peer_host, this);
   auto res = clients().insert(std::make_pair(channel, std::move(clnt)));
   if (!res.second) {
     std::cout << "Fn:" << __func__ << ":" << __LINE__

@@ -14,9 +14,20 @@ public:
   // immediately registers all supported gNMI RPC handlers.  The grpc_session
   // ctor flushes the initial HTTP/2 SETTINGS frame via the tx callback so the
   // peer receives it as soon as the TCP connection is accepted.
+  // Plain TCP: framework passes accepted fd directly.
   connected_client(const std::int32_t &channel, const std::string &peer_host,
                    server *parent)
       : evt_io(channel, peer_host), m_parent(parent),
+        m_grpc(std::make_unique<grpc_session>(
+            [this](const char *d, size_t n) { tx(d, n); })) {
+    register_gnmi_handlers();
+  }
+
+  // TLS (or pre-wrapped plain) bev: server::handle_connect calls
+  // wrap_accepted(fd) which returns a TLS bev when TLS ctx is set.
+  connected_client(struct bufferevent *bev, const std::string &peer_host,
+                   server *parent)
+      : evt_io(bev, peer_host), m_parent(parent),
         m_grpc(std::make_unique<grpc_session>(
             [this](const char *d, size_t n) { tx(d, n); })) {
     register_gnmi_handlers();

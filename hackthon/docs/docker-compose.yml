@@ -75,6 +75,108 @@ services:
   #   Mount a directory containing cert.pem / key.pem / ca.pem.
   # ─────────────────────────────────────────────────────────────────────────
   # ─────────────────────────────────────────────────────────────────────────
+  # gNMI server — plain TCP on port 58989.  No VPN tunnel; direct gNMI access.
+  # ─────────────────────────────────────────────────────────────────────────
+  gnmi-server:
+    image: marvel:release
+    command:
+      - /app/app
+      - --mode=server
+      - --server-ip=10.8.0.1
+      - --pool-start=10.8.0.2
+      - --pool-end=10.8.0.254
+      - --netmask=255.255.255.0
+    ports:
+      - "58989:58989"    # gNMI gRPC (plain TCP)
+    networks:
+      vpn-net:
+        ipv4_address: 172.20.0.7
+    profiles:
+      - gnmi
+    restart: unless-stopped
+
+  # ─────────────────────────────────────────────────────────────────────────
+  # gNMI server — TLS on port 58989.  Certs baked into image at /app/certs/.
+  # Profile: gnmi-tls
+  # ─────────────────────────────────────────────────────────────────────────
+  gnmi-server-tls:
+    image: marvel:release
+    command:
+      - /app/app
+      - --mode=server
+      - --server-ip=10.8.0.1
+      - --pool-start=10.8.0.2
+      - --pool-end=10.8.0.254
+      - --netmask=255.255.255.0
+      - --gnmi-tls=true
+      - --gnmi-cert=/app/certs/server.pem
+      - --gnmi-key=/app/certs/server.key
+      - --gnmi-ca=/app/certs/ca.pem
+    ports:
+      - "58990:58989"    # gNMI gRPC (TLS) on host port 58990
+    networks:
+      vpn-net:
+        ipv4_address: 172.20.0.8
+    profiles:
+      - gnmi-tls
+    restart: unless-stopped
+
+  # ─────────────────────────────────────────────────────────────────────────
+  # gNMI client — plain TCP probe then stays connected via VPN tunnel.
+  # Profile: gnmi
+  # ─────────────────────────────────────────────────────────────────────────
+  gnmi-client:
+    image: marvel:release
+    <<: *tun-caps
+    command:
+      - /app/app
+      - --mode=client
+      - --server=vpn-server
+      - --port=1194
+      - --status=/run/vpn_status.lua
+      - --gnmi-probe=true
+      - --server-vip=10.8.0.1
+      - --gnmi-port=58989
+    networks:
+      vpn-net:
+        ipv4_address: 172.20.0.9
+    depends_on:
+      - vpn-server
+      - gnmi-server
+    profiles:
+      - gnmi
+    restart: unless-stopped
+
+  # ─────────────────────────────────────────────────────────────────────────
+  # gNMI client — TLS probe.  Profile: gnmi-tls
+  # ─────────────────────────────────────────────────────────────────────────
+  gnmi-client-tls:
+    image: marvel:release
+    <<: *tun-caps
+    command:
+      - /app/app
+      - --mode=client
+      - --server=vpn-server-tls
+      - --port=1194
+      - --status=/run/vpn_status.lua
+      - --gnmi-probe=true
+      - --server-vip=10.9.0.1
+      - --gnmi-port=58989
+      - --gnmi-tls=true
+      - --gnmi-cert=/app/certs/client.pem
+      - --gnmi-key=/app/certs/client.key
+      - --gnmi-ca=/app/certs/ca.pem
+    networks:
+      vpn-net:
+        ipv4_address: 172.20.0.10
+    depends_on:
+      - vpn-server-tls
+      - gnmi-server-tls
+    profiles:
+      - gnmi-tls
+    restart: unless-stopped
+
+  # ─────────────────────────────────────────────────────────────────────────
   # TLS server — uses bundled self-signed certs baked into the image at
   # /app/certs/ (see Dockerfile COPY certs/).  Profile: tls.
   # ─────────────────────────────────────────────────────────────────────────

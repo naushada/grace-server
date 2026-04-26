@@ -5,6 +5,7 @@
 #include "framework.hpp"    // evt_io, evt_base
 #include "grpc_session.hpp" // encode_frame / decode_frame
 #include "http2.hpp"
+#include "tls_config.hpp"
 
 #include <iostream>
 
@@ -38,8 +39,9 @@
 class gnmi_connection : public evt_io {
 public:
   gnmi_connection(const std::string &host, uint16_t port,
-                  const std::string &rpc_path, const std::string &request_pb)
-      : evt_io(host, port, /*outbound=*/true),
+                  const std::string &rpc_path, const std::string &request_pb,
+                  const tls_config &tls)
+      : evt_io(host, port, tls.build_client_ctx()),
         m_host(host), m_rpc_path(rpc_path), m_request_pb(request_pb),
         m_h2(/*server_side=*/false,
              [this](int32_t, const http2_session::request &resp) {
@@ -157,8 +159,9 @@ private:
 
 gnmi_client::response gnmi_client::call(const std::string &host, uint16_t port,
                                          const std::string &rpc_path,
-                                         const std::string &request_pb) {
-  gnmi_connection conn(host, port, rpc_path, request_pb);
+                                         const std::string &request_pb,
+                                         const tls_config &tls) {
+  gnmi_connection conn(host, port, rpc_path, request_pb, tls);
 
   // Drive the shared libevent event loop one iteration at a time until the
   // gRPC response is complete (or a timeout / error fires).  Other events

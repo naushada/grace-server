@@ -70,7 +70,17 @@ static void print_usage(const char *prog) {
     << "                             the tunnel and dump the response; tunnel stays open.\n"
     << "    --server-vip=<ip>        Server-side VPN IP to probe  (default: 10.8.0.1)\n"
     << "    --gnmi-port=<port>       gNMI port on the server      (default: 58989)\n"
-    << "  Note: TUN interface name chosen by the kernel (next free tunX).\n";
+    << "    --gnmi-tls=true          Use TLS for the gNMI probe connection\n"
+    << "    --gnmi-cert=<path>       PEM client cert for gNMI probe TLS\n"
+    << "    --gnmi-key=<path>        PEM private key for gNMI probe TLS\n"
+    << "    --gnmi-ca=<path>         PEM CA cert for gNMI probe TLS\n"
+    << "  Note: TUN interface name chosen by the kernel (next free tunX).\n"
+    << "\n"
+    << "  Server options:\n"
+    << "    --gnmi-tls=true          Enable TLS on the gNMI listener (port 58989)\n"
+    << "    --gnmi-cert=<path>       PEM server certificate for gNMI TLS\n"
+    << "    --gnmi-key=<path>        PEM private key for gNMI TLS\n"
+    << "    --gnmi-ca=<path>         PEM CA cert (enables mTLS client auth)\n";
 }
 
 // ---------------------------------------------------------------------------
@@ -134,12 +144,19 @@ int main(int argc, const char *argv[]) {
     return 1;
   }
 
-  // Shared across both modes.
+  // VPN TLS — shared across both modes.
   const tls_config tls{
     get_flag(argc, argv, "tls", "false") == "true",
     get_flag(argc, argv, "cert", ""),
     get_flag(argc, argv, "key",  ""),
     get_flag(argc, argv, "ca",   ""),
+  };
+  // gNMI TLS — independent from VPN TLS.
+  const tls_config gnmi_tls{
+    get_flag(argc, argv, "gnmi-tls", "false") == "true",
+    get_flag(argc, argv, "gnmi-cert", ""),
+    get_flag(argc, argv, "gnmi-key",  ""),
+    get_flag(argc, argv, "gnmi-ca",   ""),
   };
   fs_app fs_mon("/app/command");
 
@@ -181,7 +198,7 @@ int main(int argc, const char *argv[]) {
       req.SerializeToString(&req_pb);
 
       const auto resp = gnmi_client::call(server_vip, gnmi_port,
-                                           "/gnmi.gNMI/Get", req_pb);
+                                           "/gnmi.gNMI/Get", req_pb, gnmi_tls);
       dump_gnmi_response(resp);
 
       // Phase 3 — fall through to run_evt_loop{}() below; tunnel stays open.
@@ -195,9 +212,10 @@ int main(int argc, const char *argv[]) {
     const std::string netmask    = get_flag(argc, argv, "netmask",    "255.255.255.0");
 
     std::cout << "[main] mode=server tls=" << (tls.enabled ? "ON" : "OFF")
+              << " gnmi-tls=" << (gnmi_tls.enabled ? "ON" : "OFF")
               << " pool=" << pool_start << "–" << pool_end << '\n';
 
-    server svc_module("0.0.0.0", 58989);
+    server svc_module("0.0.0.0", 58989, gnmi_tls);
     openvpn_server vpn("0.0.0.0", 1194, pool_start, pool_end, tls, server_ip, netmask);
   }
 

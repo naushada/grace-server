@@ -597,3 +597,116 @@ compile-time flag before shipping:
 
 Build with `-DNDEBUG` (the default for release builds via CMake
 `-DCMAKE_BUILD_TYPE=Release`) to silence it.
+
+---
+
+## 13. gNMI server and client — TLS configuration
+
+### Independent TLS flags
+
+VPN tunnel TLS and gNMI TLS are **fully independent**.  Each has its own
+flag set so all four combinations are valid:
+
+| VPN TLS | gNMI TLS | Use case |
+|---------|----------|----------|
+| OFF     | OFF      | development / lab (default) |
+| ON      | OFF      | encrypted tunnel, plain gNMI (trusted LAN) |
+| OFF     | ON       | direct gNMI over TLS, plain VPN |
+| ON      | ON       | fully encrypted — production recommended |
+
+| Flag | Scope |
+|------|-------|
+| `--tls` / `--cert` / `--key` / `--ca` | OpenVPN tunnel (port 1194) |
+| `--gnmi-tls` / `--gnmi-cert` / `--gnmi-key` / `--gnmi-ca` | gNMI listener / probe (port 58989) |
+
+### Server mode
+
+```bash
+# Plain gNMI (default)
+/app/app --mode=server
+
+# gNMI with TLS
+/app/app --mode=server \
+  --gnmi-tls=true \
+  --gnmi-cert=/app/certs/server.pem \
+  --gnmi-key=/app/certs/server.key \
+  --gnmi-ca=/app/certs/ca.pem        # also enables mTLS client-cert check
+
+# VPN TLS + gNMI TLS (fully encrypted)
+/app/app --mode=server \
+  --tls=true --cert=/app/certs/server.pem --key=/app/certs/server.key --ca=/app/certs/ca.pem \
+  --gnmi-tls=true --gnmi-cert=/app/certs/server.pem --gnmi-key=/app/certs/server.key \
+  --gnmi-ca=/app/certs/ca.pem
+```
+
+### Client mode (with gNMI probe)
+
+```bash
+# VPN plain, gNMI probe plain
+/app/app --mode=client --server=vpn-server \
+  --gnmi-probe=true --server-vip=10.8.0.1 --gnmi-port=58989
+
+# VPN plain, gNMI probe TLS
+/app/app --mode=client --server=vpn-server \
+  --gnmi-probe=true --server-vip=10.8.0.1 --gnmi-port=58989 \
+  --gnmi-tls=true \
+  --gnmi-cert=/app/certs/client.pem \
+  --gnmi-key=/app/certs/client.key \
+  --gnmi-ca=/app/certs/ca.pem
+
+# VPN TLS + gNMI probe TLS
+/app/app --mode=client --server=vpn-server \
+  --tls=true --cert=/app/certs/client.pem --key=/app/certs/client.key --ca=/app/certs/ca.pem \
+  --gnmi-probe=true --server-vip=10.8.0.1 --gnmi-port=58989 \
+  --gnmi-tls=true --gnmi-cert=/app/certs/client.pem \
+  --gnmi-key=/app/certs/client.key --gnmi-ca=/app/certs/ca.pem
+```
+
+### How it works in code
+
+```
+--mode=server
+  │
+  ├─ tls_config gnmi_tls{ --gnmi-tls, --gnmi-cert, --gnmi-key, --gnmi-ca }
+  │
+  └─ server svc_module("0.0.0.0", 58989, gnmi_tls)
+       │
+       └─ evt_io(host, port, gnmi_tls.build_server_ctx(), listener_tag{})
+            │  build_server_ctx() returns nullptr when disabled → plain TCP
+            │
+            └─ on accept: wrap_accepted(fd)
+                 ├─ TLS enabled → bufferevent_openssl_socket_new(fd, ssl, ACCEPTING)
+                 └─ TLS disabled → bufferevent_socket_new(fd)
+                 → connected_client(bev, peer, this)   ← same code path either way
+```
+
+```
+--mode=client --gnmi-probe=true
+  │
+  ├─ tls_config gnmi_tls{ --gnmi-tls, --gnmi-cert, --gnmi-key, --gnmi-ca }
+  │
+  └─ gnmi_client::call(server_vip, port, rpc_path, req_pb, gnmi_tls)
+       │
+       └─ gnmi_connection : evt_io(host, port, gnmi_tls.build_client_ctx())
+            │  build_client_ctx() returns nullptr when disabled → plain TCP
+            └─ drives event_base_loop(EVLOOP_ONCE) until response arrives
+```
+
+### Docker Compose profiles
+
+```bash
+# Plain gNMI server + client probe
+docker compose -f docs/docker-compose.yml --profile gnmi up
+
+# TLS gNMI server + client probe
+docker compose -f docs/docker-compose.yml --profile gnmi-tls up
+
+# Everything (VPN + gNMI, both TLS)
+docker compose -f docs/docker-compose.yml --profile tls --profile gnmi-tls up
+```
+
+### Note on gNMI Subscribe
+
+`/gnmi.gNMI/Subscribe` returns `grpc_status=12` (UNIMPLEMENTED) — the
+`grpc_session` currently handles only unary RPCs.  Streaming Subscribe
+requires bidirectional HTTP/2 streams to be wired into `grpc_session.cpp`.
