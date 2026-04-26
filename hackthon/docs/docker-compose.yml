@@ -1,0 +1,93 @@
+version: "3.9"
+
+# Shared TUN capability required by both services.
+x-tun-caps: &tun-caps
+  cap_add:
+    - NET_ADMIN
+  devices:
+    - /dev/net/tun:/dev/net/tun
+
+networks:
+  vpn-net:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.20.0.0/24
+
+services:
+
+  # ─────────────────────────────────────────────────────────────────────────
+  # openvpn_server
+  #   Listens on port 1194 (tunnel) and 58989 (gNMI).
+  #   Opens a kernel TUN interface (tun0) with server IP 10.8.0.1/24.
+  #   Assigns virtual IPs from the pool to connecting clients.
+  #   Adds/removes per-client host routes via SIOCADDRT/SIOCDELRT.
+  # ─────────────────────────────────────────────────────────────────────────
+  vpn-server:
+    image: marvel:release
+    <<: *tun-caps
+    command:
+      - /app/app
+      - --mode=server
+      - --server-ip=10.8.0.1
+      - --pool-start=10.8.0.2
+      - --pool-end=10.8.0.254
+      - --netmask=255.255.255.0
+    ports:
+      - "1194:1194"      # OpenVPN tunnel (TCP)
+      - "58989:58989"    # gNMI gRPC
+    networks:
+      vpn-net:
+        ipv4_address: 172.20.0.2
+    restart: unless-stopped
+
+  # ─────────────────────────────────────────────────────────────────────────
+  # openvpn_client
+  #   Connects to vpn-server:1194 over the Docker bridge network.
+  #   Receives IP_ASSIGN "10.8.0.3 255.255.255.0" from the server.
+  #   Configures tun0 = 10.8.0.3/24 and registers a libevent TUN reader.
+  #   Writes connection state to /run/vpn_status.lua.
+  # ─────────────────────────────────────────────────────────────────────────
+  vpn-client:
+    image: marvel:release
+    <<: *tun-caps
+    command:
+      - /app/app
+      - --mode=client
+      - --server=vpn-server
+      - --port=1194
+      - --status=/run/vpn_status.lua
+    networks:
+      vpn-net:
+        ipv4_address: 172.20.0.3
+    depends_on:
+      - vpn-server
+    restart: unless-stopped
+
+  # ─────────────────────────────────────────────────────────────────────────
+  # openvpn_client (TLS variant) — optional; comment out if not needed.
+  #   Mount a directory containing cert.pem / key.pem / ca.pem.
+  # ─────────────────────────────────────────────────────────────────────────
+  vpn-client-tls:
+    image: marvel:release
+    <<: *tun-caps
+    command:
+      - /app/app
+      - --mode=client
+      - --server=vpn-server
+      - --port=1194
+      - --status=/run/vpn_status.lua
+      - --tls=true
+      - --cert=/certs/cert.pem
+      - --key=/certs/key.pem
+      - --ca=/certs/ca.pem
+    volumes:
+      - ./certs:/certs:ro
+    networks:
+      vpn-net:
+        ipv4_address: 172.20.0.4
+    depends_on:
+      - vpn-server
+    profiles:
+      - tls                          # only starts with: docker compose --profile tls up
+    restart: unless-stopped
