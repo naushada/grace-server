@@ -84,10 +84,7 @@ openvpn_server::openvpn_server(const std::string &host, uint16_t port,
 }
 
 openvpn_server::~openvpn_server() {
-  if (m_server_tun_event) {
-    event_del(m_server_tun_event);
-    event_free(m_server_tun_event);
-  }
+  m_server_tun_io.reset();
   if (m_server_tun_fd >= 0) ::close(m_server_tun_fd);
   m_peers.clear();
 }
@@ -158,30 +155,32 @@ int openvpn_server::open_server_tun(const std::string &server_ip) {
   ::close(sock);
   std::cout << "[openvpn_server] tun " << ifr.ifr_name
             << " configured: " << server_ip << "/24 UP\n";
-  // Register libevent reader
-  m_server_tun_event = event_new(evt_base::instance().get(), m_server_tun_fd,
-                                  EV_READ | EV_PERSIST, server_tun_read_cb, this);
-  event_add(m_server_tun_event, nullptr);
+  m_server_tun_io = std::make_unique<server_tun_io>(m_server_tun_fd, *this);
 #endif
   return 0;
 }
 
-void openvpn_server::server_tun_read_cb(evutil_socket_t fd, short, void *ctx) {
-  auto *self = static_cast<openvpn_server *>(ctx);
-  char buf[65536];
-  ssize_t n = ::read(fd, buf, sizeof(buf));
-  if (n < 20) return; // too short to be a valid IP packet
+// server_tun_io — wraps server TUN fd in evt_io; routes inbound IP packets to peers.
+class openvpn_server::server_tun_io : public evt_io {
+public:
+  server_tun_io(evutil_socket_t fd, openvpn_server &owner)
+      : evt_io(fd, "tun"), m_owner(owner) {}
 
-  // Extract destination IP from IP header (bytes 16-19)
-  char dst[INET_ADDRSTRLEN];
-  inet_ntop(AF_INET, buf + 16, dst, sizeof(dst));
-
-  const int32_t ch = self->m_pool.find_channel(dst);
-  if (ch < 0) return; // no client owns this IP
-
-  auto it = self->m_peers.find(ch);
-  if (it != self->m_peers.end())
-    it->second->forward_data(std::string(buf, static_cast<size_t>(n)));
-}
+  std::int32_t handle_read(const std::int32_t &, const std::string &data,
+                            const bool &dry_run) override {
+    if (dry_run || data.size() < 20) return 0;
+    char dst[INET_ADDRSTRLEN];
+    inet_ntop(AF_INET, data.data() + 16, dst, sizeof(dst));
+    const int32_t ch = m_owner.m_pool.find_channel(dst);
+    if (ch >= 0) {
+      auto it = m_owner.m_peers.find(ch);
+      if (it != m_owner.m_peers.end())
+        it->second->forward_data(data);
+    }
+    return 0;
+  }
+private:
+  openvpn_server &m_owner;
+};
 
 #endif // __openvpn_server_cpp__

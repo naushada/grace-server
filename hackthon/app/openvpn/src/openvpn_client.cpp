@@ -134,7 +134,7 @@ size_t openvpn_client::process_frames() {
       else {
         std::cout << "[openvpn_client] kernel assigned " << m_tun_name << "\n";
         assign_tun_ip(m_assigned_ip);
-        register_tun_reader();
+        m_tun_io = std::make_unique<tun_io>(m_tun_fd, *this);
       }
       write_status_lua(m_status_file, m_assigned_ip, m_tun_name, "Connected",
                         std::time(nullptr));
@@ -216,27 +216,25 @@ void openvpn_client::assign_tun_ip(const std::string &ip) {
 #endif
 }
 
-void openvpn_client::register_tun_reader() {
-  m_tun_event = event_new(evt_base::instance().get(), m_tun_fd,
-                           EV_READ | EV_PERSIST, tun_read_cb, this);
-  event_add(m_tun_event, nullptr);
-}
+// tun_io — wraps the TUN fd in evt_io so libevent delivers reads via handle_read.
+class openvpn_client::tun_io : public evt_io {
+public:
+  tun_io(evutil_socket_t fd, openvpn_client &owner)
+      : evt_io(fd, "tun"), m_owner(owner) {}
 
-void openvpn_client::tun_read_cb(evutil_socket_t fd, short, void *ctx) {
-  auto *self = static_cast<openvpn_client *>(ctx);
-  char buf[65536];
-  ssize_t n = ::read(fd, buf, sizeof(buf));
-  if (n > 0)
-    self->send_frame(TYPE_DATA, std::string(buf, static_cast<size_t>(n)));
-}
+  std::int32_t handle_read(const std::int32_t &, const std::string &data,
+                            const bool &dry_run) override {
+    if (!dry_run && !data.empty())
+      m_owner.send_frame(openvpn_client::TYPE_DATA, data);
+    return 0;
+  }
+private:
+  openvpn_client &m_owner;
+};
 
 void openvpn_client::close_tun() {
 #ifdef __linux__
-  if (m_tun_event) {
-    event_del(m_tun_event);
-    event_free(m_tun_event);
-    m_tun_event = nullptr;
-  }
+  m_tun_io.reset();
   if (m_tun_fd >= 0) { ::close(m_tun_fd); m_tun_fd = -1; }
 #endif
 }

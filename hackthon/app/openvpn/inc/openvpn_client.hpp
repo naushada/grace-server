@@ -58,21 +58,22 @@ public:
                                 std::time_t        timestamp);
 
 private:
-  static void tun_read_cb(evutil_socket_t fd, short, void *ctx);
+  class tun_io;
+  friend class tun_io;
+
   int    open_tun();
   void   assign_tun_ip(const std::string &ip);
-  void   register_tun_reader();
   void   close_tun();
   size_t process_frames();
   void   send_frame(uint8_t type, const std::string &payload);
 
-  std::string m_tun_name;
-  std::string m_status_file;
-  std::string m_assigned_ip;
-  std::string m_recv_buf;
-  struct event *m_tun_event{nullptr};
-  int           m_tun_fd{-1};
-  bool          m_ip_assigned{false};
+  std::string              m_tun_name;
+  std::string              m_status_file;
+  std::string              m_assigned_ip;
+  std::string              m_recv_buf;
+  std::unique_ptr<tun_io>  m_tun_io;
+  int                      m_tun_fd{-1};
+  bool                     m_ip_assigned{false};
 };
 
 #endif // __openvpn_client_hpp__

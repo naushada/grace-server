@@ -63,13 +63,15 @@ public:
   ip_pool &pool() { return m_pool; }
 
 private:
-  static void server_tun_read_cb(evutil_socket_t fd, short, void *ctx);
+  class server_tun_io;
+  friend class server_tun_io;
+
   int open_server_tun(const std::string &server_ip);
 
-  ip_pool       m_pool;
-  peer_map_t    m_peers;
-  int           m_server_tun_fd{-1};
-  struct event *m_server_tun_event{nullptr};
+  ip_pool                       m_pool;
+  peer_map_t                    m_peers;
+  std::unique_ptr<server_tun_io> m_server_tun_io;
+  int                           m_server_tun_fd{-1};
 };
 
 #endif // __openvpn_server_hpp__
