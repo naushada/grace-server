@@ -1,7 +1,13 @@
 version: "3.9"
 
 # Shared TUN capability required by both services.
+# TUNSETIFF requires CAP_NET_ADMIN in the effective capability set.
+# Docker grants it to the container but non-root processes do not inherit it
+# into their effective set without ambient-capability support (kernel 4.3+,
+# and runc ≥ 1.0).  Running as root is the portable, reliable choice for
+# any service that opens /dev/net/tun.
 x-tun-caps: &tun-caps
+  user: root
   cap_add:
     - NET_ADMIN
   devices:

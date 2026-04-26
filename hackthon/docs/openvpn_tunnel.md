@@ -7,7 +7,32 @@ TUN interfaces are kernel virtual network devices. Creating one requires:
 - `CAP_NET_ADMIN` — to call `TUNSETIFF`, `SIOCSIFADDR`, `SIOCSIFNETMASK`, `SIOCSIFFLAGS`, `SIOCADDRT`
 - `/dev/net/tun` device — must be accessible inside the container
 
-Without these the `open("/dev/net/tun")` or ioctl calls silently fail and `m_tun_fd` stays `-1`.
+Without these the `open("/dev/net/tun")` or ioctl calls fail and `m_tun_fd` stays `-1`.
+
+### Common error: `TUNSETIFF: Operation not permitted`
+
+```
+[openvpn_server] TUNSETIFF: Operation not permitted
+```
+
+**Cause:** The container image runs as a non-root user (`edge`). Docker adds
+`CAP_NET_ADMIN` to the container's *permitted* capability set, but non-root
+processes only inherit capabilities into their *effective* set when ambient
+capabilities are supported (kernel ≥ 4.3 + runc ≥ 1.0). On many production
+hosts this inheritance does not happen, so the `TUNSETIFF` ioctl sees EPERM.
+
+**Fix:** Run the VPN services as `root`. In `docker-compose.yml` the
+`x-tun-caps` anchor includes `user: root`, which overrides the `USER edge`
+set in the Dockerfile for these services only.
+
+```yaml
+x-tun-caps: &tun-caps
+  user: root          # ← required for TUNSETIFF
+  cap_add:
+    - NET_ADMIN
+  devices:
+    - /dev/net/tun:/dev/net/tun
+```
 
 ---
 
