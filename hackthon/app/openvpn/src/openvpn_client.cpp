@@ -140,18 +140,21 @@ size_t openvpn_client::process_frames() {
     if (!try_decode_frame(m_recv_buf, consumed, t, p, used)) break;
     consumed += used;
     switch (t) {
-    case TYPE_IP_ASSIGN:
-      m_assigned_ip = p;
+    case TYPE_IP_ASSIGN: {
+      const auto sp = p.find(' ');
+      m_assigned_ip = p.substr(0, sp);
+      const std::string netmask = (sp != std::string::npos) ? p.substr(sp + 1) : "255.255.255.0";
       m_ip_assigned = true;
-      std::cout << "[openvpn_client] IP_ASSIGN: " << m_assigned_ip << "\n";
+      std::cout << "[openvpn_client] IP_ASSIGN: " << m_assigned_ip << " " << netmask << "\n";
       m_tun_fd = open_tun();
       if (m_tun_fd < 0)
         std::cerr << "[openvpn_client] TUN unavailable (need CAP_NET_ADMIN)\n";
       else {
         std::cout << "[openvpn_client] kernel assigned " << m_tun_name << "\n";
-        assign_tun_ip(m_assigned_ip);
+        assign_tun_ip(m_assigned_ip, netmask);
         m_tun_io = std::make_unique<tun_io>(m_tun_fd, *this);
       }
+    }
       write_status_lua(m_status_file, m_assigned_ip, m_tun_name, "Connected",
                         std::time(nullptr));
       break;
@@ -197,7 +200,7 @@ int openvpn_client::open_tun() {
 #endif
 }
 
-void openvpn_client::assign_tun_ip(const std::string &ip) {
+void openvpn_client::assign_tun_ip(const std::string &ip, const std::string &netmask) {
 #ifdef __linux__
   int sock = ::socket(AF_INET, SOCK_DGRAM, 0);
   if (sock < 0) {
@@ -216,7 +219,7 @@ void openvpn_client::assign_tun_ip(const std::string &ip) {
     std::cerr << "[openvpn_client] SIOCSIFADDR: " << strerror(errno) << "\n";
 
   // Netmask /24
-  inet_pton(AF_INET, "255.255.255.0", &sin->sin_addr);
+  inet_pton(AF_INET, netmask.c_str(), &sin->sin_addr);
   if (::ioctl(sock, SIOCSIFNETMASK, &ifr) < 0)
     std::cerr << "[openvpn_client] SIOCSIFNETMASK: " << strerror(errno) << "\n";
 

@@ -14,19 +14,19 @@
 
 openvpn_peer::openvpn_peer(int32_t channel, const std::string &peer_host,
                              openvpn_server *parent,
-                             const std::string &assigned_ip)
+                             const std::string &assigned_ip,
+                             const std::string &netmask)
     : evt_io(channel, peer_host),
-      m_parent(parent),
-      m_assigned_ip(assigned_ip) {
+      m_parent(parent), m_assigned_ip(assigned_ip), m_netmask(netmask) {
   send_ip_assign();
 }
 
 openvpn_peer::openvpn_peer(struct bufferevent *bev, const std::string &peer_host,
                              openvpn_server *parent,
-                             const std::string &assigned_ip)
-    : evt_io(bev, peer_host),    // protected pre-built-bev ctor
-      m_parent(parent),
-      m_assigned_ip(assigned_ip) {
+                             const std::string &assigned_ip,
+                             const std::string &netmask)
+    : evt_io(bev, peer_host),
+      m_parent(parent), m_assigned_ip(assigned_ip), m_netmask(netmask) {
   send_ip_assign();
 }
 
@@ -46,8 +46,9 @@ void openvpn_peer::send_frame(uint8_t type, const std::string &payload) {
 }
 
 void openvpn_peer::send_ip_assign() {
-  send_frame(TYPE_IP_ASSIGN, m_assigned_ip);
-  std::cout << "[openvpn_peer] IP_ASSIGN " << m_assigned_ip << "\n";
+  const std::string payload = m_assigned_ip + " " + m_netmask;
+  send_frame(TYPE_IP_ASSIGN, payload);
+  std::cout << "[openvpn_peer] IP_ASSIGN " << payload << "\n";
 }
 
 // ---------------------------------------------------------------------------

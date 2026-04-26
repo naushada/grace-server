@@ -74,9 +74,10 @@ openvpn_server::openvpn_server(const std::string &host, uint16_t port,
                                  const std::string &pool_start,
                                  const std::string &pool_end,
                                  const tls_config  &tls,
-                                 const std::string &server_ip)
+                                 const std::string &server_ip,
+                                 const std::string &netmask)
     : evt_io(host, port, tls.build_server_ctx(), listener_tag{}),
-      m_pool(pool_start, pool_end) {
+      m_pool(pool_start, pool_end), m_netmask(netmask) {
   std::cout << "[openvpn_server] " << host << ":" << port
             << " pool=" << pool_start << "–" << pool_end
             << " tls=" << (tls.enabled ? "ON" : "OFF") << '\n';
@@ -100,7 +101,7 @@ std::int32_t openvpn_server::handle_connect(const handle_t &channel,
   // wrap_accepted() is in evt_io: returns a TLS bev when the server was
   // constructed with a TLS ctx, plain socket bev otherwise.
   auto *bev = wrap_accepted(channel);
-  auto peer = std::make_unique<openvpn_peer>(bev, peer_host, this, ip);
+  auto peer = std::make_unique<openvpn_peer>(bev, peer_host, this, ip, m_netmask);
   m_peers.emplace(channel, std::move(peer));
   std::cout << "[openvpn_server] accepted " << peer_host
             << " \xe2\x86\x92 " << ip << (has_tls() ? " (TLS)" : "") << '\n';
@@ -170,7 +171,7 @@ int openvpn_server::open_server_tun(const std::string &server_ip) {
   sin->sin_family = AF_INET;
   inet_pton(AF_INET, server_ip.c_str(), &sin->sin_addr);
   ::ioctl(sock, SIOCSIFADDR, &ifr);
-  inet_pton(AF_INET, "255.255.255.0", &sin->sin_addr);
+  inet_pton(AF_INET, m_netmask.c_str(), &sin->sin_addr);
   ::ioctl(sock, SIOCSIFNETMASK, &ifr);
   ::ioctl(sock, SIOCGIFFLAGS, &ifr);
   ifr.ifr_flags |= IFF_UP | IFF_RUNNING;

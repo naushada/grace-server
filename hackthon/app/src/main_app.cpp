@@ -101,12 +101,13 @@ int main(int argc, const char *argv[]) {
     const std::string pool_start = get_flag(argc, argv, "pool-start", "10.8.0.2");
     const std::string pool_end   = get_flag(argc, argv, "pool-end",   "10.8.0.254");
     const std::string server_ip  = get_flag(argc, argv, "server-ip",  "10.8.0.1");
+    const std::string netmask    = get_flag(argc, argv, "netmask",    "255.255.255.0");
 
     std::cout << "[main] mode=server tls=" << (tls.enabled ? "ON" : "OFF")
               << " pool=" << pool_start << "–" << pool_end << '\n';
 
     server svc_module("0.0.0.0", 58989);
-    openvpn_server vpn("0.0.0.0", 1194, pool_start, pool_end, tls, server_ip);
+    openvpn_server vpn("0.0.0.0", 1194, pool_start, pool_end, tls, server_ip, netmask);
   }
 
   run_evt_loop{}();

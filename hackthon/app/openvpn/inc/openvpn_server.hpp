@@ -52,7 +52,8 @@ public:
                  const std::string &pool_start  = "10.8.0.2",
                  const std::string &pool_end    = "10.8.0.254",
                  const tls_config  &tls         = {},
-                 const std::string &server_ip   = "10.8.0.1");
+                 const std::string &server_ip   = "10.8.0.1",
+                 const std::string &netmask     = "255.255.255.0");
 
   virtual ~openvpn_server();
 
@@ -68,10 +69,11 @@ private:
 
   int open_server_tun(const std::string &server_ip);
 
-  ip_pool                       m_pool;
-  peer_map_t                    m_peers;
+  ip_pool                        m_pool;
+  peer_map_t                     m_peers;
+  std::string                    m_netmask;
   std::unique_ptr<server_tun_io> m_server_tun_io;
-  int                           m_server_tun_fd{-1};
+  int                            m_server_tun_fd{-1};
 };
 
 #endif // __openvpn_server_hpp__

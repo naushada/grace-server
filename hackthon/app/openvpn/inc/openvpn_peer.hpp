@@ -26,12 +26,12 @@ public:
 
   // Plain TCP: framework creates the bufferevent from the accepted fd.
   openvpn_peer(int32_t channel, const std::string &peer_host,
-               openvpn_server *parent, const std::string &assigned_ip);
+               openvpn_server *parent, const std::string &assigned_ip,
+               const std::string &netmask);
 
-  // TLS: caller supplies the pre-built SSL bufferevent; uses the protected
-  // evt_io(bufferevent*, peer_host) constructor.
   openvpn_peer(struct bufferevent *bev, const std::string &peer_host,
-               openvpn_server *parent, const std::string &assigned_ip);
+               openvpn_server *parent, const std::string &assigned_ip,
+               const std::string &netmask);
 
   virtual ~openvpn_peer() = default;
 
@@ -53,6 +53,7 @@ private:
 
   openvpn_server *m_parent;
   std::string     m_assigned_ip;
+  std::string     m_netmask;
   std::string     m_recv_buf; // reassembly buffer for partial frames
 };
 

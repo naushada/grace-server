@@ -62,7 +62,7 @@ private:
   friend class tun_io;
 
   int    open_tun();
-  void   assign_tun_ip(const std::string &ip);
+  void   assign_tun_ip(const std::string &ip, const std::string &netmask);
   void   close_tun();
   size_t process_frames();
   void   send_frame(uint8_t type, const std::string &payload);
