@@ -7,6 +7,7 @@
 // OpenvpnClientTest — frame constants, multi-frame sequence
 
 #include "openvpn_client.hpp"
+#include "openvpn_peer.hpp"
 #include "openvpn_server.hpp"
 #include "tls_config.hpp"
 #include "lua_engine.hpp"
