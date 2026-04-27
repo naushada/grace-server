@@ -125,6 +125,12 @@ static void print_usage(const char *prog) {
     << "       request through the VPN tunnel, and the client's nftables\n"
     << "       DNAT rule delivers it to gnmi-server-svc.\n"
     << "\n"
+    << "  " << prog << " --mode=gnmi-server [options]\n"
+    << "       Standalone gNMI server — no VPN, no TUN device needed.\n"
+    << "       Intended for gnmi-server-svc behind an nftables/socat proxy.\n"
+    << "    --gnmi-port=<port>       Listen port  (default: 58989)\n"
+    << "    --gnmi-tls/--gnmi-cert/--gnmi-key/--gnmi-ca  TLS options\n"
+    << "\n"
     << "  gnmi-mqtt-client options:\n"
     << "    --mqtt-host=<host>       MQTT broker address       (default: localhost)\n"
     << "    --mqtt-port=<port>       MQTT broker port          (default: 1883)\n"
@@ -242,6 +248,24 @@ int main(int argc, const char *argv[]) {
     mosquitto_disconnect(mosq);
     mosquitto_destroy(mosq);
     mosquitto_lib_cleanup();
+    return 0;
+  }
+
+  // ── gnmi-server ──────────────────────────────────────────────────────────
+  // Pure gNMI server with no VPN — used by gnmi-server-svc in docker-compose.
+  // Listens on --gnmi-port (default 58989); TLS optional via --gnmi-tls flags.
+  if (mode == "gnmi-server") {
+    const tls_config gnmi_tls{
+      get_flag(argc, argv, "gnmi-tls", "false") == "true",
+      get_flag(argc, argv, "gnmi-cert", ""),
+      get_flag(argc, argv, "gnmi-key",  ""),
+      get_flag(argc, argv, "gnmi-ca",   ""),
+    };
+    const uint16_t gnmi_port = get_port_flag(argc, argv, "gnmi-port", 58989);
+    std::cout << "[main] mode=gnmi-server port=" << gnmi_port
+              << " tls=" << (gnmi_tls.enabled ? "ON" : "OFF") << '\n';
+    server gnmi_svc("0.0.0.0", gnmi_port, gnmi_tls);
+    run_evt_loop{}();
     return 0;
   }
 

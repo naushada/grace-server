@@ -66,6 +66,7 @@ RUN apt-get update && apt-get install -y \
     libmosquitto1 \
     mosquitto-clients \
     nftables \
+    socat \
   && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app

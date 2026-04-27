@@ -277,8 +277,8 @@ services:
   #       │
   #       ▼
   #   mqtt-vpn-client  (tun0 = 10.8.0.3)
-  #       │  iptables DNAT rule (installed after tun0 comes up):
-  #       │    -d 10.8.0.3 -p tcp --dport 58989 → 172.21.0.5:58989
+  #       │  socat proxy (started after tun0 comes up):
+  #       │    TCP-LISTEN:58989,bind=10.8.0.3 → TCP:172.21.0.5:58989
   #       ▼
   #   gnmi-server-svc  (172.21.0.5:58989, app-net only)
   #       │  processes gNMI Get / Update, sends reply
@@ -319,11 +319,8 @@ services:
     image: marvel:release
     command:
       - /app/app
-      - --mode=server
-      - --server-ip=0.0.0.0
-      - --pool-start=10.8.0.2
-      - --pool-end=10.8.0.254
-      - --netmask=255.255.255.0
+      - --mode=gnmi-server      # pure gNMI — no TUN, no VPN, no NET_ADMIN needed
+      - --gnmi-port=58989
     networks:
       app-net:
         ipv4_address: 172.21.0.5
@@ -416,16 +413,16 @@ services:
     restart: unless-stopped
 
   # ─────────────────────────────────────────────────────────────────────────
-  # mqtt-vpn-client — OpenVPN client + iptables forwarding.  Profile: mqtt
+  # mqtt-vpn-client — OpenVPN client + socat proxy.  Profile: mqtt
   #   Connects to mqtt-vpn-server:1194.  After the tunnel comes up and a
-  #   virtual IP is assigned (e.g. 10.8.0.3), installs an iptables DNAT rule:
+  #   virtual IP is assigned (e.g. 10.8.0.3), starts a socat proxy:
   #
-  #     PREROUTING:  -d 10.8.0.3 -p tcp --dport 58989
-  #                  → DNAT 172.21.0.5:58989  (gnmi-server-svc on app-net)
-  #     POSTROUTING: -o eth1 MASQUERADE       (for reply packets back to tun0)
+  #     socat TCP-LISTEN:58989,bind=10.8.0.3,reuseaddr,fork \
+  #           TCP:172.21.0.5:58989
   #
-  #   This makes gNMI traffic that arrives from the VPN tunnel transparently
-  #   land on gnmi-server-svc without gnmi-server-svc needing any VPN config.
+  #   Any TCP connection to 10.8.0.3:58989 (arriving via the VPN tunnel) is
+  #   forwarded to gnmi-server-svc on app-net.  socat runs in userspace —
+  #   no kernel NAT modules required.
   #   Sits on both vpn-net (for the tunnel) and app-net (to reach gnmi-server-svc).
   # ─────────────────────────────────────────────────────────────────────────
   mqtt-vpn-client:
@@ -433,11 +430,8 @@ services:
     user: root
     cap_add:
       - NET_ADMIN
-      - NET_RAW
     devices:
       - /dev/net/tun:/dev/net/tun
-    sysctls:
-      - net.ipv4.ip_forward=1
     entrypoint: ["/bin/bash", "-c"]
     command:
       - |
@@ -448,12 +442,9 @@ services:
         APP_PID=$$!
         until ip link show tun0 2>/dev/null | grep -q UP; do sleep 1; done
         VIP=$$(grep 'service_ip' /run/vpn_status.lua | grep -oE '[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+')
-        echo "[mqtt-vpn-client] tunnel up, virtual IP=$$VIP — installing DNAT rule"
-        nft add table ip nat
-        nft add chain ip nat prerouting  "{ type nat hook prerouting  priority dstnat; }"
-        nft add chain ip nat postrouting "{ type nat hook postrouting priority srcnat; }"
-        nft add rule  ip nat prerouting  ip daddr $${VIP} tcp dport 58989 dnat to 172.21.0.5:58989
-        nft add rule  ip nat postrouting oifname eth1 masquerade
+        echo "[mqtt-vpn-client] tunnel up, virtual IP=$$VIP — starting socat proxy"
+        socat TCP-LISTEN:58989,bind=$${VIP},reuseaddr,fork \
+              TCP:172.21.0.5:58989 &
         wait $${APP_PID}
     networks:
       vpn-net:

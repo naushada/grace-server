@@ -914,45 +914,34 @@ The topic doubles as the routing key.  `mqtt-vpn-server` calls
 `ip_pool::find_channel(topic)` to look up the `openvpn_peer` that owns
 that virtual IP, then injects the payload as a TCP/IP packet into the tunnel.
 
-### 15.4 Forwarding rule in mqtt-vpn-client
+### 15.4 Forwarding in mqtt-vpn-client — socat proxy
 
-After `tun0` comes up the client runs:
-
-```bash
-# net.ipv4.ip_forward=1 is set via docker-compose sysctls: at container start
-# (sysctl -w is not usable inside a container — /proc/sys is read-only).
-
-# Create the nat table and hooks (idempotent — nft ignores duplicates)
-nft add table ip nat
-nft add chain ip nat prerouting  "{ type nat hook prerouting  priority dstnat; }"
-nft add chain ip nat postrouting "{ type nat hook postrouting priority srcnat; }"
-
-# Redirect gNMI traffic arriving on the virtual IP to gnmi-server-svc
-nft add rule ip nat prerouting  ip daddr 10.8.0.3 tcp dport 58989 dnat to 172.21.0.5:58989
-
-# Masquerade so gnmi-server-svc sees mqtt-vpn-client as the source
-nft add rule ip nat postrouting oifname eth1 masquerade
-```
-
-Verify the ruleset inside the container:
-
-```bash
-docker exec docs-mqtt-vpn-client-1 nft list ruleset
-```
-
-The virtual IP is extracted from the Lua status file using `grep` — the
-`lua5.4` interpreter is not in the runtime image (only `liblua5.4-0` is):
+After `tun0` comes up, the entrypoint starts a `socat` userspace proxy that
+listens on the virtual IP (assigned by the VPN server) and forwards to
+`gnmi-server-svc` on `app-net`:
 
 ```bash
 VIP=$(grep 'service_ip' /run/vpn_status.lua | grep -oE '[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+')
+socat TCP-LISTEN:58989,bind=${VIP},reuseaddr,fork TCP:172.21.0.5:58989 &
 ```
 
-IP forwarding is enabled via the docker-compose `sysctls:` key (applied at
-container creation, before any process runs):
+`socat` runs in userspace — no kernel NAT modules (`nf_tables`, `nf_nat`,
+`nf_conntrack`) required.  This makes it portable across Docker Desktop
+(Mac/Windows) and Linux hosts where those modules may not be loaded.
 
-```yaml
-sysctls:
-  - net.ipv4.ip_forward=1
+Why `socat` instead of nftables DNAT:
+- nftables NAT requires `nf_tables`/`nft_nat`/`nf_conntrack` kernel modules
+  which are not guaranteed in container environments
+- `socat` is a plain TCP proxy; it needs only a listening socket, which any
+  unprivileged process can open on ports > 1023
+
+The `bind=${VIP}` flag makes socat listen **only** on the virtual IP so it
+doesn't conflict with other services on the container's `eth0`.
+
+Verify the proxy is running:
+
+```bash
+docker exec docs-mqtt-vpn-client-1 ss -tlnp | grep 58989
 ```
 
 ### 15.5 Starting the MQTT-based stack
@@ -966,7 +955,7 @@ Start order enforced by `depends_on`:
 ```
 mosquitto (healthy)
     └─► mqtt-vpn-server (healthy, subscribes to mosquitto)
-            └─► mqtt-vpn-client (tunnel up, nftables DNAT rule installed)
+            └─► mqtt-vpn-client (tunnel up, socat proxy on virtual-IP:58989)
                     └─► gnmi-client-svc (starts publishing)
 ```
 
