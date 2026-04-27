@@ -879,7 +879,7 @@ routes the message through the correct tunnel peer based on the MQTT topic.
                                              │  tun0: 10.8.0.3      │
                                              │  eth1: 172.21.0.3    │
                                              │                      │
-                                             │  iptables DNAT:      │
+                                             │  nftables DNAT:      │
                                              │  10.8.0.3:58989      │
                                              │    → 172.21.0.5:58989│
                                              └──────────┬───────────┘
@@ -958,7 +958,7 @@ Start order enforced by `depends_on`:
 ```
 mosquitto (healthy)
     └─► mqtt-vpn-server (healthy, subscribes to mosquitto)
-            └─► mqtt-vpn-client (tunnel up, iptables rule installed)
+            └─► mqtt-vpn-client (tunnel up, nftables DNAT rule installed)
                     └─► gnmi-client-svc (starts publishing)
 ```
 
