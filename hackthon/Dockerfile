@@ -65,7 +65,7 @@ RUN apt-get update && apt-get install -y \
     tcpdump \
     libmosquitto1 \
     mosquitto-clients \
-    iptables \
+    nftables \
   && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app

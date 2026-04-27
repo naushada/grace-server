@@ -448,9 +448,11 @@ services:
         VIP=$$(lua5.4 -e "local t=dofile('/run/vpn_status.lua'); print(t.vpn_status.service_ip)")
         echo "[mqtt-vpn-client] tunnel up, virtual IP=$$VIP — installing DNAT rule"
         sysctl -w net.ipv4.ip_forward=1
-        iptables -t nat -A PREROUTING  -d $${VIP} -p tcp --dport 58989 \
-                 -j DNAT --to-destination 172.21.0.5:58989
-        iptables -t nat -A POSTROUTING -o eth1 -j MASQUERADE
+        nft add table ip nat
+        nft add chain ip nat prerouting  '{ type nat hook prerouting  priority dstnat; }'
+        nft add chain ip nat postrouting '{ type nat hook postrouting priority srcnat; }'
+        nft add rule  ip nat prerouting  ip daddr $${VIP} tcp dport 58989 dnat to 172.21.0.5:58989
+        nft add rule  ip nat postrouting oifname eth1 masquerade
         wait $${APP_PID}
     networks:
       vpn-net:

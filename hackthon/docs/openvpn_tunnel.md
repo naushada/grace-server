@@ -922,13 +922,22 @@ After `tun0` comes up the client runs:
 # Enable IP forwarding in the kernel
 sysctl -w net.ipv4.ip_forward=1
 
+# Create the nat table and hooks (idempotent — nft ignores duplicates)
+nft add table ip nat
+nft add chain ip nat prerouting  '{ type nat hook prerouting  priority dstnat; }'
+nft add chain ip nat postrouting '{ type nat hook postrouting priority srcnat; }'
+
 # Redirect gNMI traffic arriving on the virtual IP to gnmi-server-svc
-iptables -t nat -A PREROUTING \
-  -d 10.8.0.3 -p tcp --dport 58989 \
-  -j DNAT --to-destination 172.21.0.5:58989
+nft add rule ip nat prerouting  ip daddr 10.8.0.3 tcp dport 58989 dnat to 172.21.0.5:58989
 
 # Masquerade so gnmi-server-svc sees mqtt-vpn-client as the source
-iptables -t nat -A POSTROUTING -o eth1 -j MASQUERADE
+nft add rule ip nat postrouting oifname eth1 masquerade
+```
+
+Verify the ruleset inside the container:
+
+```bash
+docker exec docs-mqtt-vpn-client-1 nft list ruleset
 ```
 
 The virtual IP (`10.8.0.3`) is read from the Lua status file written by
