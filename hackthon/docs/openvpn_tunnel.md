@@ -919,13 +919,13 @@ that virtual IP, then injects the payload as a TCP/IP packet into the tunnel.
 After `tun0` comes up the client runs:
 
 ```bash
-# Enable IP forwarding in the kernel
-sysctl -w net.ipv4.ip_forward=1
+# net.ipv4.ip_forward=1 is set via docker-compose sysctls: at container start
+# (sysctl -w is not usable inside a container — /proc/sys is read-only).
 
 # Create the nat table and hooks (idempotent — nft ignores duplicates)
 nft add table ip nat
-nft add chain ip nat prerouting  '{ type nat hook prerouting  priority dstnat; }'
-nft add chain ip nat postrouting '{ type nat hook postrouting priority srcnat; }'
+nft add chain ip nat prerouting  "{ type nat hook prerouting  priority dstnat; }"
+nft add chain ip nat postrouting "{ type nat hook postrouting priority srcnat; }"
 
 # Redirect gNMI traffic arriving on the virtual IP to gnmi-server-svc
 nft add rule ip nat prerouting  ip daddr 10.8.0.3 tcp dport 58989 dnat to 172.21.0.5:58989
@@ -940,11 +940,19 @@ Verify the ruleset inside the container:
 docker exec docs-mqtt-vpn-client-1 nft list ruleset
 ```
 
-The virtual IP (`10.8.0.3`) is read from the Lua status file written by
-the VPN client after `IP_ASSIGN` is processed:
+The virtual IP is extracted from the Lua status file using `grep` — the
+`lua5.4` interpreter is not in the runtime image (only `liblua5.4-0` is):
 
 ```bash
-lua5.4 -e "local t=dofile('/run/vpn_status.lua'); print(t.vpn_status.service_ip)"
+VIP=$(grep 'service_ip' /run/vpn_status.lua | grep -oE '[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+')
+```
+
+IP forwarding is enabled via the docker-compose `sysctls:` key (applied at
+container creation, before any process runs):
+
+```yaml
+sysctls:
+  - net.ipv4.ip_forward=1
 ```
 
 ### 15.5 Starting the MQTT-based stack
