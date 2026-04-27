@@ -79,21 +79,82 @@ openvpn_server::openvpn_server(const std::string   &host,
                                  const tls_config    &tls,
                                  const std::string   &server_ip,
                                  const std::string   &netmask,
-                                 const gnmi_push_cfg &gnmi_push)
+                                 const gnmi_push_cfg &gnmi_push,
+                                 const mqtt_sub_cfg  &mqtt_sub)
     : evt_io(host, port, tls.build_server_ctx(), listener_tag{}),
       m_pool(pool_start, pool_end), m_netmask(netmask),
       m_gnmi_push(gnmi_push) {
   std::cout << "[openvpn_server] " << host << ":" << port
             << " pool=" << pool_start << "–" << pool_end
             << " tls=" << (tls.enabled ? "ON" : "OFF")
-            << " gnmi-push=" << (gnmi_push.enabled ? "ON" : "OFF") << '\n';
+            << " gnmi-push=" << (gnmi_push.enabled ? "ON" : "OFF")
+            << " mqtt=" << (mqtt_sub.enabled ? "ON" : "OFF") << '\n';
   open_server_tun(server_ip);
+  if (mqtt_sub.enabled)
+    setup_mqtt(mqtt_sub);
 }
 
 openvpn_server::~openvpn_server() {
+  if (m_mqtt_poll_timer) { event_free(m_mqtt_poll_timer); m_mqtt_poll_timer = nullptr; }
+  if (m_mosq) {
+    mosquitto_disconnect(m_mosq);
+    mosquitto_destroy(m_mosq);
+    mosquitto_lib_cleanup();
+    m_mosq = nullptr;
+  }
   m_server_tun_io.reset();
   if (m_server_tun_fd >= 0) ::close(m_server_tun_fd);
   m_peers.clear();
+}
+
+// ---------------------------------------------------------------------------
+// MQTT subscriber — receives gNMI requests and forwards into the VPN tunnel
+// ---------------------------------------------------------------------------
+
+void openvpn_server::on_mqtt_message(struct mosquitto * /*mosq*/, void *userdata,
+                                      const struct mosquitto_message *msg) {
+  if (!msg || !msg->payload || msg->payloadlen <= 0) return;
+  auto *self    = static_cast<openvpn_server *>(userdata);
+  const std::string topic(msg->topic);
+  const std::string payload(static_cast<const char *>(msg->payload),
+                             static_cast<std::size_t>(msg->payloadlen));
+  std::cout << "[openvpn_server] MQTT ← topic=" << topic
+            << " payload=" << payload.size() << "B"
+            << " → push_async to " << topic << ":" << self->m_mqtt_gnmi_port << '\n';
+  gnmi_client::push_async(topic, self->m_mqtt_gnmi_port,
+                           "/gnmi.gNMI/Get", payload, {});
+}
+
+void openvpn_server::mqtt_poll_cb(evutil_socket_t, short, void *arg) {
+  auto *self = static_cast<openvpn_server *>(arg);
+  mosquitto_loop(self->m_mosq, 0, 1);
+  const struct timeval tv{0, 100'000}; // re-arm every 100 ms
+  evtimer_add(self->m_mqtt_poll_timer, &tv);
+}
+
+void openvpn_server::setup_mqtt(const mqtt_sub_cfg &cfg) {
+  mosquitto_lib_init();
+  m_mqtt_gnmi_port = cfg.gnmi_port;
+  m_mosq = mosquitto_new("vpn-server", true, this);
+  if (!m_mosq) {
+    std::cerr << "[openvpn_server] mosquitto_new failed\n";
+    return;
+  }
+  mosquitto_message_callback_set(m_mosq, on_mqtt_message);
+  const int rc = mosquitto_connect(m_mosq, cfg.host.c_str(), cfg.port, 60);
+  if (rc != MOSQ_ERR_SUCCESS) {
+    std::cerr << "[openvpn_server] MQTT connect to " << cfg.host << ":" << cfg.port
+              << " failed: " << mosquitto_strerror(rc) << '\n';
+    mosquitto_destroy(m_mosq);
+    m_mosq = nullptr;
+    return;
+  }
+  mosquitto_subscribe(m_mosq, nullptr, "#", 0);
+  std::cout << "[openvpn_server] MQTT subscribed to # on "
+            << cfg.host << ":" << cfg.port << '\n';
+  m_mqtt_poll_timer = evtimer_new(evt_base::instance().get(), mqtt_poll_cb, this);
+  const struct timeval tv{0, 100'000};
+  evtimer_add(m_mqtt_poll_timer, &tv);
 }
 
 // Context block passed to gnmi_push_cb via evtimer_new void* arg.

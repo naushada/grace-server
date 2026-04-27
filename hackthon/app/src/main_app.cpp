@@ -11,6 +11,7 @@
 #include "tls_config.hpp"
 
 #include "gnmi/gnmi.pb.h"
+#include <mosquitto.h>
 
 #include <iomanip>
 #include <cstdint>
@@ -44,6 +45,35 @@ static uint16_t get_port_flag(int argc, const char *argv[],
 // ---------------------------------------------------------------------------
 // Usage
 // ---------------------------------------------------------------------------
+
+// ---------------------------------------------------------------------------
+// gnmi-mqtt-client helpers
+// ---------------------------------------------------------------------------
+
+struct gnmi_pub_ctx {
+  struct mosquitto *mosq;
+  std::string       topic;
+  std::string       payload;
+  int               interval_s;
+  struct event     *timer;
+};
+
+// Timer callback: publishes the gNMI proto to MQTT then re-arms itself.
+static void gnmi_pub_cb(evutil_socket_t, short, void *arg) {
+  auto *c = static_cast<gnmi_pub_ctx *>(arg);
+  mosquitto_loop(c->mosq, 0, 1);
+  const int rc = mosquitto_publish(c->mosq, nullptr, c->topic.c_str(),
+                                    static_cast<int>(c->payload.size()),
+                                    c->payload.data(), 0, false);
+  if (rc == MOSQ_ERR_SUCCESS)
+    std::cout << "[gnmi-mqtt-client] published " << c->payload.size()
+              << "B → topic=" << c->topic << '\n';
+  else
+    std::cerr << "[gnmi-mqtt-client] publish error: "
+              << mosquitto_strerror(rc) << '\n';
+  const struct timeval tv{c->interval_s, 0};
+  evtimer_add(c->timer, &tv);
+}
 
 static void print_usage(const char *prog) {
   std::cerr
@@ -85,7 +115,21 @@ static void print_usage(const char *prog) {
     << "    --gnmi-cert/--gnmi-key/--gnmi-ca  PEM files for gNMI TLS\n"
     << "    --gnmi-push=true         Push gNMI Get to each client after tunnel up\n"
     << "    --gnmi-port=<port>       Client gNMI port to push to  (default: 58989)\n"
-    << "    --gnmi-push-delay=<s>    Seconds to wait before push (default: 2)\n";
+    << "    --gnmi-push-delay=<s>    Seconds to wait before push (default: 2)\n"
+    << "\n"
+    << "  " << prog << " --mode=gnmi-mqtt-client [options]\n"
+    << "       Publishes a gNMI GetRequest protobuf to an MQTT broker.\n"
+    << "       topic   = --mqtt-topic (the target client's virtual IP)\n"
+    << "       payload = serialised gnmi.GetRequest proto bytes\n"
+    << "       The openvpn_server (--mqtt-host) subscribes, forwards the\n"
+    << "       request through the VPN tunnel, and the client's nftables\n"
+    << "       DNAT rule delivers it to gnmi-server-svc.\n"
+    << "\n"
+    << "  gnmi-mqtt-client options:\n"
+    << "    --mqtt-host=<host>       MQTT broker address       (default: localhost)\n"
+    << "    --mqtt-port=<port>       MQTT broker port          (default: 1883)\n"
+    << "    --mqtt-topic=<ip>        Target client virtual IP  (required)\n"
+    << "    --interval=<s>           Publish interval seconds  (default: 10)\n";
 }
 
 // ---------------------------------------------------------------------------
@@ -145,6 +189,61 @@ int main(int argc, const char *argv[]) {
   std::cout << std::unitbuf;
 
   const std::string mode = get_flag(argc, argv, "mode", "server");
+
+  // ── gnmi-mqtt-client ─────────────────────────────────────────────────────
+  // Minimal flow: connect to MQTT broker, publish gNMI GetRequest repeatedly.
+  // Handled before the shared TLS/fs_app setup used by server/client modes.
+  if (mode == "gnmi-mqtt-client") {
+    const std::string mqtt_host  = get_flag(argc, argv, "mqtt-host", "localhost");
+    const uint16_t    mqtt_port  = get_port_flag(argc, argv, "mqtt-port", 1883);
+    const std::string mqtt_topic = get_flag(argc, argv, "mqtt-topic", "");
+    const int         interval_s = std::stoi(get_flag(argc, argv, "interval", "10"));
+
+    if (mqtt_topic.empty()) {
+      std::cerr << "[main] --mqtt-topic is required for gnmi-mqtt-client\n";
+      return 1;
+    }
+    std::cout << "[main] mode=gnmi-mqtt-client mqtt=" << mqtt_host
+              << ":" << mqtt_port << " topic=" << mqtt_topic
+              << " interval=" << interval_s << "s\n";
+
+    gnmi::GetRequest req;
+    req.mutable_prefix()->set_target("VIEWER");
+    req.add_path()->add_elem()->set_name("interfaces");
+    req.set_encoding(gnmi::JSON);
+    std::string req_pb;
+    req.SerializeToString(&req_pb);
+
+    mosquitto_lib_init();
+    struct mosquitto *mosq = mosquitto_new("gnmi-client-svc", true, nullptr);
+    if (!mosq) {
+      std::cerr << "[main] mosquitto_new failed\n";
+      mosquitto_lib_cleanup();
+      return 1;
+    }
+    const int rc = mosquitto_connect(mosq, mqtt_host.c_str(), mqtt_port, 60);
+    if (rc != MOSQ_ERR_SUCCESS) {
+      std::cerr << "[main] MQTT connect to " << mqtt_host << ":" << mqtt_port
+                << " failed: " << mosquitto_strerror(rc) << '\n';
+      mosquitto_destroy(mosq);
+      mosquitto_lib_cleanup();
+      return 1;
+    }
+
+    auto *ctx    = new gnmi_pub_ctx{mosq, mqtt_topic, req_pb, interval_s, nullptr};
+    ctx->timer   = evtimer_new(evt_base::instance().get(), gnmi_pub_cb, ctx);
+    const struct timeval tv{0, 0}; // fire immediately on first tick
+    evtimer_add(ctx->timer, &tv);
+
+    run_evt_loop{}();
+
+    event_free(ctx->timer);
+    delete ctx;
+    mosquitto_disconnect(mosq);
+    mosquitto_destroy(mosq);
+    mosquitto_lib_cleanup();
+    return 0;
+  }
 
   if (mode != "server" && mode != "client") {
     std::cerr << "[main] unknown mode '" << mode << "'\n";
@@ -241,15 +340,24 @@ int main(int argc, const char *argv[]) {
       req.SerializeToString(&gnmi_push.request_pb);
     }
 
+    // Optional MQTT subscriber: receives gNMI requests from gnmi-client-svc
+    // and routes them into the VPN tunnel via push_async.
+    mqtt_sub_cfg mqtt_sub;
+    mqtt_sub.enabled   = !get_flag(argc, argv, "mqtt-host", "").empty();
+    mqtt_sub.host      = get_flag(argc, argv, "mqtt-host", "localhost");
+    mqtt_sub.port      = get_port_flag(argc, argv, "mqtt-port", 1883);
+    mqtt_sub.gnmi_port = get_port_flag(argc, argv, "gnmi-port", 58989);
+
     std::cout << "[main] mode=server tls=" << (tls.enabled ? "ON" : "OFF")
               << " gnmi-tls=" << (gnmi_tls.enabled ? "ON" : "OFF")
               << " gnmi-push=" << (gnmi_push.enabled ? "ON" : "OFF")
+              << " mqtt=" << (mqtt_sub.enabled ? "ON" : "OFF")
               << " pool=" << pool_start << "–" << pool_end << '\n';
 
     // svc_module + vpn must stay in scope for the entire event loop.
     server svc_module("0.0.0.0", 58989, gnmi_tls);
     openvpn_server vpn("0.0.0.0", 1194, pool_start, pool_end, tls,
-                       server_ip, netmask, gnmi_push);
+                       server_ip, netmask, gnmi_push, mqtt_sub);
 
     run_evt_loop{}();
   }

@@ -965,28 +965,27 @@ mosquitto (healthy)
 `gnmi-server-svc` starts in parallel with the VPN services since it has
 no dependency on the tunnel — it just listens on `app-net`.
 
-### 15.6 Planned C++ integration points
-
-The compose file documents the intended design.  Two new flags need to be
-wired into the C++ app before the MQTT relay is fully functional:
+### 15.6 C++ integration — how the flags work
 
 | Flag | Where | What it does |
 |------|-------|--------------|
-| `--mqtt-host` / `--mqtt-port` | `openvpn_server` | On tunnel-ready, call `mosquitto_subscribe(client, "#")`. In the message callback, call `ip_pool::find_channel(topic)` and `openvpn_peer::forward_data(payload)`. |
-| `--mode=gnmi-mqtt-client` | `main_app` | Publish a serialised `gnmi.GetRequest` to the MQTT broker using `mosquitto_publish(client, topic, payload)`. |
+| `--mqtt-host` / `--mqtt-port` | `openvpn_server` | Connects to the MQTT broker and subscribes to `#`. Each arriving message calls `gnmi_client::push_async(topic, gnmi_port, ...)` which routes the request through the VPN tunnel to the peer that owns that virtual IP. |
+| `--mode=gnmi-mqtt-client` | `main_app` | Connects to the MQTT broker and publishes a serialised `gnmi.GetRequest` to `--mqtt-topic` every `--interval` seconds. |
 
-Both use `libmosquitto` (already added to the build and runtime images).
-`mosquitto_clients` in the runtime image (`mosquitto_pub` / `mosquitto_sub`)
-can be used to test the broker integration before the C++ code is wired in:
+Both use `libmosquitto`.  The mosquitto event loop is driven by a 100 ms
+libevent timer (`mosquitto_loop`) so it integrates cleanly with the shared
+`evt_base` without blocking.
+
+Test the broker directly with the CLI tools shipped in the runtime image:
 
 ```bash
-# Verify the broker is reachable and mqtt-vpn-server is subscribed
-docker exec docs-mosquitto-1 \
-  mosquitto_pub -h localhost -t "10.8.0.3" -m "hello" -q 0
-
 # Watch what mqtt-vpn-server receives
 docker exec docs-mqtt-vpn-server-1 \
   mosquitto_sub -h mosquitto -t "#" -v
+
+# Manually inject a raw message
+docker exec docs-mosquitto-1 \
+  mosquitto_pub -h localhost -t "10.8.0.3" -m "hello" -q 0
 ```
 
 ### 15.7 End-to-end packet flow with MQTT relay

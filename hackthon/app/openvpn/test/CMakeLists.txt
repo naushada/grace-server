@@ -43,6 +43,7 @@ add_executable(openvpn_tests
 
 target_link_libraries(openvpn_tests PRIVATE
   gnmi_proto
+  mosquitto
   GTest::gtest
   GTest::gtest_main
   Threads::Threads

@@ -81,6 +81,7 @@ add_executable(app ${SOURCES} ${OPENVPN_SOURCES})
 target_include_directories(app PRIVATE ${PROTO_GEN_DIR})
 target_link_libraries(app PUBLIC
   gnmi_proto
+  mosquitto
   pthread
   ssl
   crypto

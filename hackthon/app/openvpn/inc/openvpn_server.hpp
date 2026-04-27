@@ -5,9 +5,25 @@
 #include "gnmi_client.hpp"  // gnmi_push_cfg, gnmi_client::push_async
 #include "tls_config.hpp"
 
+#include <mosquitto.h>
+
 #include <set>
 #include <string>
 #include <unordered_map>
+
+// Configuration for the optional MQTT subscriber built into openvpn_server.
+// When enabled, the server subscribes to topic "#" on the broker; each
+// arriving message is treated as a gNMI request:
+//   topic   = destination virtual IP (e.g. "10.8.0.3")
+//   payload = raw gNMI protobuf bytes
+// The server calls gnmi_client::push_async(topic, gnmi_port, ...) which
+// routes the request through the VPN tunnel to the right peer.
+struct mqtt_sub_cfg {
+  bool        enabled{false};
+  std::string host{"localhost"};
+  uint16_t    port{1883};
+  uint16_t    gnmi_port{58989};
+};
 
 class openvpn_peer;
 
@@ -56,7 +72,8 @@ public:
                  const tls_config    &tls         = {},
                  const std::string   &server_ip   = "10.8.0.1",
                  const std::string   &netmask     = "255.255.255.0",
-                 const gnmi_push_cfg &gnmi_push   = {});
+                 const gnmi_push_cfg &gnmi_push   = {},
+                 const mqtt_sub_cfg  &mqtt_sub    = {});
 
   virtual ~openvpn_server();
 
@@ -75,8 +92,16 @@ private:
   // the running event loop because push_async is non-blocking.
   static void gnmi_push_cb(evutil_socket_t, short, void *ctx);
 
+  // MQTT callbacks — mosquitto calls these from mosquitto_loop().
+  // on_mqtt_message: topic = destination virtual IP, payload = gNMI proto bytes.
+  static void on_mqtt_message(struct mosquitto *, void *userdata,
+                               const struct mosquitto_message *msg);
+  // Periodic libevent timer that drives the mosquitto event loop.
+  static void mqtt_poll_cb(evutil_socket_t, short, void *arg);
+
   int  open_server_tun(const std::string &server_ip);
   void manage_client_route(const std::string &client_ip, bool add);
+  void setup_mqtt(const mqtt_sub_cfg &cfg);
 
   ip_pool                        m_pool;
   peer_map_t                     m_peers;
@@ -85,6 +110,9 @@ private:
   std::unique_ptr<server_tun_io> m_server_tun_io;
   int                            m_server_tun_fd{-1};
   gnmi_push_cfg                  m_gnmi_push;
+  struct mosquitto              *m_mosq{nullptr};
+  struct event                  *m_mqtt_poll_timer{nullptr};
+  uint16_t                       m_mqtt_gnmi_port{58989};
 };
 
 #endif // __openvpn_server_hpp__

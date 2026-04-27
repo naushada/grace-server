@@ -349,7 +349,7 @@ services:
     image: marvel:release
     command:
       - /app/app
-      - --mode=gnmi-mqtt-client      # planned: publish gNMI reqs via MQTT
+      - --mode=gnmi-mqtt-client
       - --mqtt-host=mosquitto
       - --mqtt-port=1883
       - --mqtt-topic=10.8.0.3        # virtual IP of target vpn-client
@@ -391,7 +391,7 @@ services:
       - --pool-start=10.8.0.2
       - --pool-end=10.8.0.254
       - --netmask=255.255.255.0
-      - --mqtt-host=mosquitto         # planned: subscribe to MQTT broker
+      - --mqtt-host=mosquitto
       - --mqtt-port=1883
       - --gnmi-push=true
       - --gnmi-port=58989
