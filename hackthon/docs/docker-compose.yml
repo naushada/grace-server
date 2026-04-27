@@ -21,6 +21,15 @@ networks:
       config:
         - subnet: 172.20.0.0/24
 
+  # Private network shared between mqtt-vpn-client and gnmi-server-svc.
+  # gnmi-server-svc is NOT reachable from vpn-net directly; only mqtt-vpn-client
+  # can talk to it after it installs the iptables DNAT forwarding rule.
+  app-net:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.21.0.0/24
+
 services:
 
   # ─────────────────────────────────────────────────────────────────────────
@@ -245,4 +254,212 @@ services:
         condition: service_healthy
     profiles:
       - tls
+    restart: unless-stopped
+
+  # ═════════════════════════════════════════════════════════════════════════
+  # MQTT-based gNMI architecture  (profile: mqtt)
+  #
+  # Data-flow overview:
+  #
+  #   gnmi-client-svc
+  #       │  publishes gNMI proto bytes
+  #       │  MQTT topic = virtual-IP of target vpn-client (e.g. "10.8.0.3")
+  #       ▼
+  #   mosquitto broker (172.20.0.11:1883)
+  #       │  fan-out to all subscribers
+  #       ▼
+  #   mqtt-vpn-server  (subscribes to "#")
+  #       │  topic → look up which tunnel peer owns that virtual-IP
+  #       │  wrap payload in IP packet destined for <topic>:58989
+  #       │  inject into VPN tunnel via openvpn_peer::forward_data()
+  #       ▼
+  #   VPN tunnel (TCP port 11194, 172.20.0.0/24)
+  #       │
+  #       ▼
+  #   mqtt-vpn-client  (tun0 = 10.8.0.3)
+  #       │  iptables DNAT rule (installed after tun0 comes up):
+  #       │    -d 10.8.0.3 -p tcp --dport 58989 → 172.21.0.5:58989
+  #       ▼
+  #   gnmi-server-svc  (172.21.0.5:58989, app-net only)
+  #       │  processes gNMI Get / Update, sends reply
+  #       ▼
+  #   (reply travels back through tunnel → mqtt-vpn-server → gnmi-client-svc)
+  # ═════════════════════════════════════════════════════════════════════════
+
+  # ─────────────────────────────────────────────────────────────────────────
+  # mosquitto — MQTT broker.  Profile: mqtt
+  #   Central pub/sub bus.  All MQTT traffic stays inside vpn-net (Docker
+  #   bridge) — no external exposure needed for the gNMI relay pattern.
+  # ─────────────────────────────────────────────────────────────────────────
+  mosquitto:
+    image: eclipse-mosquitto:2
+    volumes:
+      - ./mosquitto.conf:/mosquitto/config/mosquitto.conf:ro
+    ports:
+      - "1883:1883"
+    networks:
+      vpn-net:
+        ipv4_address: 172.20.0.11
+    healthcheck:
+      test: ["CMD", "mosquitto_pub", "-h", "localhost", "-t", "health", "-m", "ping", "-q", "0"]
+      interval: 3s
+      timeout: 3s
+      retries: 10
+    profiles:
+      - mqtt
+    restart: unless-stopped
+
+  # ─────────────────────────────────────────────────────────────────────────
+  # gnmi-server-svc — standalone gNMI server.  Profile: mqtt
+  #   Lives on app-net (172.21.0.0/24) — invisible to vpn-net.
+  #   Receives gNMI requests only after mqtt-vpn-client's iptables DNAT rule
+  #   redirects tunnel-borne traffic from 10.8.0.3:58989 to this service.
+  # ─────────────────────────────────────────────────────────────────────────
+  gnmi-server-svc:
+    image: marvel:release
+    command:
+      - /app/app
+      - --mode=server
+      - --server-ip=0.0.0.0
+      - --pool-start=10.8.0.2
+      - --pool-end=10.8.0.254
+      - --netmask=255.255.255.0
+    networks:
+      app-net:
+        ipv4_address: 172.21.0.5
+    profiles:
+      - mqtt
+    restart: unless-stopped
+
+  # ─────────────────────────────────────────────────────────────────────────
+  # gnmi-client-svc — gNMI client that publishes requests via MQTT.
+  #   Profile: mqtt
+  #   Publishes a serialised gnmi.GetRequest (or gnmi.SetRequest) proto to
+  #   the mosquitto broker.
+  #     topic   = virtual IP of the target vpn-client (e.g. "10.8.0.3")
+  #     payload = raw protobuf bytes of the gNMI request
+  #   mqtt-vpn-server subscribes to "#", reads the topic to identify the
+  #   destination peer, and injects the payload into the VPN tunnel.
+  #
+  #   Quick test with mosquitto_pub (ships in the marvel:release image):
+  #     docker exec docs-gnmi-client-svc-1 \
+  #       mosquitto_pub -h mosquitto -t "10.8.0.3" -f /tmp/gnmi_get.bin
+  # ─────────────────────────────────────────────────────────────────────────
+  gnmi-client-svc:
+    image: marvel:release
+    command:
+      - /app/app
+      - --mode=gnmi-mqtt-client      # planned: publish gNMI reqs via MQTT
+      - --mqtt-host=mosquitto
+      - --mqtt-port=1883
+      - --mqtt-topic=10.8.0.3        # virtual IP of target vpn-client
+      - --gnmi-port=58989
+    networks:
+      vpn-net:
+        ipv4_address: 172.20.0.12
+    depends_on:
+      mosquitto:
+        condition: service_healthy
+      mqtt-vpn-server:
+        condition: service_healthy
+      mqtt-vpn-client:
+        condition: service_started
+    profiles:
+      - mqtt
+    restart: unless-stopped
+
+  # ─────────────────────────────────────────────────────────────────────────
+  # mqtt-vpn-server — OpenVPN server + MQTT subscriber.  Profile: mqtt
+  #   Subscribes to topic "#" on mosquitto.
+  #   On each message:
+  #     topic   → destination virtual IP (e.g. "10.8.0.3")
+  #     payload → raw gNMI protobuf bytes
+  #   Looks up which openvpn_peer owns that virtual IP (ip_pool), wraps the
+  #   payload in a TCP/IP packet destined for <topic>:58989, and injects it
+  #   into the VPN tunnel via openvpn_peer::forward_data().
+  #
+  #   --mqtt-host / --mqtt-port: planned flags; wire up mosquitto_sub inside
+  #   openvpn_server::on_tunnel_ready() once the tunnel is established.
+  # ─────────────────────────────────────────────────────────────────────────
+  mqtt-vpn-server:
+    image: marvel:release
+    <<: *tun-caps
+    command:
+      - /app/app
+      - --mode=server
+      - --server-ip=10.8.0.1
+      - --pool-start=10.8.0.2
+      - --pool-end=10.8.0.254
+      - --netmask=255.255.255.0
+      - --mqtt-host=mosquitto         # planned: subscribe to MQTT broker
+      - --mqtt-port=1883
+      - --gnmi-push=true
+      - --gnmi-port=58989
+      - --gnmi-push-delay=2
+    ports:
+      - "11194:1194"     # VPN tunnel (offset to avoid clash with vpn-server)
+      - "58991:58989"    # gNMI gRPC
+    networks:
+      vpn-net:
+        ipv4_address: 172.20.0.13
+    depends_on:
+      mosquitto:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "bash", "-c", "grep -q ':04AA' /proc/net/tcp"]
+      interval: 2s
+      timeout: 2s
+      retries: 15
+      start_period: 3s
+    profiles:
+      - mqtt
+    restart: unless-stopped
+
+  # ─────────────────────────────────────────────────────────────────────────
+  # mqtt-vpn-client — OpenVPN client + iptables forwarding.  Profile: mqtt
+  #   Connects to mqtt-vpn-server:1194.  After the tunnel comes up and a
+  #   virtual IP is assigned (e.g. 10.8.0.3), installs an iptables DNAT rule:
+  #
+  #     PREROUTING:  -d 10.8.0.3 -p tcp --dport 58989
+  #                  → DNAT 172.21.0.5:58989  (gnmi-server-svc on app-net)
+  #     POSTROUTING: -o eth1 MASQUERADE       (for reply packets back to tun0)
+  #
+  #   This makes gNMI traffic that arrives from the VPN tunnel transparently
+  #   land on gnmi-server-svc without gnmi-server-svc needing any VPN config.
+  #   Sits on both vpn-net (for the tunnel) and app-net (to reach gnmi-server-svc).
+  # ─────────────────────────────────────────────────────────────────────────
+  mqtt-vpn-client:
+    image: marvel:release
+    user: root
+    cap_add:
+      - NET_ADMIN
+      - NET_RAW
+    devices:
+      - /dev/net/tun:/dev/net/tun
+    entrypoint: ["/bin/bash", "-c"]
+    command:
+      - |
+        /app/app --mode=client \
+                 --server=mqtt-vpn-server \
+                 --port=1194 \
+                 --status=/run/vpn_status.lua &
+        APP_PID=$$!
+        until ip link show tun0 2>/dev/null | grep -q UP; do sleep 1; done
+        VIP=$$(lua5.4 -e "local t=dofile('/run/vpn_status.lua'); print(t.vpn_status.service_ip)")
+        echo "[mqtt-vpn-client] tunnel up, virtual IP=$$VIP — installing DNAT rule"
+        sysctl -w net.ipv4.ip_forward=1
+        iptables -t nat -A PREROUTING  -d $${VIP} -p tcp --dport 58989 \
+                 -j DNAT --to-destination 172.21.0.5:58989
+        iptables -t nat -A POSTROUTING -o eth1 -j MASQUERADE
+        wait $${APP_PID}
+    networks:
+      vpn-net:
+        ipv4_address: 172.20.0.14
+      app-net:
+        ipv4_address: 172.21.0.3
+    depends_on:
+      mqtt-vpn-server:
+        condition: service_healthy
+    profiles:
+      - mqtt
     restart: unless-stopped

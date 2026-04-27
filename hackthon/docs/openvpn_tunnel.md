@@ -842,3 +842,172 @@ instead of `std::endl` sit silently in the buffer until it fills.
 `main()` calls `std::cout << std::unitbuf;` at startup to force per-write
 flushing for the entire process, so all `[openvpn_client]` / `[main]` lines
 appear immediately in `docker compose logs`.
+
+---
+
+## 15. MQTT-based gNMI client/server architecture
+
+### 15.1 Overview
+
+This architecture decouples the gNMI client from the VPN topology entirely.
+The gNMI client never needs to know a server IP or open a TCP connection —
+it just publishes a protobuf message.  The VPN server acts as a relay that
+routes the message through the correct tunnel peer based on the MQTT topic.
+
+```
+┌──────────────────┐   MQTT publish          ┌──────────────────────┐
+│  gnmi-client-svc │  topic="10.8.0.3"       │     mosquitto        │
+│  (172.20.0.12)   │ ──payload=gNMI proto──► │  broker 172.20.0.11  │
+└──────────────────┘                         └──────────┬───────────┘
+                                                        │ MQTT subscribe "#"
+                                                        ▼
+                                             ┌──────────────────────┐
+                                             │  mqtt-vpn-server     │
+                                             │  (172.20.0.13)       │
+                                             │  tun0 = 10.8.0.1     │
+                                             │                      │
+                                             │  topic → virtual-IP  │
+                                             │  → ip_pool lookup    │
+                                             │  → openvpn_peer      │
+                                             │    forward_data()    │
+                                             └──────────┬───────────┘
+                                                        │ VPN tunnel (TCP 11194)
+                                                        ▼
+                                             ┌──────────────────────┐
+                                             │  mqtt-vpn-client     │
+                                             │  eth0: 172.20.0.14   │
+                                             │  tun0: 10.8.0.3      │
+                                             │  eth1: 172.21.0.3    │
+                                             │                      │
+                                             │  iptables DNAT:      │
+                                             │  10.8.0.3:58989      │
+                                             │    → 172.21.0.5:58989│
+                                             └──────────┬───────────┘
+                                                        │ app-net (172.21.0.0/24)
+                                                        ▼
+                                             ┌──────────────────────┐
+                                             │  gnmi-server-svc     │
+                                             │  (172.21.0.5)        │
+                                             │  port 58989          │
+                                             └──────────────────────┘
+```
+
+### 15.2 Networks
+
+| Network   | Subnet           | Members                                              |
+|-----------|------------------|------------------------------------------------------|
+| `vpn-net` | 172.20.0.0/24    | mosquitto, mqtt-vpn-server, mqtt-vpn-client, gnmi-client-svc |
+| `app-net` | 172.21.0.0/24    | mqtt-vpn-client, gnmi-server-svc                     |
+
+`gnmi-server-svc` has no interface on `vpn-net` — it is reachable only
+after `mqtt-vpn-client`'s DNAT rule is in place.
+
+### 15.3 MQTT message format
+
+| Field   | Value |
+|---------|-------|
+| topic   | Virtual IP the VPN server assigned to the target client (e.g. `10.8.0.3`) |
+| payload | Raw protobuf bytes of a `gnmi.GetRequest` or `gnmi.SetRequest` |
+| QoS     | 0 (fire-and-forget) |
+
+The topic doubles as the routing key.  `mqtt-vpn-server` calls
+`ip_pool::find_channel(topic)` to look up the `openvpn_peer` that owns
+that virtual IP, then injects the payload as a TCP/IP packet into the tunnel.
+
+### 15.4 Forwarding rule in mqtt-vpn-client
+
+After `tun0` comes up the client runs:
+
+```bash
+# Enable IP forwarding in the kernel
+sysctl -w net.ipv4.ip_forward=1
+
+# Redirect gNMI traffic arriving on the virtual IP to gnmi-server-svc
+iptables -t nat -A PREROUTING \
+  -d 10.8.0.3 -p tcp --dport 58989 \
+  -j DNAT --to-destination 172.21.0.5:58989
+
+# Masquerade so gnmi-server-svc sees mqtt-vpn-client as the source
+iptables -t nat -A POSTROUTING -o eth1 -j MASQUERADE
+```
+
+The virtual IP (`10.8.0.3`) is read from the Lua status file written by
+the VPN client after `IP_ASSIGN` is processed:
+
+```bash
+lua5.4 -e "local t=dofile('/run/vpn_status.lua'); print(t.vpn_status.service_ip)"
+```
+
+### 15.5 Starting the MQTT-based stack
+
+```bash
+docker compose -f docs/docker-compose.yml --profile mqtt up
+```
+
+Start order enforced by `depends_on`:
+
+```
+mosquitto (healthy)
+    └─► mqtt-vpn-server (healthy, subscribes to mosquitto)
+            └─► mqtt-vpn-client (tunnel up, iptables rule installed)
+                    └─► gnmi-client-svc (starts publishing)
+```
+
+`gnmi-server-svc` starts in parallel with the VPN services since it has
+no dependency on the tunnel — it just listens on `app-net`.
+
+### 15.6 Planned C++ integration points
+
+The compose file documents the intended design.  Two new flags need to be
+wired into the C++ app before the MQTT relay is fully functional:
+
+| Flag | Where | What it does |
+|------|-------|--------------|
+| `--mqtt-host` / `--mqtt-port` | `openvpn_server` | On tunnel-ready, call `mosquitto_subscribe(client, "#")`. In the message callback, call `ip_pool::find_channel(topic)` and `openvpn_peer::forward_data(payload)`. |
+| `--mode=gnmi-mqtt-client` | `main_app` | Publish a serialised `gnmi.GetRequest` to the MQTT broker using `mosquitto_publish(client, topic, payload)`. |
+
+Both use `libmosquitto` (already added to the build and runtime images).
+`mosquitto_clients` in the runtime image (`mosquitto_pub` / `mosquitto_sub`)
+can be used to test the broker integration before the C++ code is wired in:
+
+```bash
+# Verify the broker is reachable and mqtt-vpn-server is subscribed
+docker exec docs-mosquitto-1 \
+  mosquitto_pub -h localhost -t "10.8.0.3" -m "hello" -q 0
+
+# Watch what mqtt-vpn-server receives
+docker exec docs-mqtt-vpn-server-1 \
+  mosquitto_sub -h mosquitto -t "#" -v
+```
+
+### 15.7 End-to-end packet flow with MQTT relay
+
+```
+gnmi-client-svc
+  mosquitto_publish(topic="10.8.0.3", payload=GetRequest{...})
+        │
+        ▼
+  mosquitto broker
+        │  fan-out
+        ▼
+  mqtt-vpn-server  on_mqtt_message(topic="10.8.0.3", payload)
+    ip_pool::find_channel("10.8.0.3") → peer fd
+    build IP packet: src=10.8.0.1 dst=10.8.0.3 dport=58989 data=payload
+    openvpn_peer::forward_data(raw_ip_packet)
+    wrap as [0x02][len][IP packet] → bufferevent → TCP 11194
+        │
+        ▼
+  mqtt-vpn-client  openvpn_client::handle_read() → TYPE_DATA
+    write(tun0_fd, raw_ip_packet)
+        │
+        ▼  kernel: dst=10.8.0.3, PREROUTING DNAT → 172.21.0.5:58989
+        ▼
+  gnmi-server-svc  connected_client::handle_read()
+    grpc_session::recv() → dispatch GetRequest
+    build GetResponse, send back
+        │
+        ▼  reverse path: kernel POSTROUTING src-NAT → tun0 → tunnel → server
+        ▼
+  mqtt-vpn-server  (receives reply via tunnel, can forward back to MQTT or
+                    deliver directly to gnmi-client-svc on vpn-net)
+```
