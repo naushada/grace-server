@@ -228,7 +228,7 @@ protected:
   bool has_tls() const noexcept { return m_ssl_ctx != nullptr; }
 
 public:
-  ~evt_io() {
+  virtual ~evt_io() {
     if (m_raw_write_ev) { event_free(m_raw_write_ev); m_raw_write_ev = nullptr; }
     if (m_raw_read_ev)  { event_free(m_raw_read_ev);  m_raw_read_ev  = nullptr; }
     if (m_buffer_evt_p) m_buffer_evt_p.reset(nullptr);
