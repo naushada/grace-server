@@ -1,22 +1,21 @@
 # gNMI over MQTT–VPN Flow
 
 This document describes how a gNMI operation typed at the CLI reaches a gNMI
-server that sits behind an OpenVPN tunnel, and explains the current **response
-gap** (why the CLI does not yet receive the gNMI response).
+server that sits behind an OpenVPN tunnel, and how the response travels back.
 
 ---
 
 ## Architecture Overview
 
-Three long-lived processes must be running simultaneously:
+Five long-lived processes must be running simultaneously:
 
 | Process | Binary / mode | Role |
 |---------|--------------|------|
-| **CLI** | `cli_app` | readline REPL; builds gNMI proto, publishes to MQTT |
-| **Relay** | `grace-server --mode=gnmi-mqtt-client` | bridges `cli/#` → `fwd/#` on the MQTT broker |
-| **VPN server** | `grace-server --mode=server` (with `--mqtt-host`) | subscribes `fwd/#`, injects gNMI request into VPN tunnel |
+| **CLI** | `cli_app` | readline REPL; builds gNMI proto, publishes request, waits for response |
+| **Relay** | `grace-server --mode=gnmi-mqtt-client` | bridges `cli/#` → `fwd/#` and `resp/#` → `cli_resp/#` |
+| **VPN server** | `grace-server --mode=server --mqtt-host=...` | subscribes `fwd/#`, injects request into VPN tunnel, publishes response to `resp/<vip>` |
 | **VPN client** | `grace-server --mode=client` | receives framed request; nftables DNAT → local gNMI server |
-| **gNMI server** | `grace-server --mode=gnmi-server` | handles the RPC and returns a response |
+| **gNMI server** | `grace-server --mode=gnmi-server` | handles the RPC, returns SetResponse / GetResponse |
 
 ---
 
@@ -30,21 +29,23 @@ Three long-lived processes must be running simultaneously:
 │    1. build gnmi::SetRequest proto                                  │
 │    2. SerializeToString() → req_pb                                  │
 │    3. mqtt_gnmi_publish(<vip>, "/gnmi.gNMI/Set", req_pb)            │
-│         payload = "/gnmi.gNMI/Set\0<proto_bytes>"                   │
-│         topic   = "cli/<vip>"                                       │
-│         transport: raw mosquitto_publish (g_mosq, blocking)         │
+│         a. subscribe to "cli_resp/<vip>"  (before publish)          │
+│         b. publish to  "cli/<vip>"                                  │
+│            payload = "/gnmi.gNMI/Set\0<proto_bytes>"                │
+│         c. poll mosquitto_loop() up to 5 s for response             │
 └───────────────────┬─────────────────────────────────────────────────┘
                     │  MQTT broker
                     ▼
 ┌─────────────────────────────────────────────────────────────────────┐
-│ Relay  (--mode=gnmi-mqtt-client)         main_app.cpp:202           │
+│ Relay  (--mode=gnmi-mqtt-client)         main_app.cpp               │
 │                                                                     │
-│  mqtt_io relay("broker", 1883, "gnmi-client-svc", relay_msg_cb)     │
+│  mqtt_io relay(..., relay_msg_cb)                                   │
 │  relay.subscribe("cli/#")                                           │
+│  relay.subscribe("resp/#")                                          │
 │                                                                     │
 │  relay_msg_cb:                                                      │
-│    topic "cli/<ip>" → fwd_topic = "fwd/<ip>"                        │
-│    mosquitto_publish(fwd_topic, same payload, ...)                  │
+│    "cli/<ip>"  → publish "fwd/<ip>"       (request direction)       │
+│    "resp/<ip>" → publish "cli_resp/<ip>"  (response direction)      │
 └───────────────────┬─────────────────────────────────────────────────┘
                     │  MQTT broker
                     ▼
@@ -56,8 +57,9 @@ Three long-lived processes must be running simultaneously:
 │  on_mqtt_message():                                                 │
 │    topic   "fwd/<vip>"  → dest_ip = <vip>                           │
 │    payload split on '\0': rpc_path | proto_bytes                    │
-│    gnmi_client::push_async(dest_ip, gnmi_port, rpc_path, proto_bytes)│
-│      → opens TCP connection to <vip>:58989 through VPN tunnel       │
+│    gnmi_client::push_async(dest_ip, gnmi_port, rpc_path,            │
+│                            proto_bytes, {}, response_lambda)        │
+│      → opens TCP to <vip>:58989 through VPN tunnel                  │
 │      → sends HTTP/2 POST /<rpc_path> with gRPC-framed proto         │
 └───────────────────┬─────────────────────────────────────────────────┘
                     │  OpenVPN tunnel  (tun0 ↔ tun0)
@@ -65,8 +67,8 @@ Three long-lived processes must be running simultaneously:
 ┌─────────────────────────────────────────────────────────────────────┐
 │ VPN client  (--mode=client)              openvpn_client.cpp         │
 │                                                                     │
-│  Receives TCP traffic destined for <vip>:58989 on its tun0.         │
-│  nftables DNAT rule: <vip>:58989 → 127.0.0.1:58989                  │
+│  Receives TCP traffic destined for <vip>:58989 on tun0.             │
+│  nftables DNAT: <vip>:58989 → 127.0.0.1:58989                       │
 └───────────────────┬─────────────────────────────────────────────────┘
                     │  loopback
                     ▼
@@ -82,9 +84,46 @@ Three long-lived processes must be running simultaneously:
 
 ---
 
-## Payload Wire Format
+## Response Flow (gNMI server → CLI)
 
-Every MQTT message in both `cli/<vip>` and `fwd/<vip>` uses the same layout:
+```
+┌─────────────────────────────────────────────────────────────────────┐
+│ gNMI server                                                         │
+│  Sends SetResponse / GetResponse over HTTP/2 connection.            │
+└───────────────────┬─────────────────────────────────────────────────┘
+                    │  HTTP/2 over VPN tunnel
+                    ▼
+┌─────────────────────────────────────────────────────────────────────┐
+│ VPN server  — gnmi_connection::capture_response()                   │
+│                                                                     │
+│  finish() called → response_lambda fires:                           │
+│    payload = rpc_path '\0' status '\0' grpc_message '\0' proto_bytes│
+│    m_mqtt_io->publish("resp/<vip>", payload)                        │
+└───────────────────┬─────────────────────────────────────────────────┘
+                    │  MQTT broker
+                    ▼
+┌─────────────────────────────────────────────────────────────────────┐
+│ Relay                                                               │
+│  Receives "resp/<vip>", republishes to "cli_resp/<vip>"             │
+└───────────────────┬─────────────────────────────────────────────────┘
+                    │  MQTT broker
+                    ▼
+┌─────────────────────────────────────────────────────────────────────┐
+│ CLI  — on_cli_response() callback                                   │
+│                                                                     │
+│  Parses: rpc_path '\0' status '\0' grpc_message '\0' proto_bytes    │
+│  print_mqtt_response():                                             │
+│    status == 0  → deserialise SetResponse/GetResponse, text-format  │
+│    status != 0  → print gRPC error status + message                 │
+│    status < 0   → print transport error (timeout, closed, etc.)     │
+└─────────────────────────────────────────────────────────────────────┘
+```
+
+---
+
+## Payload Wire Formats
+
+### Request  (`cli/<vip>` and `fwd/<vip>`)
 
 ```
 [ rpc_path ][ 0x00 ][ proto_bytes ]
@@ -92,23 +131,55 @@ Every MQTT message in both `cli/<vip>` and `fwd/<vip>` uses the same layout:
 
 | Field | Example | Notes |
 |-------|---------|-------|
-| `rpc_path` | `/gnmi.gNMI/Set` | Null-terminated ASCII string |
-| `0x00` | — | Separator byte |
-| `proto_bytes` | `<binary>` | Serialised protobuf (SetRequest / GetRequest) |
+| `rpc_path` | `/gnmi.gNMI/Set` | ASCII string, null-terminated |
+| `0x00` | — | Separator |
+| `proto_bytes` | `<binary>` | Serialised SetRequest / GetRequest |
 
-The relay passes this payload through **unchanged** — it only rewrites the
-MQTT topic.
+### Response  (`resp/<vip>` and `cli_resp/<vip>`)
+
+```
+[ rpc_path ][ 0x00 ][ status ][ 0x00 ][ grpc_message ][ 0x00 ][ proto_bytes ]
+```
+
+| Field | Example | Notes |
+|-------|---------|-------|
+| `rpc_path` | `/gnmi.gNMI/Set` | Echo of the request RPC path |
+| `0x00` | — | Separator |
+| `status` | `0` | gRPC status code as decimal ASCII; `-1` = transport error |
+| `0x00` | — | Separator |
+| `grpc_message` | `""` or `"permission denied"` | gRPC error message, may be empty |
+| `0x00` | — | Separator |
+| `proto_bytes` | `<binary>` | Serialised SetResponse / GetResponse (may contain `0x00`) |
+
+Only the first three `0x00` bytes are used as separators; `proto_bytes` is the
+remainder of the payload and passes through binary-safe.
 
 ---
 
 ## MQTT Topic Scheme
 
-| Direction | Topic pattern | Publisher | Subscriber |
-|-----------|--------------|-----------|------------|
-| CLI → relay | `cli/<vip>` | `cli_app` (g_mosq) | relay (`mqtt_io`) |
-| relay → VPN server | `fwd/<vip>` | relay (`mqtt_io`) | VPN server (`m_mqtt_io`) |
+| Direction | Topic | Publisher | Subscriber |
+|-----------|-------|-----------|------------|
+| CLI → relay | `cli/<vip>` | `cli_app` (g_mosq) | relay (mqtt_io) |
+| relay → VPN server | `fwd/<vip>` | relay (mqtt_io) | VPN server (m_mqtt_io) |
+| VPN server → relay | `resp/<vip>` | VPN server (m_mqtt_io) | relay (mqtt_io) |
+| relay → CLI | `cli_resp/<vip>` | relay (mqtt_io) | CLI (g_mosq) |
 
 `<vip>` is the **virtual IP** assigned to the target VPN client (e.g. `10.8.0.2`).
+It acts as the routing key across all four hops.
+
+---
+
+## `gnmi_connection` Completion Paths
+
+`finish()` is called exactly once per connection, guarded by `m_done`:
+
+| Path | Trigger | `grpc_status` |
+|------|---------|---------------|
+| Success | `capture_response()` — trailing HEADERS with `grpc-status` | `0` (or server-set code) |
+| Timeout | `handle_event()` — `BEV_EVENT_TIMEOUT` | `-1` |
+| Connection closed | `handle_close()` — `BEV_EVENT_EOF/ERROR` before response | `-1` |
+| Protocol error | `handle_read()` — nghttp2 returns negative | `-1` |
 
 ---
 
@@ -121,69 +192,63 @@ MQTT topic.
 | `gnmi_replace` | `gnmi::SetRequest` (replace[]) | `/gnmi.gNMI/Set` |
 | `gnmi_delete` | `gnmi::SetRequest` (delete[]) | `/gnmi.gNMI/Set` |
 
-### Example
+### Example session
 
 ```
-# In cli_app (MQTT_HOST and MQTT_PORT env vars must be set):
+# MQTT_HOST and MQTT_PORT must be set before starting cli_app
 Marvel> gnmi_update target=10.8.0.2 path=/interfaces/interface[name=eth0]/config value={"enabled":true}
-Marvel> gnmi_get    target=10.8.0.2 path=/interfaces/interface[name=eth0]/state/oper-status
+[mqtt] published 47B proto → topic=cli/10.8.0.2
+[gnmi_set] OK
+timestamp: 1234567890
+
+Marvel> gnmi_get target=10.8.0.2 path=/interfaces/interface[name=eth0]/state/oper-status
+[mqtt] published 38B proto → topic=cli/10.8.0.2
+[gnmi_get] OK
+notification {
+  update { path { elem { name: "oper-status" } } val { string_val: "UP" } }
+}
+
+# On error (gRPC or transport):
+Marvel> gnmi_update target=10.8.0.99 path=/foo value=bar
+[mqtt] published 22B proto → topic=cli/10.8.0.99
+[gnmi] response timeout (5s)
 ```
 
 ---
 
-## Current Limitation — No Response Path
-
-`gnmi_client::push_async` is **fire-and-forget**: the gNMI server sends a
-`SetResponse` / `GetResponse` back over the HTTP/2 connection opened by
-`push_async`, but that response is discarded — it is never published back to
-MQTT and never returned to the CLI.
+## Full Sequence Diagram
 
 ```
-gNMI server → SetResponse  ──►  push_async (gnmi_connection)
-                                        │
-                                     DROPPED  ← no MQTT publish, no callback
-```
-
-The CLI therefore receives no confirmation that the operation succeeded or
-failed.
-
-### What would be needed to close the loop
-
-1. **`push_async` response callback** — add a
-   `std::function<void(gnmi_client::response)>` parameter to `push_async`;
-   `gnmi_connection::handle_read` calls it when the response frame is complete.
-
-2. **VPN-server → MQTT publish** — in `on_mqtt_message`, pass a lambda that
-   publishes the response to `resp/<vip>` on the broker.
-
-3. **Relay forwarding** — relay subscribes to `resp/#` and bridges to
-   `cli_resp/<vip>`.
-
-4. **CLI subscription** — `cli_app` subscribes to `cli_resp/<client_id>` via
-   a second `mqtt_io` (or via the existing `g_mosq`), waits for a message, and
-   prints the decoded `SetResponse` / `GetResponse`.
-
----
-
-## Sequence Diagram
-
-```
-cli_app          MQTT broker       relay           vpn-server       vpn-client      gnmi-server
-   │                  │               │                 │                 │               │
-   │──publish─────────►               │                 │                 │               │
-   │  cli/<vip>       │               │                 │                 │               │
-   │                  │──deliver──────►                 │                 │               │
-   │                  │  cli/<vip>    │                 │                 │               │
-   │                  │◄──publish─────│                 │                 │               │
-   │                  │  fwd/<vip>    │                 │                 │               │
-   │                  │───deliver─────────────────────► │                 │               │
-   │                  │  fwd/<vip>    │                 │                 │               │
-   │                  │               │          push_async(<vip>)        │               │
-   │                  │               │                 │──TCP connect────────────────────►
-   │                  │               │                 │  (through VPN)  │               │
-   │                  │               │                 │──gRPC request───────────────────►
-   │                  │               │                 │                 │               │
-   │                  │               │                 │◄──SetResponse────────────────── │
-   │                  │               │                 │   (discarded)   │               │
-   │  (no response)   │               │                 │                 │               │
+cli_app        MQTT broker     relay          vpn-server      vpn-client     gnmi-server
+   │                │             │                │               │               │
+   │─subscribe──────►             │                │               │               │
+   │  cli_resp/<vip>│             │                │               │               │
+   │─publish────────►             │                │               │               │
+   │  cli/<vip>     │             │                │               │               │
+   │                │─deliver─────►                │               │               │
+   │                │  cli/<vip>  │                │               │               │
+   │                │◄─publish────│                │               │               │
+   │                │  fwd/<vip>  │                │               │               │
+   │                │─deliver───────────────────── ►               │               │
+   │                │  fwd/<vip>  │                │               │               │
+   │                │             │         push_async(<vip>, cb)  │               │
+   │                │             │                │─TCP connect───────────────────►
+   │                │             │                │  (VPN tunnel) │               │
+   │                │             │                │─gRPC POST─────────────────────►
+   │                │             │                │               │               │
+   │                │             │                │◄──SetResponse─────────────────│
+   │                │             │         finish() → cb fires    │               │
+   │                │◄─publish────────────────────-│               │               │
+   │                │  resp/<vip> │                │               │               │
+   │                │─deliver─────►                │               │               │
+   │                │  resp/<vip> │                │               │               │
+   │                │◄─publish────│                │               │               │
+   │                │ cli_resp/<vip>               │               │               │
+   │◄─deliver───────│             │                │               │               │
+   │  cli_resp/<vip>│             │                │               │               │
+   │                │             │                │               │               │
+   │ on_cli_response()            │                │               │               │
+   │ print_mqtt_response()        │                │               │               │
+   │─unsubscribe────►             │                │               │               │
+   │  cli_resp/<vip>│             │                │               │               │
 ```
