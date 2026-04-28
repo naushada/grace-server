@@ -17,6 +17,7 @@ std::int32_t server::handle_connect(const std::int32_t &channel,
               << " New client insersion for channel:" << channel << " failed"
               << std::endl;
   }
+  return res.second ? 0 : -1;
 }
 
 std::int32_t server::handle_close(const std::int32_t &channel) {

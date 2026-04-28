@@ -3,6 +3,7 @@
 
 #include "framework.hpp"
 #include "tls_config.hpp"
+#include <unordered_map>
 
 class connected_client;
 
