@@ -50,29 +50,33 @@ static uint16_t get_port_flag(int argc, const char *argv[],
 // gnmi-mqtt-client helpers
 // ---------------------------------------------------------------------------
 
-struct gnmi_pub_ctx {
+// Context for the MQTT relay poll timer (gnmi-mqtt-client mode).
+struct relay_ctx {
   struct mosquitto *mosq;
-  std::string       topic;
-  std::string       payload;
-  int               interval_s;
-  struct event     *timer;
+  struct event     *poll_timer{nullptr};
 };
 
-// Timer callback: publishes the gNMI proto to MQTT then re-arms itself.
-static void gnmi_pub_cb(evutil_socket_t, short, void *arg) {
-  auto *c = static_cast<gnmi_pub_ctx *>(arg);
+// Message callback: relays cli/<ip> → fwd/<ip>, payload unchanged.
+static void relay_msg_cb(struct mosquitto *mosq, void *,
+                          const struct mosquitto_message *msg) {
+  if (!msg || !msg->payload || msg->payloadlen <= 0) return;
+  std::string topic(msg->topic);
+  if (topic.size() <= 4 || topic.substr(0, 4) != "cli/") return;
+  const std::string fwd_topic = "fwd/" + topic.substr(4);
+  mosquitto_publish(mosq, nullptr, fwd_topic.c_str(),
+                    msg->payloadlen, msg->payload, 0, false);
+  // payload = rpc_path'\0'proto_bytes — log just the rpc_path for readability
+  std::cout << "[gnmi-client-svc] relay "
+            << std::string(static_cast<const char *>(msg->payload))
+            << " → " << topic.substr(4) << " (" << msg->payloadlen << "B)\n";
+}
+
+// 100 ms libevent timer: drives the mosquitto event loop and re-arms itself.
+static void relay_poll_cb(evutil_socket_t, short, void *arg) {
+  auto *c = static_cast<relay_ctx *>(arg);
   mosquitto_loop(c->mosq, 0, 1);
-  const int rc = mosquitto_publish(c->mosq, nullptr, c->topic.c_str(),
-                                    static_cast<int>(c->payload.size()),
-                                    c->payload.data(), 0, false);
-  if (rc == MOSQ_ERR_SUCCESS)
-    std::cout << "[gnmi-mqtt-client] published " << c->payload.size()
-              << "B → topic=" << c->topic << '\n';
-  else
-    std::cerr << "[gnmi-mqtt-client] publish error: "
-              << mosquitto_strerror(rc) << '\n';
-  const struct timeval tv{c->interval_s, 0};
-  evtimer_add(c->timer, &tv);
+  const struct timeval tv{0, 100'000};
+  evtimer_add(c->poll_timer, &tv);
 }
 
 static void print_usage(const char *prog) {
@@ -207,29 +211,10 @@ int main(int argc, const char *argv[]) {
     std::cout << "[main] mode=gnmi-mqtt-client mqtt=" << mqtt_host
               << ":" << mqtt_port << " sub=cli/# pub=fwd/<ip>\n";
 
-    struct relay_ctx { struct mosquitto *mosq; struct event *poll_timer; };
-
-    auto on_msg = [](struct mosquitto *mosq, void *, const struct mosquitto_message *msg) {
-      if (!msg || !msg->payload || msg->payloadlen <= 0) return;
-      // topic: cli/<ip>  → republish as fwd/<ip>
-      std::string topic(msg->topic);
-      if (topic.size() <= 4 || topic.substr(0, 4) != "cli/") return;
-      const std::string fwd_topic = "fwd/" + topic.substr(4);
-      mosquitto_publish(mosq, nullptr, fwd_topic.c_str(),
-                        msg->payloadlen, msg->payload, 0, false);
-      // extract ip for logging (topic suffix after "cli/")
-      const std::string ip = topic.substr(4);
-      // payload starts with rpc_path\0
-      const char *p = static_cast<const char *>(msg->payload);
-      const std::string rpc(p); // up to first '\0'
-      std::cout << "[gnmi-client-svc] relay " << rpc
-                << " → " << ip << " (" << msg->payloadlen << "B)\n";
-    };
-
     mosquitto_lib_init();
     struct mosquitto *mosq = mosquitto_new("gnmi-client-svc", true, nullptr);
     if (!mosq) { mosquitto_lib_cleanup(); return 1; }
-    mosquitto_message_callback_set(mosq, on_msg);
+    mosquitto_message_callback_set(mosq, relay_msg_cb);
     if (mosquitto_connect(mosq, mqtt_host.c_str(), mqtt_port, 60) != MOSQ_ERR_SUCCESS) {
       std::cerr << "[main] MQTT connect failed\n";
       mosquitto_destroy(mosq); mosquitto_lib_cleanup(); return 1;
@@ -237,14 +222,8 @@ int main(int argc, const char *argv[]) {
     mosquitto_subscribe(mosq, nullptr, "cli/#", 0);
     std::cout << "[gnmi-client-svc] subscribed to cli/#\n";
 
-    auto *rctx = new relay_ctx{mosq, nullptr};
-    rctx->poll_timer = evtimer_new(evt_base::instance().get(),
-      [](evutil_socket_t, short, void *arg) {
-        auto *c = static_cast<relay_ctx *>(arg);
-        mosquitto_loop(c->mosq, 0, 1);
-        const struct timeval tv{0, 100'000};
-        evtimer_add(c->poll_timer, &tv);
-      }, rctx);
+    auto *rctx = new relay_ctx{mosq};
+    rctx->poll_timer = evtimer_new(evt_base::instance().get(), relay_poll_cb, rctx);
     const struct timeval tv{0, 100'000};
     evtimer_add(rctx->poll_timer, &tv);
 
