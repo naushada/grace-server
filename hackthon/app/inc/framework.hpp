@@ -30,6 +30,10 @@ using ssl_ctx_ptr = std::unique_ptr<SSL_CTX, ssl_ctx_deleter>;
 // disambiguating it from the outbound-client constructor of the same arity.
 struct listener_tag {};
 
+// Tag for the raw-fd evt_io constructor — used by mqtt_io and similar classes
+// that manage their own socket I/O via a third-party library (no bufferevent).
+struct rawfd_tag {};
+
 extern "C" {
 // Client related callback
 void client_event_cb(struct bufferevent *bev, short events, void *ctx);
@@ -165,6 +169,14 @@ public:
     init_listener(host, port);
   }
 
+  // Raw-fd constructor: wraps an existing fd with raw libevent events instead
+  // of a bufferevent.  Used by mqtt_io to integrate library-managed sockets.
+  // EV_READ|EV_PERSIST is armed immediately; write events are disabled until
+  // raw_watch_write(true) is called.
+  // handle_read(fd, "", false) is dispatched on EV_READ.
+  // handle_write(fd)          is dispatched on EV_WRITE.
+  evt_io(evutil_socket_t fd, rawfd_tag);
+
   std::int32_t tx(const char *buffer, const size_t &len) {
     return bufferevent_write(m_buffer_evt_p.get(), (void *)buffer, len);
   }
@@ -182,6 +194,12 @@ public:
                                      const std::string &peer_host);
 
 protected:
+  // Enable or disable the EV_WRITE watcher for a raw-fd connection.
+  // Call raw_watch_write(true)  when there is pending outgoing data.
+  // Call raw_watch_write(false) once the send queue is empty to avoid
+  // spinning on a writable fd.
+  void raw_watch_write(bool enable);
+
   // For inbound peers constructed from a pre-built bufferevent (plain or TLS).
   // openvpn_peer uses this after openvpn_server calls wrap_accepted().
   evt_io(struct bufferevent *bev, const std::string &peer_host)
@@ -211,11 +229,10 @@ protected:
 
 public:
   ~evt_io() {
-    if (m_buffer_evt_p)
-      m_buffer_evt_p.reset(nullptr);
-    if (m_listener_p)
-      m_listener_p.reset(nullptr);
-
+    if (m_raw_write_ev) { event_free(m_raw_write_ev); m_raw_write_ev = nullptr; }
+    if (m_raw_read_ev)  { event_free(m_raw_read_ev);  m_raw_read_ev  = nullptr; }
+    if (m_buffer_evt_p) m_buffer_evt_p.reset(nullptr);
+    if (m_listener_p)   m_listener_p.reset(nullptr);
     std::cout << "Fn:" << __func__ << ":" << __LINE__ << " dtor" << std::endl;
   }
 
@@ -249,6 +266,9 @@ private:
   std::unique_ptr<struct bufferevent, custom_deleter> m_buffer_evt_p;
   std::unique_ptr<struct evconnlistener, custom_deleter_listener> m_listener_p;
   ssl_ctx_ptr m_ssl_ctx;
+  // Raw-fd mode (rawfd_tag constructor): read + write events, no bufferevent.
+  struct event   *m_raw_read_ev{nullptr};
+  struct event   *m_raw_write_ev{nullptr};
 };
 
 struct run_evt_loop {

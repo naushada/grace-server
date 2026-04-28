@@ -3,20 +3,20 @@
 
 #include "framework.hpp"
 #include "gnmi_client.hpp"  // gnmi_push_cfg, gnmi_client::push_async
+#include "mqtt_io.hpp"
 #include "tls_config.hpp"
-
-#include <mosquitto.h>
 
 #include <set>
 #include <string>
 #include <unordered_map>
 
 // Configuration for the optional MQTT subscriber built into openvpn_server.
-// When enabled, the server subscribes to "fwd/#" on the broker; each
-// arriving message is forwarded as a gNMI request through the VPN tunnel:
-//   topic   = "fwd/<virtual-ip>"  (set by the gnmi-mqtt-client relay)
+// When enabled, an mqtt_io (framework-compliant, event-driven) connects to the
+// broker and subscribes to "fwd/#".  Each arriving message is forwarded as a
+// gNMI request through the VPN tunnel:
+//   topic   = "fwd/<virtual-ip>"  (published by gnmi-client-svc relay)
 //   payload = rpc_path + '\0' + proto_bytes
-// The server parses topic → dest_ip, splits payload, then calls
+// The server splits payload on '\0' then calls
 // gnmi_client::push_async(dest_ip, gnmi_port, rpc_path, proto_bytes).
 struct mqtt_sub_cfg {
   bool        enabled{false};
@@ -92,12 +92,10 @@ private:
   // the running event loop because push_async is non-blocking.
   static void gnmi_push_cb(evutil_socket_t, short, void *ctx);
 
-  // MQTT callbacks — mosquitto calls these from mosquitto_loop().
-  // on_mqtt_message: topic = destination virtual IP, payload = gNMI proto bytes.
+  // MQTT message callback — called by mqtt_io when a "fwd/<ip>" message arrives.
+  // Parses rpc_path + '\0' + proto_bytes, calls gnmi_client::push_async().
   static void on_mqtt_message(struct mosquitto *, void *userdata,
                                const struct mosquitto_message *msg);
-  // Periodic libevent timer that drives the mosquitto event loop.
-  static void mqtt_poll_cb(evutil_socket_t, short, void *arg);
 
   int  open_server_tun(const std::string &server_ip);
   void manage_client_route(const std::string &client_ip, bool add);
@@ -110,8 +108,7 @@ private:
   std::unique_ptr<server_tun_io> m_server_tun_io;
   int                            m_server_tun_fd{-1};
   gnmi_push_cfg                  m_gnmi_push;
-  struct mosquitto              *m_mosq{nullptr};
-  struct event                  *m_mqtt_poll_timer{nullptr};
+  std::unique_ptr<mqtt_io>       m_mqtt_io;
   uint16_t                       m_mqtt_gnmi_port{58989};
 };
 

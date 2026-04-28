@@ -10,8 +10,8 @@
 #include "server_app.hpp"
 #include "tls_config.hpp"
 
+#include "mqtt_io.hpp"
 #include "gnmi/gnmi.pb.h"
-#include <mosquitto.h>
 
 #include <iomanip>
 #include <cstdint>
@@ -50,13 +50,10 @@ static uint16_t get_port_flag(int argc, const char *argv[],
 // gnmi-mqtt-client helpers
 // ---------------------------------------------------------------------------
 
-// Context for the MQTT relay poll timer (gnmi-mqtt-client mode).
-struct relay_ctx {
-  struct mosquitto *mosq;
-  struct event     *poll_timer{nullptr};
-};
-
-// Message callback: relays cli/<ip> → fwd/<ip>, payload unchanged.
+// Relay message callback: cli/<ip> → fwd/<ip>, payload (rpc_path'\0'proto)
+// unchanged.  Called inside mqtt_io::handle_read() → mosquitto_loop_read().
+// After this returns, handle_read() checks mosquitto_want_write() and arms
+// the write event if needed — no explicit flush call required here.
 static void relay_msg_cb(struct mosquitto *mosq, void *,
                           const struct mosquitto_message *msg) {
   if (!msg || !msg->payload || msg->payloadlen <= 0) return;
@@ -65,18 +62,9 @@ static void relay_msg_cb(struct mosquitto *mosq, void *,
   const std::string fwd_topic = "fwd/" + topic.substr(4);
   mosquitto_publish(mosq, nullptr, fwd_topic.c_str(),
                     msg->payloadlen, msg->payload, 0, false);
-  // payload = rpc_path'\0'proto_bytes — log just the rpc_path for readability
   std::cout << "[gnmi-client-svc] relay "
             << std::string(static_cast<const char *>(msg->payload))
             << " → " << topic.substr(4) << " (" << msg->payloadlen << "B)\n";
-}
-
-// 100 ms libevent timer: drives the mosquitto event loop and re-arms itself.
-static void relay_poll_cb(evutil_socket_t, short, void *arg) {
-  auto *c = static_cast<relay_ctx *>(arg);
-  mosquitto_loop(c->mosq, 0, 1);
-  const struct timeval tv{0, 100'000};
-  evtimer_add(c->poll_timer, &tv);
 }
 
 static void print_usage(const char *prog) {
@@ -211,29 +199,11 @@ int main(int argc, const char *argv[]) {
     std::cout << "[main] mode=gnmi-mqtt-client mqtt=" << mqtt_host
               << ":" << mqtt_port << " sub=cli/# pub=fwd/<ip>\n";
 
-    mosquitto_lib_init();
-    struct mosquitto *mosq = mosquitto_new("gnmi-client-svc", true, nullptr);
-    if (!mosq) { mosquitto_lib_cleanup(); return 1; }
-    mosquitto_message_callback_set(mosq, relay_msg_cb);
-    if (mosquitto_connect(mosq, mqtt_host.c_str(), mqtt_port, 60) != MOSQ_ERR_SUCCESS) {
-      std::cerr << "[main] MQTT connect failed\n";
-      mosquitto_destroy(mosq); mosquitto_lib_cleanup(); return 1;
-    }
-    mosquitto_subscribe(mosq, nullptr, "cli/#", 0);
+    mqtt_io relay(mqtt_host, mqtt_port, "gnmi-client-svc", relay_msg_cb, nullptr);
+    relay.subscribe("cli/#");
     std::cout << "[gnmi-client-svc] subscribed to cli/#\n";
 
-    auto *rctx = new relay_ctx{mosq};
-    rctx->poll_timer = evtimer_new(evt_base::instance().get(), relay_poll_cb, rctx);
-    const struct timeval tv{0, 100'000};
-    evtimer_add(rctx->poll_timer, &tv);
-
     run_evt_loop{}();
-
-    event_free(rctx->poll_timer);
-    delete rctx;
-    mosquitto_disconnect(mosq);
-    mosquitto_destroy(mosq);
-    mosquitto_lib_cleanup();
     return 0;
   }
 

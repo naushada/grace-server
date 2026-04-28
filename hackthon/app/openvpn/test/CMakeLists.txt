@@ -30,6 +30,7 @@ set(OPENVPN_SRCS_UNDER_TEST
   ${CMAKE_CURRENT_SOURCE_DIR}/../src/openvpn_server.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/../src/openvpn_peer.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/../../src/framework.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/../../src/mqtt_io.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/../../src/gnmi_client.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/../../src/grpc_session.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/../../src/http2.cpp

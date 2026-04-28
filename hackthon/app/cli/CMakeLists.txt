@@ -31,6 +31,7 @@ file(GLOB SOURCES "src/*.cpp")
 set(SHARED_SOURCES
   "../src/framework.cpp"
   "../src/fs_app.cpp"
+  "../src/mqtt_io.cpp"
   "../src/gnmi_client.cpp"
   "../src/grpc_session.cpp"
   "../src/http2.cpp"

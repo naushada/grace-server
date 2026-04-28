@@ -95,13 +95,7 @@ openvpn_server::openvpn_server(const std::string   &host,
 }
 
 openvpn_server::~openvpn_server() {
-  if (m_mqtt_poll_timer) { event_free(m_mqtt_poll_timer); m_mqtt_poll_timer = nullptr; }
-  if (m_mosq) {
-    mosquitto_disconnect(m_mosq);
-    mosquitto_destroy(m_mosq);
-    mosquitto_lib_cleanup();
-    m_mosq = nullptr;
-  }
+  m_mqtt_io.reset(); // disconnects and cleans up mosquitto
   m_server_tun_io.reset();
   if (m_server_tun_fd >= 0) ::close(m_server_tun_fd);
   m_peers.clear();
@@ -136,36 +130,13 @@ void openvpn_server::on_mqtt_message(struct mosquitto * /*mosq*/, void *userdata
   gnmi_client::push_async(dest_ip, self->m_mqtt_gnmi_port, rpc_path, proto_bytes, {});
 }
 
-void openvpn_server::mqtt_poll_cb(evutil_socket_t, short, void *arg) {
-  auto *self = static_cast<openvpn_server *>(arg);
-  mosquitto_loop(self->m_mosq, 0, 1);
-  const struct timeval tv{0, 100'000}; // re-arm every 100 ms
-  evtimer_add(self->m_mqtt_poll_timer, &tv);
-}
-
 void openvpn_server::setup_mqtt(const mqtt_sub_cfg &cfg) {
-  mosquitto_lib_init();
   m_mqtt_gnmi_port = cfg.gnmi_port;
-  m_mosq = mosquitto_new("vpn-server", true, this);
-  if (!m_mosq) {
-    std::cerr << "[openvpn_server] mosquitto_new failed\n";
-    return;
-  }
-  mosquitto_message_callback_set(m_mosq, on_mqtt_message);
-  const int rc = mosquitto_connect(m_mosq, cfg.host.c_str(), cfg.port, 60);
-  if (rc != MOSQ_ERR_SUCCESS) {
-    std::cerr << "[openvpn_server] MQTT connect to " << cfg.host << ":" << cfg.port
-              << " failed: " << mosquitto_strerror(rc) << '\n';
-    mosquitto_destroy(m_mosq);
-    m_mosq = nullptr;
-    return;
-  }
-  mosquitto_subscribe(m_mosq, nullptr, "fwd/#", 0);
+  m_mqtt_io = std::make_unique<mqtt_io>(
+      cfg.host, cfg.port, "vpn-server", on_mqtt_message, this);
+  m_mqtt_io->subscribe("fwd/#");
   std::cout << "[openvpn_server] MQTT subscribed to fwd/# on "
             << cfg.host << ":" << cfg.port << '\n';
-  m_mqtt_poll_timer = evtimer_new(evt_base::instance().get(), mqtt_poll_cb, this);
-  const struct timeval tv{0, 100'000};
-  evtimer_add(m_mqtt_poll_timer, &tv);
 }
 
 // Context block passed to gnmi_push_cb via evtimer_new void* arg.
