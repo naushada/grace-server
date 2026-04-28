@@ -172,6 +172,37 @@ services:
     restart: unless-stopped
 
   # ─────────────────────────────────────────────────────────────────────────
+  # registration-svc — device registration service.
+  #   Reuses the existing gNMI server binary (--mode=gnmi-server) on a
+  #   dedicated port 58988 so registration traffic is clearly separated from
+  #   the operational gNMI service on 58989.
+  #   Devices connecting through the VPN tunnel call /gnmi.gNMI/Set to
+  #   register themselves and /gnmi.gNMI/Get to query registration state.
+  #   Profile: registration  (also included in mqtt profile, see overlay file)
+  # ─────────────────────────────────────────────────────────────────────────
+  registration-svc:
+    image: marvel:release
+    command:
+      - /app/app
+      - --mode=gnmi-server
+      - --gnmi-port=58988
+    ports:
+      - "58988:58988"    # registration gRPC (plain TCP)
+    networks:
+      vpn-net:
+        ipv4_address: 172.20.0.13
+    healthcheck:
+      test: ["CMD", "bash", "-c", "grep -q ':E67C' /proc/net/tcp"]
+      interval: 3s
+      timeout: 3s
+      retries: 10
+      start_period: 2s
+    profiles:
+      - registration
+      - mqtt
+    restart: unless-stopped
+
+  # ─────────────────────────────────────────────────────────────────────────
   # gNMI server — plain TCP on port 58989.  No VPN tunnel; direct gNMI access.
   # Profile: gnmi
   # ─────────────────────────────────────────────────────────────────────────
