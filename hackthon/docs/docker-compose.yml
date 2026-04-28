@@ -38,9 +38,9 @@ services:
   #   Opens a kernel TUN interface (tun0) with server IP 10.8.0.1/24.
   #   Assigns virtual IPs from the pool to connecting clients.
   #   Adds/removes per-client host routes via SIOCADDRT/SIOCDELRT.
-  #   When --mqtt-host is set (mqtt profile), subscribes to the mosquitto
-  #   broker on topic "#" and forwards arriving gNMI payloads into the
-  #   VPN tunnel via gnmi_client::push_async(topic, gnmi_port, ...).
+  #   When --mqtt-host is set (mqtt profile), subscribes to "fwd/#" on the
+  #   mosquitto broker; parses each message as rpc_path+'\0'+proto_bytes and
+  #   forwards via gnmi_client::push_async(dest_ip, gnmi_port, rpc_path, pb).
   # ─────────────────────────────────────────────────────────────────────────
   vpn-server:
     image: marvel:release
@@ -271,19 +271,27 @@ services:
   # ═════════════════════════════════════════════════════════════════════════
   # MQTT-based gNMI architecture  (profile: mqtt)
   #
-  # Data-flow overview:
+  # Data-flow — 3 stages:
   #
-  #   gnmi-client-svc
-  #       │  publishes gNMI proto bytes
-  #       │  MQTT topic = virtual-IP of target vpn-client (e.g. "10.8.0.3")
+  #   [Stage 1] CLI app (cli_app)
+  #       │  user runs: gnmi_get / gnmi_update / gnmi_replace / gnmi_delete
+  #       │  cli_app serialises request into proto bytes and publishes:
+  #       │    MQTT topic   = "cli/<target-virtual-ip>"  (e.g. "cli/10.8.0.3")
+  #       │    MQTT payload = rpc_path + '\0' + proto_bytes
   #       ▼
   #   mosquitto broker (172.20.0.11:1883)
-  #       │  fan-out to all subscribers
   #       ▼
-  #   vpn-server  (subscribes to "#" via --mqtt-host)
-  #       │  topic → look up which tunnel peer owns that virtual-IP
-  #       │  call gnmi_client::push_async(topic, 58989, payload)
-  #       │  → IP packet injected into VPN tunnel via openvpn_peer
+  #   [Stage 2] gnmi-client-svc  (subscribes to "cli/#")
+  #       │  relay: strips "cli/" prefix, republishes on "fwd/<ip>"
+  #       │    MQTT topic   = "fwd/<target-virtual-ip>"
+  #       │    MQTT payload = unchanged (rpc_path + '\0' + proto_bytes)
+  #       ▼
+  #   mosquitto broker
+  #       ▼
+  #   [Stage 3] vpn-server  (subscribes to "fwd/#" via --mqtt-host)
+  #       │  parses topic → dest_ip, splits payload → rpc_path + proto_bytes
+  #       │  calls gnmi_client::push_async(dest_ip, 58989, rpc_path, proto_bytes)
+  #       │  → HTTP/2 gRPC frame injected into VPN tunnel via openvpn_peer
   #       ▼
   #   VPN tunnel (TCP 1194, tun0 10.8.0.0/24)
   #       ▼
@@ -291,7 +299,7 @@ services:
   #       │  socat proxy: TCP-LISTEN:58989,bind=10.8.0.3 → TCP:172.21.0.5:58989
   #       ▼
   #   gnmi-server-svc  (172.21.0.5:58989, app-net only)
-  #       │  processes gNMI Get / Update, sends reply back through tunnel
+  #       └  processes gNMI Get / Update, sends reply back through tunnel
   # ═════════════════════════════════════════════════════════════════════════
 
   # ─────────────────────────────────────────────────────────────────────────
@@ -334,9 +342,10 @@ services:
     restart: unless-stopped
 
   # ─────────────────────────────────────────────────────────────────────────
-  # gnmi-client-svc — publishes gNMI requests via MQTT.  Profile: mqtt
-  #   topic   = virtual IP of the target vpn-client (e.g. "10.8.0.3")
-  #   payload = serialised gnmi.GetRequest proto bytes
+  # gnmi-client-svc — MQTT relay.  Profile: mqtt
+  #   Subscribes to "cli/#" (messages from cli_app).
+  #   Re-publishes each message unchanged on "fwd/<ip>" for vpn-server.
+  #   No VPN tunnel; sits on vpn-net only.
   # ─────────────────────────────────────────────────────────────────────────
   gnmi-client-svc:
     image: marvel:release
@@ -345,8 +354,6 @@ services:
       - --mode=gnmi-mqtt-client
       - --mqtt-host=mosquitto
       - --mqtt-port=1883
-      - --mqtt-topic=10.8.0.3        # virtual IP of target vpn-client
-      - --interval=10
     networks:
       vpn-net:
         ipv4_address: 172.20.0.12

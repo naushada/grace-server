@@ -12,12 +12,12 @@
 #include <unordered_map>
 
 // Configuration for the optional MQTT subscriber built into openvpn_server.
-// When enabled, the server subscribes to topic "#" on the broker; each
-// arriving message is treated as a gNMI request:
-//   topic   = destination virtual IP (e.g. "10.8.0.3")
-//   payload = raw gNMI protobuf bytes
-// The server calls gnmi_client::push_async(topic, gnmi_port, ...) which
-// routes the request through the VPN tunnel to the right peer.
+// When enabled, the server subscribes to "fwd/#" on the broker; each
+// arriving message is forwarded as a gNMI request through the VPN tunnel:
+//   topic   = "fwd/<virtual-ip>"  (set by the gnmi-mqtt-client relay)
+//   payload = rpc_path + '\0' + proto_bytes
+// The server parses topic → dest_ip, splits payload, then calls
+// gnmi_client::push_async(dest_ip, gnmi_port, rpc_path, proto_bytes).
 struct mqtt_sub_cfg {
   bool        enabled{false};
   std::string host{"localhost"};

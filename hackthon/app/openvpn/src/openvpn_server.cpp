@@ -114,15 +114,26 @@ openvpn_server::~openvpn_server() {
 void openvpn_server::on_mqtt_message(struct mosquitto * /*mosq*/, void *userdata,
                                       const struct mosquitto_message *msg) {
   if (!msg || !msg->payload || msg->payloadlen <= 0) return;
-  auto *self    = static_cast<openvpn_server *>(userdata);
+  auto *self = static_cast<openvpn_server *>(userdata);
+
+  // Topic format: "fwd/<virtual-ip>"
   const std::string topic(msg->topic);
-  const std::string payload(static_cast<const char *>(msg->payload),
-                             static_cast<std::size_t>(msg->payloadlen));
-  std::cout << "[openvpn_server] MQTT ← topic=" << topic
-            << " payload=" << payload.size() << "B"
-            << " → push_async to " << topic << ":" << self->m_mqtt_gnmi_port << '\n';
-  gnmi_client::push_async(topic, self->m_mqtt_gnmi_port,
-                           "/gnmi.gNMI/Get", payload, {});
+  if (topic.size() <= 4 || topic.substr(0, 4) != "fwd/") return;
+  const std::string dest_ip = topic.substr(4);
+
+  // Payload format: rpc_path + '\0' + proto_bytes
+  const char *raw     = static_cast<const char *>(msg->payload);
+  const std::size_t sz = static_cast<std::size_t>(msg->payloadlen);
+  const char *sep = static_cast<const char *>(std::memchr(raw, '\0', sz));
+  if (!sep) return; // malformed — no null separator
+  const std::string rpc_path(raw, sep - raw);
+  const std::string proto_bytes(sep + 1, sz - (sep - raw) - 1);
+
+  std::cout << "[openvpn_server] MQTT ← fwd/" << dest_ip
+            << " rpc=" << rpc_path
+            << " payload=" << proto_bytes.size() << "B"
+            << " → push_async to " << dest_ip << ":" << self->m_mqtt_gnmi_port << '\n';
+  gnmi_client::push_async(dest_ip, self->m_mqtt_gnmi_port, rpc_path, proto_bytes, {});
 }
 
 void openvpn_server::mqtt_poll_cb(evutil_socket_t, short, void *arg) {
@@ -149,8 +160,8 @@ void openvpn_server::setup_mqtt(const mqtt_sub_cfg &cfg) {
     m_mosq = nullptr;
     return;
   }
-  mosquitto_subscribe(m_mosq, nullptr, "#", 0);
-  std::cout << "[openvpn_server] MQTT subscribed to # on "
+  mosquitto_subscribe(m_mosq, nullptr, "fwd/#", 0);
+  std::cout << "[openvpn_server] MQTT subscribed to fwd/# on "
             << cfg.host << ":" << cfg.port << '\n';
   m_mqtt_poll_timer = evtimer_new(evt_base::instance().get(), mqtt_poll_cb, this);
   const struct timeval tv{0, 100'000};

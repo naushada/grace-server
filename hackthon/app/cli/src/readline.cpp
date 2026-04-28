@@ -6,11 +6,41 @@
 
 #include <algorithm>
 #include <cstring>
+#include <cstdlib>
+#include <mosquitto.h>
 
 // ---------------------------------------------------------------------------
 // Single filesystem monitor — owns the lua_file engine that the CLI queries.
 // ---------------------------------------------------------------------------
 static fs_app fs_mon("/app/command");
+
+// MQTT client shared by all gnmi command handlers.
+// Initialised in main() from MQTT_HOST / MQTT_PORT env vars.
+// topic scheme:
+//   CLI publishes to  "cli/<target_ip>"  payload = rpc_path '\0' proto_bytes
+//   vpn-server (via gnmi-client-svc relay on "fwd/<ip>") calls push_async
+static struct mosquitto *g_mosq = nullptr;
+
+static void mqtt_gnmi_publish(const std::string &target_ip,
+                               const std::string &rpc_path,
+                               const std::string &proto_bytes) {
+  if (!g_mosq) {
+    std::cout << "[mqtt] not connected — falling back to direct gRPC\n";
+    return;
+  }
+  const std::string topic   = "cli/" + target_ip;
+  const std::string payload = rpc_path + '\0' + proto_bytes;
+  mosquitto_loop(g_mosq, 0, 1);
+  const int rc = mosquitto_publish(g_mosq, nullptr,
+                                   topic.c_str(),
+                                   static_cast<int>(payload.size()),
+                                   payload.data(), 0, false);
+  if (rc != MOSQ_ERR_SUCCESS)
+    std::cerr << "[mqtt] publish failed: " << mosquitto_strerror(rc) << '\n';
+  else
+    std::cout << "[mqtt] published " << proto_bytes.size()
+              << "B proto → topic=" << topic << '\n';
+}
 
 // ---------------------------------------------------------------------------
 // Completion session state.
@@ -465,10 +495,9 @@ static void handle_gnmi_get(const std::map<std::string, std::string> &args) {
   std::string req_pb;
   req.SerializeToString(&req_pb);
 
-  std::cout << "[gnmi_get] -> " << host << ":" << port
-            << " prefix=" << prefix << " path=" << path_str << "\n";
-  const auto resp = gnmi_client::call(host, port, "/gnmi.gNMI/Get", req_pb);
-  print_gnmi_response<gnmi::GetResponse>(resp, "gnmi_get");
+  std::cout << "[gnmi_get] target=" << host << " prefix=" << prefix
+            << " path=" << path_str << "\n";
+  mqtt_gnmi_publish(host, "/gnmi.gNMI/Get", req_pb);
 }
 
 // UPDATE — merge the value into the existing configuration at path.
@@ -509,11 +538,9 @@ static void handle_gnmi_update(const std::map<std::string, std::string> &args) {
   std::string req_pb;
   req.SerializeToString(&req_pb);
 
-  std::cout << "[gnmi_update] -> " << host << ":" << port
-            << " role=" << role << " prefix=" << prefix
-            << " path=" << path_str << " value=" << value << "\n";
-  const auto resp = gnmi_client::call(host, port, "/gnmi.gNMI/Set", req_pb);
-  print_gnmi_response<gnmi::SetResponse>(resp, "gnmi_update");
+  std::cout << "[gnmi_update] target=" << host << " role=" << role
+            << " prefix=" << prefix << " path=" << path_str << "\n";
+  mqtt_gnmi_publish(host, "/gnmi.gNMI/Set", req_pb);
 }
 
 // REPLACE — completely replace the subtree at path with the given value.
@@ -553,11 +580,9 @@ static void handle_gnmi_replace(const std::map<std::string, std::string> &args) 
   std::string req_pb;
   req.SerializeToString(&req_pb);
 
-  std::cout << "[gnmi_replace] -> " << host << ":" << port
-            << " role=" << role << " prefix=" << prefix
-            << " path=" << path_str << " value=" << value << "\n";
-  const auto resp = gnmi_client::call(host, port, "/gnmi.gNMI/Set", req_pb);
-  print_gnmi_response<gnmi::SetResponse>(resp, "gnmi_replace");
+  std::cout << "[gnmi_replace] target=" << host << " role=" << role
+            << " prefix=" << prefix << " path=" << path_str << "\n";
+  mqtt_gnmi_publish(host, "/gnmi.gNMI/Set", req_pb);
 }
 
 // DELETE — remove the node at path from the target configuration.
@@ -593,11 +618,9 @@ static void handle_gnmi_delete(const std::map<std::string, std::string> &args) {
   std::string req_pb;
   req.SerializeToString(&req_pb);
 
-  std::cout << "[gnmi_delete] -> " << host << ":" << port
-            << " role=" << role << " prefix=" << prefix
-            << " path=" << path_str << "\n";
-  const auto resp = gnmi_client::call(host, port, "/gnmi.gNMI/Set", req_pb);
-  print_gnmi_response<gnmi::SetResponse>(resp, "gnmi_delete");
+  std::cout << "[gnmi_delete] target=" << host << " role=" << role
+            << " prefix=" << prefix << " path=" << path_str << "\n";
+  mqtt_gnmi_publish(host, "/gnmi.gNMI/Set", req_pb);
 }
 
 // ---------------------------------------------------------------------------
@@ -746,8 +769,26 @@ void run_cli() {
 }
 
 int main() {
+  mosquitto_lib_init();
+  const char *mqtt_host = std::getenv("MQTT_HOST");
+  const char *mqtt_port = std::getenv("MQTT_PORT");
+  if (mqtt_host) {
+    g_mosq = mosquitto_new("cli_app", true, nullptr);
+    if (g_mosq) {
+      const int port = mqtt_port ? std::atoi(mqtt_port) : 1883;
+      if (mosquitto_connect(g_mosq, mqtt_host, port, 60) != MOSQ_ERR_SUCCESS) {
+        std::cerr << "[mqtt] connect to " << mqtt_host << ":" << port << " failed\n";
+        mosquitto_destroy(g_mosq);
+        g_mosq = nullptr;
+      } else {
+        std::cout << "[mqtt] connected to " << mqtt_host << ":" << port << '\n';
+      }
+    }
+  }
   init_readline();
   run_cli();
+  if (g_mosq) { mosquitto_disconnect(g_mosq); mosquitto_destroy(g_mosq); }
+  mosquitto_lib_cleanup();
   return 0;
 }
 

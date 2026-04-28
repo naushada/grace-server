@@ -849,72 +849,98 @@ appear immediately in `docker compose logs`.
 
 ### 15.1 Overview
 
-This architecture decouples the gNMI client from the VPN topology entirely.
-The gNMI client never needs to know a server IP or open a TCP connection —
-it just publishes a protobuf message.  The VPN server acts as a relay that
-routes the message through the correct tunnel peer based on the MQTT topic.
+This architecture routes gNMI operations issued from the CLI (`cli_app`) all
+the way to a standalone gNMI server (`gnmi-server-svc`) through three stages:
+an MQTT relay (`gnmi-client-svc`), a VPN server (`vpn-server`), and a VPN
+tunnel.  The CLI never opens a gRPC connection directly — it just publishes
+over MQTT.
 
 ```
-┌──────────────────┐   MQTT publish          ┌──────────────────────┐
-│  gnmi-client-svc │  topic="10.8.0.3"       │     mosquitto        │
-│  (172.20.0.12)   │ ──payload=gNMI proto──► │  broker 172.20.0.11  │
-└──────────────────┘                         └──────────┬───────────┘
-                                                        │ MQTT subscribe "#"
-                                                        ▼
-                                             ┌──────────────────────┐
-                                             │  mqtt-vpn-server     │
-                                             │  (172.20.0.13)       │
-                                             │  tun0 = 10.8.0.1     │
-                                             │                      │
-                                             │  topic → virtual-IP  │
-                                             │  → ip_pool lookup    │
-                                             │  → openvpn_peer      │
-                                             │    forward_data()    │
-                                             └──────────┬───────────┘
-                                                        │ VPN tunnel (TCP 11194)
-                                                        ▼
-                                             ┌──────────────────────┐
-                                             │  mqtt-vpn-client     │
-                                             │  eth0: 172.20.0.14   │
-                                             │  tun0: 10.8.0.3      │
-                                             │  eth1: 172.21.0.3    │
-                                             │                      │
-                                             │  nftables DNAT:      │
-                                             │  10.8.0.3:58989      │
-                                             │    → 172.21.0.5:58989│
-                                             └──────────┬───────────┘
-                                                        │ app-net (172.21.0.0/24)
-                                                        ▼
-                                             ┌──────────────────────┐
-                                             │  gnmi-server-svc     │
-                                             │  (172.21.0.5)        │
-                                             │  port 58989          │
-                                             └──────────────────────┘
+┌──────────────────────────────────────────────────────────────────────────┐
+│ Stage 1 — CLI app                                                        │
+│                                                                          │
+│   user: gnmi_get 10.8.0.3 /interfaces                                   │
+│   cli_app builds GetRequest proto, publishes:                            │
+│     topic   = "cli/10.8.0.3"                                            │
+│     payload = "/gnmi.gNMI/Get\0<proto bytes>"                           │
+└──────────────────────────────┬───────────────────────────────────────────┘
+                               │ MQTT pub  (env MQTT_HOST / MQTT_PORT)
+                               ▼
+                    ┌─────────────────────┐
+                    │   mosquitto broker  │
+                    │   172.20.0.11:1883  │
+                    └──────┬──────────────┘
+                           │ MQTT sub "cli/#"
+┌──────────────────────────▼───────────────────────────────────────────────┐
+│ Stage 2 — gnmi-client-svc  (172.20.0.12, --mode=gnmi-mqtt-client)       │
+│                                                                          │
+│   on_message(topic="cli/10.8.0.3", payload)                             │
+│     strip "cli/" → dest_ip = "10.8.0.3"                                 │
+│     republish:  topic = "fwd/10.8.0.3",  payload unchanged              │
+└──────────────────────────────┬───────────────────────────────────────────┘
+                               │ MQTT pub
+                               ▼
+                    ┌─────────────────────┐
+                    │   mosquitto broker  │
+                    └──────┬──────────────┘
+                           │ MQTT sub "fwd/#"
+┌──────────────────────────▼───────────────────────────────────────────────┐
+│ Stage 3 — vpn-server  (172.20.0.2, --mqtt-host=mosquitto)               │
+│                                                                          │
+│   on_mqtt_message(topic="fwd/10.8.0.3", payload)                        │
+│     dest_ip   = "10.8.0.3"                                              │
+│     rpc_path  = "/gnmi.gNMI/Get"    (before '\0')                       │
+│     proto_pb  = <GetRequest bytes>  (after '\0')                        │
+│     gnmi_client::push_async(dest_ip, 58989, rpc_path, proto_pb)         │
+│       → HTTP/2 gRPC frame injected into VPN tunnel (TCP 1194)           │
+└──────────────────────────────┬───────────────────────────────────────────┘
+                               │ VPN tunnel  tun0 10.8.0.0/24
+                               ▼
+              ┌────────────────────────────────┐
+              │  vpn-client                    │
+              │  tun0: 10.8.0.3               │
+              │  eth1: 172.21.0.3  (app-net)  │
+              │                               │
+              │  socat TCP-LISTEN:58989,       │
+              │    bind=10.8.0.3 →            │
+              │    TCP:172.21.0.5:58989        │
+              └───────────────┬────────────────┘
+                              │ app-net 172.21.0.0/24
+                              ▼
+              ┌────────────────────────────────┐
+              │  gnmi-server-svc               │
+              │  172.21.0.5:58989              │
+              │  --mode=gnmi-server            │
+              └────────────────────────────────┘
 ```
 
 ### 15.2 Networks
 
 | Network   | Subnet           | Members                                              |
 |-----------|------------------|------------------------------------------------------|
-| `vpn-net` | 172.20.0.0/24    | mosquitto, mqtt-vpn-server, mqtt-vpn-client, gnmi-client-svc |
-| `app-net` | 172.21.0.0/24    | mqtt-vpn-client, gnmi-server-svc                     |
+| `vpn-net` | 172.20.0.0/24    | mosquitto, vpn-server, vpn-client, gnmi-client-svc   |
+| `app-net` | 172.21.0.0/24    | vpn-client, gnmi-server-svc                          |
 
 `gnmi-server-svc` has no interface on `vpn-net` — it is reachable only
-after `mqtt-vpn-client`'s DNAT rule is in place.
+through `vpn-client`'s socat proxy after the tunnel is up.
 
 ### 15.3 MQTT message format
 
-| Field   | Value |
-|---------|-------|
-| topic   | Virtual IP the VPN server assigned to the target client (e.g. `10.8.0.3`) |
-| payload | Raw protobuf bytes of a `gnmi.GetRequest` or `gnmi.SetRequest` |
-| QoS     | 0 (fire-and-forget) |
+Two topic namespaces are used to separate the CLI-facing channel from the
+server-facing channel:
 
-The topic doubles as the routing key.  `mqtt-vpn-server` calls
-`ip_pool::find_channel(topic)` to look up the `openvpn_peer` that owns
-that virtual IP, then injects the payload as a TCP/IP packet into the tunnel.
+| Stage | Topic | Payload |
+|-------|-------|---------|
+| CLI → relay (`cli/`) | `cli/<virtual-ip>` | `rpc_path + '\0' + proto_bytes` |
+| relay → vpn-server (`fwd/`) | `fwd/<virtual-ip>` | unchanged |
 
-### 15.4 Forwarding in mqtt-vpn-client — socat proxy
+`rpc_path` is the gRPC method path, e.g. `/gnmi.gNMI/Get` or `/gnmi.gNMI/Set`.
+`proto_bytes` are the serialised `gnmi.GetRequest` / `gnmi.SetRequest` bytes.
+
+The null byte `'\0'` separates the two fields so the receiver can split
+without a length prefix.
+
+### 15.4 Forwarding in vpn-client — socat proxy
 
 After `tun0` comes up, the entrypoint starts a `socat` userspace proxy that
 listens on the virtual IP (assigned by the VPN server) and forwards to
@@ -941,12 +967,16 @@ doesn't conflict with other services on the container's `eth0`.
 Verify the proxy is running:
 
 ```bash
-docker exec docs-mqtt-vpn-client-1 ss -tlnp | grep 58989
+docker exec docs-vpn-client-1 ss -tlnp | grep 58989
 ```
 
 ### 15.5 Starting the MQTT-based stack
 
 ```bash
+# Build the image
+docker build -t marvel:release .
+
+# Start all mqtt-profile services
 docker compose -f docs/docker-compose.yml --profile mqtt up
 ```
 
@@ -954,65 +984,84 @@ Start order enforced by `depends_on`:
 
 ```
 mosquitto (healthy)
-    └─► mqtt-vpn-server (healthy, subscribes to mosquitto)
-            └─► mqtt-vpn-client (tunnel up, socat proxy on virtual-IP:58989)
-                    └─► gnmi-client-svc (starts publishing)
+    └─► vpn-server (healthy, subscribes to fwd/# on mosquitto)
+    └─► gnmi-client-svc (subscribes to cli/# on mosquitto)
+    └─► vpn-client (tunnel up, socat proxy on virtual-IP:58989)
+
+gnmi-server-svc (starts independently on app-net)
 ```
 
-`gnmi-server-svc` starts in parallel with the VPN services since it has
-no dependency on the tunnel — it just listens on `app-net`.
+Send a gNMI request via the CLI:
+
+```bash
+# Start cli_app pointing at the mosquitto broker
+docker exec -e MQTT_HOST=mosquitto -e MQTT_PORT=1883 \
+  docs-vpn-client-1 /app/cli_app
+
+# Inside the CLI:
+cli> gnmi_get 10.8.0.3 /interfaces/interface[name=eth0]/state/counters
+cli> gnmi_update 10.8.0.3 /system/config/hostname string edge-01
+```
+
+Monitor MQTT traffic:
+
+```bash
+# Watch all topics in real time
+docker exec docs-mosquitto-1 mosquitto_sub -h localhost -t "#" -v
+
+# Manually inject a test message (rpc_path=\0=Get, empty proto body)
+docker exec docs-mosquitto-1 \
+  mosquitto_pub -h localhost -t "cli/10.8.0.3" \
+    -m $'/gnmi.gNMI/Get\x00' -q 0
+```
 
 ### 15.6 C++ integration — how the flags work
 
 | Flag | Where | What it does |
 |------|-------|--------------|
-| `--mqtt-host` / `--mqtt-port` | `openvpn_server` | Connects to the MQTT broker and subscribes to `#`. Each arriving message calls `gnmi_client::push_async(topic, gnmi_port, ...)` which routes the request through the VPN tunnel to the peer that owns that virtual IP. |
-| `--mode=gnmi-mqtt-client` | `main_app` | Connects to the MQTT broker and publishes a serialised `gnmi.GetRequest` to `--mqtt-topic` every `--interval` seconds. |
+| `--mqtt-host` / `--mqtt-port` | `openvpn_server` | Connects to the broker and subscribes to `fwd/#`. Each message is parsed as `rpc_path\0proto_bytes`; calls `gnmi_client::push_async(dest_ip, gnmi_port, rpc_path, proto_bytes)` to route the gRPC call through the VPN tunnel. |
+| `--mode=gnmi-mqtt-client` | `main_app` | MQTT relay: subscribes to `cli/#`, strips `cli/` prefix, republishes on `fwd/<ip>`. Payload passes through unchanged. |
+| `MQTT_HOST` / `MQTT_PORT` env vars | `cli_app` (`readline.cpp`) | `cli_app` connects to this broker on startup. `gnmi_get`/`gnmi_update`/`gnmi_replace`/`gnmi_delete` commands publish to `cli/<host>` instead of making a direct gRPC call. |
 
-Both use `libmosquitto`.  The mosquitto event loop is driven by a 100 ms
+All three use `libmosquitto`.  The mosquitto event loop is driven by a 100 ms
 libevent timer (`mosquitto_loop`) so it integrates cleanly with the shared
 `evt_base` without blocking.
-
-Test the broker directly with the CLI tools shipped in the runtime image:
-
-```bash
-# Watch what mqtt-vpn-server receives
-docker exec docs-mqtt-vpn-server-1 \
-  mosquitto_sub -h mosquitto -t "#" -v
-
-# Manually inject a raw message
-docker exec docs-mosquitto-1 \
-  mosquitto_pub -h localhost -t "10.8.0.3" -m "hello" -q 0
-```
 
 ### 15.7 End-to-end packet flow with MQTT relay
 
 ```
-gnmi-client-svc
-  mosquitto_publish(topic="10.8.0.3", payload=GetRequest{...})
+cli_app  (readline.cpp handle_gnmi_get)
+  mqtt_gnmi_publish("10.8.0.3", "/gnmi.gNMI/Get", req_pb)
+    mosquitto_publish(topic="cli/10.8.0.3",
+                      payload="/gnmi.gNMI/Get\0<req bytes>")
         │
         ▼
   mosquitto broker
-        │  fan-out
+        │  fan-out to subscribers of "cli/#"
         ▼
-  mqtt-vpn-server  on_mqtt_message(topic="10.8.0.3", payload)
-    ip_pool::find_channel("10.8.0.3") → peer fd
-    build IP packet: src=10.8.0.1 dst=10.8.0.3 dport=58989 data=payload
-    openvpn_peer::forward_data(raw_ip_packet)
-    wrap as [0x02][len][IP packet] → bufferevent → TCP 11194
+  gnmi-client-svc  on_message(topic="cli/10.8.0.3")
+    fwd_topic = "fwd/10.8.0.3"
+    mosquitto_publish(topic="fwd/10.8.0.3", payload=unchanged)
         │
         ▼
-  mqtt-vpn-client  openvpn_client::handle_read() → TYPE_DATA
-    write(tun0_fd, raw_ip_packet)
-        │
-        ▼  kernel: dst=10.8.0.3, PREROUTING DNAT → 172.21.0.5:58989
+  mosquitto broker
+        │  fan-out to subscribers of "fwd/#"
         ▼
-  gnmi-server-svc  connected_client::handle_read()
-    grpc_session::recv() → dispatch GetRequest
-    build GetResponse, send back
+  vpn-server  on_mqtt_message(topic="fwd/10.8.0.3")
+    dest_ip  = "10.8.0.3"
+    rpc_path = "/gnmi.gNMI/Get"
+    proto_pb = <GetRequest bytes>
+    gnmi_client::push_async("10.8.0.3", 58989, rpc_path, proto_pb)
+      → HTTP/2 HEADERS + DATA frame → bufferevent → TCP 1194 (VPN tunnel)
         │
-        ▼  reverse path: kernel POSTROUTING src-NAT → tun0 → tunnel → server
         ▼
-  mqtt-vpn-server  (receives reply via tunnel, can forward back to MQTT or
-                    deliver directly to gnmi-client-svc on vpn-net)
+  vpn-client  tun0 receives IP packet dst=10.8.0.3:58989
+    socat proxy accepts TCP connection, forwards to 172.21.0.5:58989
+        │
+        ▼
+  gnmi-server-svc  grpc_session::recv() → dispatch GetRequest
+    builds GetResponse → HTTP/2 DATA → socat → tun0 → tunnel → vpn-server
+        │  (response path mirrors request path in reverse)
+        ▼
+  vpn-server  delivers HTTP/2 response back to gnmi_client::push_async caller
 ```

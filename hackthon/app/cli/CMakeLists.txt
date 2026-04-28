@@ -44,6 +44,7 @@ add_executable(cli_app
 
 target_link_libraries(cli_app PRIVATE
   gnmi_proto
+  mosquitto
   pthread
   ssl
   crypto
