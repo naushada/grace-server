@@ -127,7 +127,26 @@ void openvpn_server::on_mqtt_message(struct mosquitto * /*mosq*/, void *userdata
             << " rpc=" << rpc_path
             << " payload=" << proto_bytes.size() << "B"
             << " → push_async to " << dest_ip << ":" << self->m_mqtt_gnmi_port << '\n';
-  gnmi_client::push_async(dest_ip, self->m_mqtt_gnmi_port, rpc_path, proto_bytes, {});
+
+  gnmi_client::push_async(
+      dest_ip, self->m_mqtt_gnmi_port, rpc_path, proto_bytes, {},
+      [self, dest_ip, rpc_path](const gnmi_client::response &r) {
+        if (!self->m_mqtt_io) return;
+        // Payload: rpc_path '\0' grpc_status '\0' grpc_message '\0' proto_bytes
+        std::string payload;
+        payload  = rpc_path;
+        payload += '\0';
+        payload += std::to_string(r.grpc_status);
+        payload += '\0';
+        payload += r.grpc_message;
+        payload += '\0';
+        payload += r.body_pb;
+        const std::string resp_topic = "resp/" + dest_ip;
+        self->m_mqtt_io->publish(resp_topic, payload.data(),
+                                 static_cast<int>(payload.size()));
+        std::cout << "[openvpn_server] MQTT → " << resp_topic
+                  << " status=" << r.grpc_status << '\n';
+      });
 }
 
 void openvpn_server::setup_mqtt(const mqtt_sub_cfg &cfg) {

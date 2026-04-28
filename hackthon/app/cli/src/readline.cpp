@@ -5,6 +5,7 @@
 #include "openvpn_tunnel_client.hpp"
 
 #include <algorithm>
+#include <chrono>
 #include <cstring>
 #include <cstdlib>
 #include <mosquitto.h>
@@ -17,9 +18,69 @@ static fs_app fs_mon("/app/command");
 // MQTT client shared by all gnmi command handlers.
 // Initialised in main() from MQTT_HOST / MQTT_PORT env vars.
 // topic scheme:
-//   CLI publishes to  "cli/<target_ip>"  payload = rpc_path '\0' proto_bytes
-//   vpn-server (via gnmi-client-svc relay on "fwd/<ip>") calls push_async
+//   CLI publishes to   "cli/<target_ip>"       payload = rpc_path '\0' proto_bytes
+//   CLI subscribes to  "cli_resp/<target_ip>"  payload = rpc_path '\0' status '\0' grpc_message '\0' proto_bytes
 static struct mosquitto *g_mosq = nullptr;
+
+// State for the one outstanding request at any time (CLI is synchronous).
+struct cli_resp_t {
+  bool        received{false};
+  std::string rpc_path;
+  int         grpc_status{-1};
+  std::string grpc_message;
+  std::string proto_bytes;
+};
+static cli_resp_t g_cli_resp;
+
+// mosquitto message callback — fires when cli_resp/<ip> delivers a response.
+static void on_cli_response(struct mosquitto* /*mosq*/, void* /*ud*/,
+                             const struct mosquitto_message *msg) {
+  if (!msg || !msg->payload || msg->payloadlen <= 0) return;
+  const char  *raw = static_cast<const char *>(msg->payload);
+  const size_t sz  = static_cast<size_t>(msg->payloadlen);
+
+  // Parse: rpc_path '\0' status_str '\0' grpc_message '\0' proto_bytes
+  const char *s1 = static_cast<const char *>(std::memchr(raw, '\0', sz));
+  if (!s1) return;
+  g_cli_resp.rpc_path = std::string(raw, s1 - raw);
+
+  const char *s2 = static_cast<const char *>(std::memchr(s1 + 1, '\0', sz - static_cast<size_t>(s1 + 1 - raw)));
+  if (!s2) return;
+  g_cli_resp.grpc_status = std::stoi(std::string(s1 + 1, s2 - s1 - 1));
+
+  const char *s3 = static_cast<const char *>(std::memchr(s2 + 1, '\0', sz - static_cast<size_t>(s2 + 1 - raw)));
+  if (!s3) return;
+  g_cli_resp.grpc_message = std::string(s2 + 1, s3 - s2 - 1);
+
+  g_cli_resp.proto_bytes = std::string(s3 + 1, sz - static_cast<size_t>(s3 + 1 - raw));
+  g_cli_resp.received = true;
+}
+
+// Print a decoded gNMI response received over the MQTT return path.
+static void print_mqtt_response(const cli_resp_t &r) {
+  if (r.grpc_status < 0) {
+    std::cout << "[gnmi] transport error: " << r.grpc_message << '\n';
+    return;
+  }
+  if (r.grpc_status != 0) {
+    std::cout << "[gnmi] error status=" << r.grpc_status;
+    if (!r.grpc_message.empty()) std::cout << " message=" << r.grpc_message;
+    std::cout << '\n';
+    return;
+  }
+  std::string text;
+  if (r.rpc_path == "/gnmi.gNMI/Get") {
+    gnmi::GetResponse resp;
+    if (resp.ParseFromString(r.proto_bytes))
+      google::protobuf::TextFormat::PrintToString(resp, &text);
+    std::cout << "[gnmi_get] OK\n" << text;
+  } else {
+    gnmi::SetResponse resp;
+    if (resp.ParseFromString(r.proto_bytes))
+      google::protobuf::TextFormat::PrintToString(resp, &text);
+    std::cout << "[gnmi_set] OK\n" << text;
+  }
+}
 
 static void mqtt_gnmi_publish(const std::string &target_ip,
                                const std::string &rpc_path,
@@ -28,18 +89,48 @@ static void mqtt_gnmi_publish(const std::string &target_ip,
     std::cout << "[mqtt] not connected — falling back to direct gRPC\n";
     return;
   }
+
+  // Subscribe to response topic BEFORE publishing to avoid a race.
+  const std::string resp_topic = "cli_resp/" + target_ip;
+  g_cli_resp = {};
+  mosquitto_message_callback_set(g_mosq, on_cli_response);
+  mosquitto_subscribe(g_mosq, nullptr, resp_topic.c_str(), 0);
+  mosquitto_loop(g_mosq, 10, 1);  // flush SUBSCRIBE
+
+  // Publish the request.
   const std::string topic   = "cli/" + target_ip;
   const std::string payload = rpc_path + '\0' + proto_bytes;
-  mosquitto_loop(g_mosq, 0, 1);
   const int rc = mosquitto_publish(g_mosq, nullptr,
                                    topic.c_str(),
                                    static_cast<int>(payload.size()),
                                    payload.data(), 0, false);
-  if (rc != MOSQ_ERR_SUCCESS)
+  if (rc != MOSQ_ERR_SUCCESS) {
     std::cerr << "[mqtt] publish failed: " << mosquitto_strerror(rc) << '\n';
-  else
-    std::cout << "[mqtt] published " << proto_bytes.size()
-              << "B proto → topic=" << topic << '\n';
+    mosquitto_unsubscribe(g_mosq, nullptr, resp_topic.c_str());
+    return;
+  }
+  std::cout << "[mqtt] published " << proto_bytes.size()
+            << "B proto → topic=" << topic << '\n';
+  mosquitto_loop(g_mosq, 0, 1);  // flush PUBLISH
+
+  // Wait up to 5 s for the response to arrive on cli_resp/<ip>.
+  const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+  while (!g_cli_resp.received) {
+    const auto now = std::chrono::steady_clock::now();
+    if (now >= deadline) {
+      std::cout << "[gnmi] response timeout (5s)\n";
+      break;
+    }
+    const int ms = static_cast<int>(
+        std::chrono::duration_cast<std::chrono::milliseconds>(deadline - now).count());
+    mosquitto_loop(g_mosq, std::min(ms, 100), 1);
+  }
+
+  if (g_cli_resp.received)
+    print_mqtt_response(g_cli_resp);
+
+  mosquitto_unsubscribe(g_mosq, nullptr, resp_topic.c_str());
+  mosquitto_message_callback_set(g_mosq, nullptr);
 }
 
 // ---------------------------------------------------------------------------

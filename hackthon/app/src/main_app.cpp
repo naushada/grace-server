@@ -50,21 +50,32 @@ static uint16_t get_port_flag(int argc, const char *argv[],
 // gnmi-mqtt-client helpers
 // ---------------------------------------------------------------------------
 
-// Relay message callback: cli/<ip> → fwd/<ip>, payload (rpc_path'\0'proto)
-// unchanged.  Called inside mqtt_io::handle_read() → mosquitto_loop_read().
-// After this returns, handle_read() checks mosquitto_want_write() and arms
-// the write event if needed — no explicit flush call required here.
+// Relay message callback — two directions:
+//   cli/<ip>  → fwd/<ip>       (CLI request  → vpn-server)
+//   resp/<ip> → cli_resp/<ip>  (vpn-server response → CLI)
+// Payload is passed through unchanged in both directions.
 static void relay_msg_cb(struct mosquitto *mosq, void *,
                           const struct mosquitto_message *msg) {
   if (!msg || !msg->payload || msg->payloadlen <= 0) return;
-  std::string topic(msg->topic);
-  if (topic.size() <= 4 || topic.substr(0, 4) != "cli/") return;
-  const std::string fwd_topic = "fwd/" + topic.substr(4);
-  mosquitto_publish(mosq, nullptr, fwd_topic.c_str(),
+  const std::string topic(msg->topic);
+
+  std::string out_topic;
+  if (topic.size() > 4 && topic.substr(0, 4) == "cli/") {
+    out_topic = "fwd/" + topic.substr(4);
+    std::cout << "[gnmi-client-svc] relay cli/" << topic.substr(4)
+              << " → fwd/" << topic.substr(4)
+              << " (" << msg->payloadlen << "B)\n";
+  } else if (topic.size() > 5 && topic.substr(0, 5) == "resp/") {
+    out_topic = "cli_resp/" + topic.substr(5);
+    std::cout << "[gnmi-client-svc] relay resp/" << topic.substr(5)
+              << " → cli_resp/" << topic.substr(5)
+              << " (" << msg->payloadlen << "B)\n";
+  } else {
+    return;
+  }
+
+  mosquitto_publish(mosq, nullptr, out_topic.c_str(),
                     msg->payloadlen, msg->payload, 0, false);
-  std::cout << "[gnmi-client-svc] relay "
-            << std::string(static_cast<const char *>(msg->payload))
-            << " → " << topic.substr(4) << " (" << msg->payloadlen << "B)\n";
 }
 
 static void print_usage(const char *prog) {
@@ -201,7 +212,8 @@ int main(int argc, const char *argv[]) {
 
     mqtt_io relay(mqtt_host, mqtt_port, "gnmi-client-svc", relay_msg_cb, nullptr);
     relay.subscribe("cli/#");
-    std::cout << "[gnmi-client-svc] subscribed to cli/#\n";
+    relay.subscribe("resp/#");
+    std::cout << "[gnmi-client-svc] subscribed to cli/# and resp/#\n";
 
     run_evt_loop{}();
     return 0;

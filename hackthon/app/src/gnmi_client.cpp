@@ -42,9 +42,11 @@ class gnmi_connection : public evt_io {
 public:
   gnmi_connection(const std::string &host, uint16_t port,
                   const std::string &rpc_path, const std::string &request_pb,
-                  const tls_config &tls)
+                  const tls_config &tls,
+                  gnmi_client::response_cb on_done = {})
       : evt_io(host, port, tls.build_client_ctx()),
         m_host(host), m_rpc_path(rpc_path), m_request_pb(request_pb),
+        m_on_done(std::move(on_done)),
         m_h2(/*server_side=*/false,
              [this](int32_t, const http2_session::request &resp) {
                capture_response(resp);
@@ -87,8 +89,7 @@ public:
 
     if (consumed < 0) {
       std::cerr << "[gnmi_connection] http2 recv error: " << consumed << "\n";
-      m_response = {-1, "http2 protocol error", ""};
-      m_done = true;
+      finish({-1, "http2 protocol error", ""});
       return static_cast<std::int32_t>(consumed);
     }
 
@@ -100,19 +101,15 @@ public:
   std::int32_t handle_event(const std::int32_t & /*channel*/,
                              const std::uint16_t & /*events*/) override {
     std::cerr << "[gnmi_connection] timed out\n";
-    m_response = {-1, "timeout", ""};
-    m_done = true;
+    finish({-1, "timeout", ""});
     return 0;
   }
 
   // Called by client_event_cb on BEV_EVENT_EOF / BEV_EVENT_ERROR.
-  // Unlike connected_client there is no parent server to notify — just
-  // mark the exchange as failed if we have not yet received the response.
   std::int32_t handle_close(const std::int32_t & /*channel*/) override {
     if (!m_done) {
       std::cerr << "[gnmi_connection] connection closed before response\n";
-      m_response = {-1, "connection closed before response", ""};
-      m_done = true;
+      finish({-1, "connection closed before response", ""});
     }
     return 0;
   }
@@ -123,33 +120,41 @@ public:
 
 private:
   // Drain all pending HTTP/2 frames into the bufferevent send buffer.
-  // Mirrors connected_client calling tx() after m_grpc operations.
   void flush() {
     auto out = m_h2.drain_send_buf();
     if (!out.empty())
       tx(out.data(), out.size());
   }
 
+  // Set the response, mark done, and invoke the callback exactly once.
+  void finish(gnmi_client::response r) {
+    if (m_done) return;
+    m_response = std::move(r);
+    m_done = true;
+    if (m_on_done) m_on_done(m_response);
+  }
+
   // Fires from the http2_session handler when the trailing HEADERS frame
   // (grpc-status) arrives with END_STREAM.
   void capture_response(const http2_session::request &resp) {
+    gnmi_client::response r;
     auto sit = resp.headers.find("grpc-status");
     if (sit != resp.headers.end())
-      m_response.grpc_status = std::stoi(sit->second);
+      r.grpc_status = std::stoi(sit->second);
 
     auto mit = resp.headers.find("grpc-message");
     if (mit != resp.headers.end())
-      m_response.grpc_message = mit->second;
+      r.grpc_message = mit->second;
 
-    // Strip the 5-byte gRPC length-prefix from the body.
     std::string body_copy = resp.body;
-    m_response.body_pb = grpc_session::decode_frame(body_copy);
-    m_done = true;
+    r.body_pb = grpc_session::decode_frame(body_copy);
+    finish(std::move(r));
   }
 
   std::string m_host;
   std::string m_rpc_path;
   std::string m_request_pb;
+  gnmi_client::response_cb m_on_done;
   http2_session m_h2;
   gnmi_client::response m_response;
   bool m_done{false};
@@ -190,15 +195,16 @@ static std::vector<std::shared_ptr<gnmi_connection>> s_active;
 void gnmi_client::push_async(const std::string &host, uint16_t port,
                                const std::string &rpc_path,
                                const std::string &request_pb,
-                               const tls_config &tls) {
+                               const tls_config &tls,
+                               response_cb on_done) {
   // Lazy GC: drop finished connections before adding a new one.
   s_active.erase(
       std::remove_if(s_active.begin(), s_active.end(),
                      [](const auto &c) { return c->done(); }),
       s_active.end());
 
-  s_active.push_back(
-      std::make_shared<gnmi_connection>(host, port, rpc_path, request_pb, tls));
+  s_active.push_back(std::make_shared<gnmi_connection>(
+      host, port, rpc_path, request_pb, tls, std::move(on_done)));
 
   std::cout << "[gnmi_client] push_async → " << host << ":" << port
             << " rpc=" << rpc_path << " active=" << s_active.size() << '\n';

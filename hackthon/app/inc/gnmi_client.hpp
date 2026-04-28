@@ -4,6 +4,7 @@
 #include "tls_config.hpp"
 
 #include <cstdint>
+#include <functional>
 #include <string>
 
 // Configuration for a server-initiated async gNMI push to a connected client.
@@ -36,15 +37,19 @@ public:
                        const std::string &request_pb,
                        const tls_config &tls = {});
 
-  // Non-blocking fire-and-forget push — safe to call from INSIDE a running
-  // event loop (e.g. from a timer callback in openvpn_server::handle_connect).
+  // Called exactly once when the exchange completes (success or error).
+  using response_cb = std::function<void(const response &)>;
+
+  // Non-blocking push — safe to call from INSIDE a running event loop.
   // Creates a gnmi_connection registered with the shared event base and lets
   // event_base_dispatch drive it.  Completed connections are lazily freed on
-  // the next push_async call.
+  // the next push_async call.  on_done (optional) is invoked exactly once
+  // when the response arrives or an error terminates the exchange.
   static void push_async(const std::string &host, uint16_t port,
                          const std::string &rpc_path,
                          const std::string &request_pb,
-                         const tls_config &tls = {});
+                         const tls_config &tls = {},
+                         response_cb on_done = {});
 };
 
 #endif // __gnmi_client_hpp__
