@@ -44,8 +44,12 @@ public:
   std::int32_t handle_read(const std::int32_t &, const std::string &,
                             const bool &) override;
   std::int32_t handle_write(const std::int32_t &) override;
+  // Periodic 1-second tick: drives MQTT keepalive/ping via mosquitto_loop_misc.
+  std::int32_t handle_timeout(int timer_id) override;
 
 private:
+  static constexpr int TIMER_MISC = 0;
+
   // Creates the mosquitto instance and calls connect_async().  Called from
   // the constructor's base-class initialiser (before mqtt_io members exist);
   // stores the mosquitto* in a static scratch so the constructor body can
@@ -56,11 +60,7 @@ private:
                          const struct mosquitto_message *),
       void *userdata);
 
-  // Periodic libevent timer: calls mosquitto_loop_misc() for keepalive/ping.
-  static void misc_cb(evutil_socket_t, short, void *arg);
-
   struct mosquitto *m_mosq{nullptr};
-  struct event     *m_misc_timer{nullptr};
 };
 
 #endif // __mqtt_io_hpp__

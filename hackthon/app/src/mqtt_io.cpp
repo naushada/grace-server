@@ -50,16 +50,13 @@ mqtt_io::mqtt_io(const std::string &host, uint16_t port,
   if (mosquitto_want_write(m_mosq))
     raw_watch_write(true);
 
-  m_misc_timer = evtimer_new(evt_base::instance().get(), misc_cb, this);
-  const struct timeval tv{1, 0};
-  evtimer_add(m_misc_timer, &tv);
+  arm_timer(TIMER_MISC, {1, 0}, /*repeat=*/true);
 
   std::cout << "[mqtt_io] connecting to " << host << ":" << port
             << " as '" << client_id << "'\n";
 }
 
 mqtt_io::~mqtt_io() {
-  if (m_misc_timer) { event_free(m_misc_timer); m_misc_timer = nullptr; }
   if (m_mosq) {
     mosquitto_disconnect(m_mosq);
     mosquitto_destroy(m_mosq);
@@ -87,12 +84,11 @@ std::int32_t mqtt_io::handle_write(const std::int32_t &) {
   return 0;
 }
 
-// 1-second timer: MQTT keepalive, ping, reconnect logic.
-void mqtt_io::misc_cb(evutil_socket_t, short, void *arg) {
-  auto *self = static_cast<mqtt_io *>(arg);
-  mosquitto_loop_misc(self->m_mosq);
-  const struct timeval tv{1, 0};
-  evtimer_add(self->m_misc_timer, &tv);
+// 1-second repeating timer: MQTT keepalive, ping, reconnect logic.
+std::int32_t mqtt_io::handle_timeout(int /*timer_id*/) {
+  if (!m_mosq) return -1;
+  mosquitto_loop_misc(m_mosq);
+  return 0;
 }
 
 void mqtt_io::subscribe(const std::string &topic, int qos) {

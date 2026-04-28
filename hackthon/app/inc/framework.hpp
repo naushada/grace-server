@@ -2,8 +2,8 @@
 #define __framework_hpp__
 
 #include <iostream>
+#include <map>
 #include <memory>
-#include <unordered_map>
 
 extern "C" {
 #include <arpa/inet.h>
@@ -25,6 +25,14 @@ struct ssl_ctx_deleter {
   void operator()(SSL_CTX *ctx) const noexcept { SSL_CTX_free(ctx); }
 };
 using ssl_ctx_ptr = std::unique_ptr<SSL_CTX, ssl_ctx_deleter>;
+
+// RAII wrapper for a libevent struct event*.  Cancels and frees on destruction.
+struct event_deleter {
+  void operator()(struct event *e) const noexcept {
+    if (e) { event_del(e); event_free(e); }
+  }
+};
+using evt_timer = std::unique_ptr<struct event, event_deleter>;
 
 // Tag type that selects the server-listener evt_io constructor overload,
 // disambiguating it from the outbound-client constructor of the same arity.
@@ -193,6 +201,13 @@ public:
   virtual std::int32_t handle_accept(const std::int32_t &channel,
                                      const std::string &peer_host);
 
+  // Create (or replace) a timer identified by timer_id.
+  // When repeat is true the timer re-fires every tv seconds (EV_PERSIST);
+  // otherwise it fires once.  handle_timeout(timer_id) is called on expiry.
+  void arm_timer(int timer_id, const struct timeval &tv, bool repeat = false);
+  void disarm_timer(int timer_id);
+  virtual std::int32_t handle_timeout(int timer_id);
+
 protected:
   // Enable or disable the EV_WRITE watcher for a raw-fd connection.
   // Call raw_watch_write(true)  when there is pending outgoing data.
@@ -229,10 +244,6 @@ protected:
 
 public:
   virtual ~evt_io() {
-    if (m_raw_write_ev) { event_free(m_raw_write_ev); m_raw_write_ev = nullptr; }
-    if (m_raw_read_ev)  { event_free(m_raw_read_ev);  m_raw_read_ev  = nullptr; }
-    if (m_buffer_evt_p) m_buffer_evt_p.reset(nullptr);
-    if (m_listener_p)   m_listener_p.reset(nullptr);
     std::cout << "Fn:" << __func__ << ":" << __LINE__ << " dtor" << std::endl;
   }
 
@@ -262,13 +273,18 @@ private:
     }
   }
 
+  struct timer_ctx { evt_io *self; int id; };
+  static void timer_dispatch_cb(evutil_socket_t, short, void *arg);
+
   std::string m_from_host;
   std::unique_ptr<struct bufferevent, custom_deleter> m_buffer_evt_p;
   std::unique_ptr<struct evconnlistener, custom_deleter_listener> m_listener_p;
   ssl_ctx_ptr m_ssl_ctx;
   // Raw-fd mode (rawfd_tag constructor): read + write events, no bufferevent.
-  struct event   *m_raw_read_ev{nullptr};
-  struct event   *m_raw_write_ev{nullptr};
+  evt_timer m_raw_read_ev;
+  evt_timer m_raw_write_ev;
+  // Named timers: keyed by caller-chosen integer ID.
+  std::map<int, std::pair<evt_timer, timer_ctx>> m_timers;
 };
 
 struct run_evt_loop {

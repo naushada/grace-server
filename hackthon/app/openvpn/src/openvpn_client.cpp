@@ -127,20 +127,17 @@ std::int32_t openvpn_client::handle_event(const std::int32_t & /*ch*/,
 void openvpn_client::schedule_reconnect() {
   std::cout << "[openvpn_client] reconnecting in " << RECONNECT_DELAY_S
             << "s...\n";
-  m_reconnect_timer.reset(
-      evtimer_new(evt_base::instance().get(), reconnect_cb, this));
-  const struct timeval tv{RECONNECT_DELAY_S, 0};
-  evtimer_add(m_reconnect_timer.get(), &tv);
+  arm_timer(TIMER_RECONNECT, {RECONNECT_DELAY_S, 0});
 }
 
-void openvpn_client::reconnect_cb(evutil_socket_t, short, void *ctx) {
-  auto *self = static_cast<openvpn_client *>(ctx);
-  std::cout << "[openvpn_client] retrying " << self->m_server_host
-            << ":" << self->m_server_port << "\n";
-  bufferevent_socket_connect_hostname(self->get_bufferevt(), nullptr,
+std::int32_t openvpn_client::handle_timeout(int /*timer_id*/) {
+  std::cout << "[openvpn_client] retrying " << m_server_host
+            << ":" << m_server_port << "\n";
+  bufferevent_socket_connect_hostname(get_bufferevt(), nullptr,
                                       AF_UNSPEC,
-                                      self->m_server_host.c_str(),
-                                      self->m_server_port);
+                                      m_server_host.c_str(),
+                                      m_server_port);
+  return 0;
 }
 
 std::int32_t openvpn_client::handle_write(const std::int32_t & /*ch*/) {

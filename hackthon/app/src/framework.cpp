@@ -106,18 +106,18 @@ evt_io::evt_io(evutil_socket_t fd, rawfd_tag)
     : m_from_host("rawfd"), m_buffer_evt_p(nullptr), m_listener_p(nullptr) {
   if (fd < 0) return; // failed connection — no events to register
   evutil_make_socket_nonblocking(fd);
-  m_raw_read_ev = event_new(evt_base::instance().get(), fd,
-                             EV_READ | EV_PERSIST, raw_read_cb, this);
-  m_raw_write_ev = event_new(evt_base::instance().get(), fd,
-                              EV_WRITE | EV_PERSIST, raw_write_cb, this);
-  event_add(m_raw_read_ev, nullptr);
+  m_raw_read_ev.reset(event_new(evt_base::instance().get(), fd,
+                                EV_READ | EV_PERSIST, raw_read_cb, this));
+  m_raw_write_ev.reset(event_new(evt_base::instance().get(), fd,
+                                 EV_WRITE | EV_PERSIST, raw_write_cb, this));
+  event_add(m_raw_read_ev.get(), nullptr);
   // Write event is armed on demand via raw_watch_write(true)
 }
 
 void evt_io::raw_watch_write(bool enable) {
   if (!m_raw_write_ev) return;
-  if (enable) event_add(m_raw_write_ev, nullptr);
-  else        event_del(m_raw_write_ev);
+  if (enable) event_add(m_raw_write_ev.get(), nullptr);
+  else        event_del(m_raw_write_ev.get());
 }
 
 // ---------------------------------------------------------------------------
@@ -147,5 +147,29 @@ std::int32_t evt_io::handle_accept(const std::int32_t &channel,
                                    const std::string &peer_host) {
   return (0);
 }
+
+// ---------------------------------------------------------------------------
+// Timer support
+// ---------------------------------------------------------------------------
+
+void evt_io::timer_dispatch_cb(evutil_socket_t, short, void *arg) {
+  auto *ctx = static_cast<timer_ctx *>(arg);
+  ctx->self->handle_timeout(ctx->id);
+}
+
+void evt_io::arm_timer(int timer_id, const struct timeval &tv, bool repeat) {
+  auto &slot = m_timers[timer_id];            // stable map node
+  slot.second = {this, timer_id};
+  short flags = repeat ? (EV_TIMEOUT | EV_PERSIST) : EV_TIMEOUT;
+  slot.first.reset(event_new(evt_base::instance().get(), -1, flags,
+                             timer_dispatch_cb, &slot.second));
+  event_add(slot.first.get(), &tv);
+}
+
+void evt_io::disarm_timer(int timer_id) {
+  m_timers.erase(timer_id);                   // evt_timer RAII: event_del + event_free
+}
+
+std::int32_t evt_io::handle_timeout(int /*timer_id*/) { return 0; }
 
 #endif

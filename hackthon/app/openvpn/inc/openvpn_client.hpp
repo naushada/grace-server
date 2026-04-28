@@ -8,10 +8,6 @@
 #include <ctime>
 #include <string>
 
-extern "C" {
-#include <event2/event.h>
-}
-
 // Persistent outbound VPN tunnel client with automatic reconnect.
 //
 // On connect failure or timeout, schedules a RECONNECT_DELAY_S second
@@ -46,6 +42,7 @@ public:
   std::int32_t handle_event(const std::int32_t &channel,
                              const std::uint16_t &event) override;
   std::int32_t handle_write(const std::int32_t &channel) override;
+  std::int32_t handle_timeout(int timer_id) override;
 
   static std::string encode_frame(uint8_t type, const std::string &payload);
   static bool try_decode_frame(const std::string &buf, size_t offset,
@@ -69,12 +66,8 @@ private:
 
   // Schedule a reconnect attempt after RECONNECT_DELAY_S seconds.
   void schedule_reconnect();
-  // libevent timer callback — fires after the delay and reconnects.
-  static void reconnect_cb(evutil_socket_t, short, void *ctx);
 
-  struct event_deleter {
-    void operator()(struct event *e) const noexcept { event_free(e); }
-  };
+  static constexpr int TIMER_RECONNECT = 0;
 
   std::string              m_server_host;
   uint16_t                 m_server_port{0};
@@ -84,7 +77,6 @@ private:
   std::string              m_assigned_ip;
   std::string              m_recv_buf;
   std::unique_ptr<tun_io>  m_tun_io;
-  std::unique_ptr<struct event, event_deleter> m_reconnect_timer;
   int                      m_tun_fd{-1};
   bool                     m_ip_assigned{false};
 };
