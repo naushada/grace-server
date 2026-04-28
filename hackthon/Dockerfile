@@ -2,7 +2,7 @@ FROM ubuntu:22.04 AS build
 
 ENV DEBIAN_FRONTEND=noninteractive
 
-RUN apt-get update && apt-get install -y \
+RUN apt-get -o Acquire::Check-Valid-Until=false update && apt-get install -y \
     build-essential \
     cmake \
     git \
@@ -49,7 +49,7 @@ ENV DEBIAN_FRONTEND=noninteractive
 #   - libreadline8:                               used by `cli_app`
 #   - liblua5.4-0:                                shared by both (lua_engine)
 #   - gdb:                                        kept for in-container debugging
-RUN apt-get update && apt-get install -y \
+RUN apt-get -o Acquire::Check-Valid-Until=false update && apt-get install -y \
     libevent-2.1-7 \
     libevent-openssl-2.1-7 \
     libnghttp2-14 \
