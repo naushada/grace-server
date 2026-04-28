@@ -158,7 +158,15 @@ Marvel> gnmi_replace target=192.168.1.1 prefix=/interfaces path=/interface[name=
 Marvel> gnmi_delete target=192.168.1.1 prefix=/interfaces path=/interface[name=eth0]
 ```
 
-### How it works (CLI → peer device)
+### CLI → gNMI server via MQTT + VPN tunnel
+
+When `MQTT_HOST` is set, the CLI routes through an MQTT broker and an OpenVPN
+tunnel instead of connecting directly.  See
+[docs/gnmi-mqtt-flow.md](docs/gnmi-mqtt-flow.md) for the full end-to-end flow,
+payload format, topic scheme, and the current **response gap** (SetResponse is
+not yet returned to the CLI).
+
+### How it works (CLI → peer device, direct gRPC)
 
 ```
 readline REPL
