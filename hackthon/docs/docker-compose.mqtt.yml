@@ -1,0 +1,26 @@
+# Override file for the mqtt profile.
+# Adds --mqtt-host/--mqtt-port to vpn-server so it subscribes to mosquitto,
+# and wires vpn-server's depends_on to mosquitto.
+#
+# Usage:
+#   docker compose -f docs/docker-compose.yml \
+#                  -f docs/docker-compose.mqtt.yml \
+#                  --profile mqtt up
+
+services:
+  vpn-server:
+    command:
+      - /app/app
+      - --mode=server
+      - --server-ip=10.8.0.1
+      - --pool-start=10.8.0.2
+      - --pool-end=10.8.0.254
+      - --netmask=255.255.255.0
+      - --gnmi-push=true
+      - --gnmi-port=58989
+      - --gnmi-push-delay=2
+      - --mqtt-host=mosquitto
+      - --mqtt-port=1883
+    depends_on:
+      mosquitto:
+        condition: service_healthy
