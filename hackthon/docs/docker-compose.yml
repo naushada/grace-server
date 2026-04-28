@@ -192,13 +192,44 @@ services:
       vpn-net:
         ipv4_address: 172.20.0.13
     healthcheck:
-      test: ["CMD", "bash", "-c", "grep -q ':E67C' /proc/net/tcp"]
+      test: ["CMD", "bash", "-c", "grep -q ':E66C' /proc/net/tcp"]
       interval: 3s
       timeout: 3s
       retries: 10
       start_period: 2s
     profiles:
       - registration
+      - mqtt
+    restart: unless-stopped
+
+  # ─────────────────────────────────────────────────────────────────────────
+  # telemetry-svc — telemetry collection service.
+  #   Reuses the gNMI server binary on port 58989 (same internal port as the
+  #   operational gNMI service, isolated by a dedicated IP and host mapping).
+  #   Devices push telemetry data via /gnmi.gNMI/Set and subscribe to
+  #   telemetry streams via /gnmi.gNMI/Get.
+  #   Host port 58991 avoids collision with the operational gnmi-server (58989).
+  #   Profile: telemetry  (also included in mqtt profile)
+  # ─────────────────────────────────────────────────────────────────────────
+  telemetry-svc:
+    image: marvel:release
+    command:
+      - /app/app
+      - --mode=gnmi-server
+      - --gnmi-port=58989
+    ports:
+      - "58991:58989"    # telemetry gRPC (plain TCP); host 58991 → container 58989
+    networks:
+      vpn-net:
+        ipv4_address: 172.20.0.14
+    healthcheck:
+      test: ["CMD", "bash", "-c", "grep -q ':E66D' /proc/net/tcp"]
+      interval: 3s
+      timeout: 3s
+      retries: 10
+      start_period: 2s
+    profiles:
+      - telemetry
       - mqtt
     restart: unless-stopped
 
