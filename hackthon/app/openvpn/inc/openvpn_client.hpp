@@ -15,6 +15,14 @@
 // existing bufferevent so the event loop stays alive across retries.
 //
 // Lua status file is written via lua_file::write_table (single Lua write path).
+//
+// NAT forwarding:
+//   When gnmi_fwd_ip is non-empty, after the VIP is assigned the client sets up
+//   an iptables PREROUTING DNAT rule:
+//     <vip>:<gnmi_port>/tcp  →  <gnmi_fwd_ip>:<gnmi_fwd_port>
+//   This lets the vpn-server's gNMI requests (sent to the VIP) reach an
+//   external gnmi-server-svc without the vpn-client running its own server.
+//   The rule is torn down on disconnect/reconnect so it stays in sync with the VIP.
 class openvpn_client : public evt_io {
 public:
   static constexpr uint8_t TYPE_IP_ASSIGN  = 0x01;
@@ -24,8 +32,11 @@ public:
   static constexpr int     RECONNECT_DELAY_S = 3;
 
   openvpn_client(const std::string &host, uint16_t port,
-                  std::string        status_file = "/tmp/vpn_status.lua",
-                  const tls_config  &tls         = {});
+                  std::string        status_file  = "/tmp/vpn_status.lua",
+                  const tls_config  &tls          = {},
+                  uint16_t           gnmi_port    = 58989,
+                  std::string        gnmi_fwd_ip  = "",
+                  uint16_t           gnmi_fwd_port = 58989);
 
   virtual ~openvpn_client();
 
@@ -63,6 +74,8 @@ private:
   void   close_tun();
   size_t process_frames();
   void   send_frame(uint8_t type, const std::string &payload);
+  void   setup_nat_forwarding(const std::string &vip);
+  void   teardown_nat_forwarding(const std::string &vip);
 
   // Schedule a reconnect attempt after RECONNECT_DELAY_S seconds.
   void schedule_reconnect();
@@ -79,6 +92,9 @@ private:
   std::unique_ptr<tun_io>  m_tun_io;
   int                      m_tun_fd{-1};
   bool                     m_ip_assigned{false};
+  uint16_t                 m_gnmi_port{58989};
+  std::string              m_gnmi_fwd_ip;
+  uint16_t                 m_gnmi_fwd_port{58989};
 };
 
 #endif // __openvpn_client_hpp__

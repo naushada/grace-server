@@ -20,6 +20,7 @@
 #endif
 
 #include <event2/bufferevent.h>
+#include <cstdlib>
 
 // tun_io — wraps the TUN fd in evt_io so libevent delivers reads via handle_read.
 class openvpn_client::tun_io : public evt_io {
@@ -45,12 +46,21 @@ private:
 // (non-null ctx) outbound connections — no TLS wiring needed here.
 openvpn_client::openvpn_client(const std::string &host, uint16_t port,
                                  std::string status_file,
-                                 const tls_config &tls)
+                                 const tls_config &tls,
+                                 uint16_t gnmi_port,
+                                 std::string gnmi_fwd_ip,
+                                 uint16_t gnmi_fwd_port)
     : evt_io(host, port, tls.build_client_ctx()),
       m_server_host(host), m_server_port(port), m_tls(tls),
-      m_status_file(std::move(status_file)) {
+      m_status_file(std::move(status_file)),
+      m_gnmi_port(gnmi_port),
+      m_gnmi_fwd_ip(std::move(gnmi_fwd_ip)),
+      m_gnmi_fwd_port(gnmi_fwd_port) {
   std::cout << "[openvpn_client] connecting to " << host << ":" << port
-            << " tls=" << (tls.enabled ? "ON" : "OFF") << '\n';
+            << " tls=" << (tls.enabled ? "ON" : "OFF");
+  if (!m_gnmi_fwd_ip.empty())
+    std::cout << " gnmi-fwd=" << m_gnmi_fwd_ip << ":" << m_gnmi_fwd_port;
+  std::cout << '\n';
 }
 
 openvpn_client::~openvpn_client() {
@@ -199,6 +209,7 @@ size_t openvpn_client::process_frames() {
         std::cout << "[openvpn_client] kernel assigned " << m_tun_name << "\n";
         assign_tun_ip(m_assigned_ip, netmask);
         m_tun_io = std::make_unique<tun_io>(m_tun_fd, *this);
+        setup_nat_forwarding(m_assigned_ip);
       }
     }
       write_status_lua(m_status_file, m_assigned_ip, m_tun_name, "Connected",
@@ -285,6 +296,48 @@ void openvpn_client::close_tun() {
 #ifdef __linux__
   m_tun_io.reset();
   if (m_tun_fd >= 0) { ::close(m_tun_fd); m_tun_fd = -1; }
+#endif
+  teardown_nat_forwarding(m_assigned_ip);
+}
+
+// ---------------------------------------------------------------------------
+// NAT forwarding — PREROUTING DNAT so inbound gNMI on VIP reaches gnmi-server
+// ---------------------------------------------------------------------------
+
+void openvpn_client::setup_nat_forwarding(const std::string &vip) {
+#ifdef __linux__
+  if (m_gnmi_fwd_ip.empty() || vip.empty()) return;
+
+  // Enable kernel IP forwarding.
+  std::system("sysctl -w net.ipv4.ip_forward=1 >/dev/null 2>&1");
+
+  // DNAT: any TCP arriving at <vip>:<gnmi_port> → <gnmi_fwd_ip>:<gnmi_fwd_port>
+  const std::string dnat =
+      "iptables -t nat -A PREROUTING"
+      " -d " + vip +
+      " -p tcp --dport " + std::to_string(m_gnmi_port) +
+      " -j DNAT --to-destination " + m_gnmi_fwd_ip + ":" + std::to_string(m_gnmi_fwd_port);
+  std::system(dnat.c_str());
+
+  // MASQUERADE so the gnmi-server's reply is src-natted back through this host.
+  std::system("iptables -t nat -A POSTROUTING -j MASQUERADE >/dev/null 2>&1");
+
+  std::cout << "[openvpn_client] NAT DNAT: " << vip << ":" << m_gnmi_port
+            << " \xe2\x86\x92 " << m_gnmi_fwd_ip << ":" << m_gnmi_fwd_port << '\n';
+#endif
+}
+
+void openvpn_client::teardown_nat_forwarding(const std::string &vip) {
+#ifdef __linux__
+  if (m_gnmi_fwd_ip.empty() || vip.empty()) return;
+
+  const std::string dnat =
+      "iptables -t nat -D PREROUTING"
+      " -d " + vip +
+      " -p tcp --dport " + std::to_string(m_gnmi_port) +
+      " -j DNAT --to-destination " + m_gnmi_fwd_ip + ":" + std::to_string(m_gnmi_fwd_port);
+  std::system(dnat.c_str());
+  std::cout << "[openvpn_client] NAT DNAT removed for " << vip << '\n';
 #endif
 }
 

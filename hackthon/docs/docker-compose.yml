@@ -71,31 +71,26 @@ services:
   #   Receives IP_ASSIGN "10.8.0.X 255.255.255.0" from the server.
   #   Configures tun0 and registers a libevent TUN reader.
   #   Writes connection state to /run/vpn_status.lua.
-  #   After tun0 is up, starts a socat proxy that listens on the assigned
-  #   virtual IP (read from vpn_status.lua) and forwards port 58989 traffic
-  #   to gnmi-server-svc on app-net (172.21.0.5:58989).
+  #   After tun0 is up, installs an iptables PREROUTING DNAT rule:
+  #     <assigned-vip>:58989 → 172.21.0.5:58989 (gnmi-server-svc on app-net)
+  #   Sits on both vpn-net (tunnel) and app-net (route to gnmi-server-svc).
   # ─────────────────────────────────────────────────────────────────────────
   vpn-client:
     image: marvel:release
     user: root
     cap_add:
-      - NET_ADMIN
+      - NET_ADMIN   # TUN + iptables NAT
       - NET_RAW
     devices:
       - /dev/net/tun:/dev/net/tun
-    entrypoint: ["/bin/bash", "-c"]
     command:
-      - |
-        /app/vpn_client --server=vpn-server \
-                        --port=1194 \
-                        --status=/run/vpn_status.lua &
-        APP_PID=$$!
-        until ip link show tun0 2>/dev/null | grep -q UP; do sleep 1; done
-        VIP=$$(grep 'service_ip' /run/vpn_status.lua | grep -oE '[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+')
-        echo "[vpn-client] tunnel up, virtual IP=$$VIP — starting socat proxy"
-        socat TCP-LISTEN:58989,bind=$${VIP},reuseaddr,fork \
-              TCP:172.21.0.5:58989 &
-        wait $${APP_PID}
+      - /app/vpn_client
+      - --server=vpn-server
+      - --port=1194
+      - --status=/run/vpn_status.lua
+      - --gnmi-port=58989
+      - --gnmi-fwd-ip=172.21.0.5      # gnmi-server-svc on app-net
+      - --gnmi-fwd-port=58989
     networks:
       vpn-net:
         ipv4_address: 172.20.0.3
