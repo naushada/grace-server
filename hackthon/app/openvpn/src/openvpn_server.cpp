@@ -190,7 +190,17 @@ openvpn_server::openvpn_server(uint16_t vpn_port,
     args_s.push_back("--dh");
     args_s.push_back("/app/certs/dh.pem");
   } else {
-    args_s.insert(args_s.end(), {"--auth", "none", "--cipher", "none"});
+    // Control channel TLS still requires cert/key/ca — use baked-in test certs.
+    // Data channel: --data-ciphers none + --auth none → completely unencrypted.
+    // --dh none uses ECDH so no DH parameter file is needed (OpenVPN 2.4+).
+    args_s.insert(args_s.end(), {
+      "--ca",           "/app/certs/ca.pem",
+      "--cert",         "/app/certs/server.pem",
+      "--key",          "/app/certs/server.key",
+      "--dh",           "none",
+      "--data-ciphers", "none",
+      "--auth",         "none",
+    });
   }
 
   std::vector<const char *> argv;

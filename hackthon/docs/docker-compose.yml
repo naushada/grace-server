@@ -363,7 +363,7 @@ services:
   # ═════════════════════════════════════════════════════════════════════════
 
   # ─────────────────────────────────────────────────────────────────────────
-  # mosquitto — MQTT broker.  Profile: mqtt
+  # mosquitto — MQTT broker.  Profile: mqtt, openvpn-mqtt
   # ─────────────────────────────────────────────────────────────────────────
   mosquitto:
     image: eclipse-mosquitto:2
@@ -381,12 +381,14 @@ services:
       retries: 10
     profiles:
       - mqtt
+      - openvpn-mqtt
     restart: unless-stopped
 
   # ─────────────────────────────────────────────────────────────────────────
-  # gnmi-server-svc — standalone gNMI server.  Profile: mqtt
+  # gnmi-server-svc — standalone gNMI server.  Profile: mqtt, openvpn-mqtt
   #   Lives on app-net (172.21.0.0/24) — invisible to vpn-net.
-  #   Receives gNMI requests forwarded by vpn-client's socat proxy.
+  #   Receives gNMI requests forwarded via iptables DNAT from vpn-client
+  #   or openvpn-client.
   # ─────────────────────────────────────────────────────────────────────────
   gnmi-server-svc:
     image: marvel:release
@@ -399,13 +401,15 @@ services:
         ipv4_address: 172.21.0.5
     profiles:
       - mqtt
+      - openvpn-mqtt
     restart: unless-stopped
 
   # ─────────────────────────────────────────────────────────────────────────
-  # gnmi-client-svc — MQTT relay.  Profile: mqtt
+  # gnmi-client-svc — MQTT relay.  Profile: mqtt, openvpn-mqtt
   #   Subscribes to "cli/#" (messages from cli_app).
-  #   Re-publishes each message unchanged on "fwd/<ip>" for vpn-server.
-  #   No VPN tunnel; sits on vpn-net only.
+  #   Re-publishes each message unchanged on "fwd/<ip>" for vpn-server or
+  #   openvpn-server-mqtt.  Only depends on mosquitto — the VPN server that
+  #   consumes fwd/<vip> varies by profile.
   # ─────────────────────────────────────────────────────────────────────────
   gnmi-client-svc:
     image: marvel:release
@@ -420,12 +424,9 @@ services:
     depends_on:
       mosquitto:
         condition: service_healthy
-      vpn-server:
-        condition: service_healthy
-      vpn-client:
-        condition: service_started
     profiles:
       - mqtt
+      - openvpn-mqtt
     restart: unless-stopped
 
   # ═════════════════════════════════════════════════════════════════════════

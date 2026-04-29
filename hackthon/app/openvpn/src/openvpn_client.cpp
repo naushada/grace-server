@@ -87,9 +87,15 @@ openvpn_client::openvpn_client(const std::string &server_host,
     if (!tls.cert_file.empty()) { args_s.push_back("--cert"); args_s.push_back(tls.cert_file); }
     if (!tls.key_file.empty())  { args_s.push_back("--key");  args_s.push_back(tls.key_file); }
   } else {
-    // No-crypto mode — for testing / non-TLS deployments.
-    // Requires openvpn --enable-no-crypto build or use --secret for HMAC only.
-    args_s.insert(args_s.end(), {"--auth", "none", "--cipher", "none"});
+    // Control channel TLS still requires cert/key/ca — use baked-in test certs.
+    // Data channel: --data-ciphers none + --auth none → completely unencrypted.
+    args_s.insert(args_s.end(), {
+      "--ca",           "/app/certs/ca.pem",
+      "--cert",         "/app/certs/client.pem",
+      "--key",          "/app/certs/client.key",
+      "--data-ciphers", "none",
+      "--auth",         "none",
+    });
   }
 
   std::vector<const char *> argv;
