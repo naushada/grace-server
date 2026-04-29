@@ -36,7 +36,7 @@ set(SHARED_SOURCES
   "../src/grpc_session.cpp"
   "../src/http2.cpp"
   "../src/lua_engine.cpp"
-  "../openvpn/src/openvpn_tunnel_client.cpp"
+  "../openvpn/src/vpn_tunnel_client.cpp"
 )
 
 add_executable(cli_app

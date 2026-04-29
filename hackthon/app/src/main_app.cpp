@@ -5,8 +5,8 @@
 #include "framework.hpp"
 #include "fs_app.hpp"
 #include "gnmi_client.hpp"
-#include "openvpn_client.hpp"
-#include "openvpn_server.hpp"
+#include "vpn_client.hpp"
+#include "vpn_server.hpp"
 #include "server_app.hpp"
 #include "tls_config.hpp"
 
@@ -87,7 +87,7 @@ static void print_usage(const char *prog) {
     << "       connecting VPN client's gNMI server after --gnmi-push-delay seconds.\n"
     << "\n"
     << "  " << prog << " --mode=client [options]\n"
-    << "       Connects to openvpn_server, receives a virtual IP, configures tun0,\n"
+    << "       Connects to vpn_server, receives a virtual IP, configures tun0,\n"
     << "       then starts its own gNMI server on --gnmi-port (default 58989) so\n"
     << "       the VPN server can push gNMI updates back through the tunnel.\n"
     << "\n"
@@ -124,7 +124,7 @@ static void print_usage(const char *prog) {
     << "       Publishes a gNMI GetRequest protobuf to an MQTT broker.\n"
     << "       topic   = --mqtt-topic (the target client's virtual IP)\n"
     << "       payload = serialised gnmi.GetRequest proto bytes\n"
-    << "       The openvpn_server (--mqtt-host) subscribes, forwards the\n"
+    << "       The vpn_server (--mqtt-host) subscribes, forwards the\n"
     << "       request through the VPN tunnel, and the client's nftables\n"
     << "       DNAT rule delivers it to gnmi-server-svc.\n"
     << "\n"
@@ -151,7 +151,7 @@ static void print_usage(const char *prog) {
 // Design: phased event loop (sequential, NOT nested):
 //
 //   Phase 1  while (!vpn.ip_assigned()) event_base_loop(EVLOOP_ONCE)
-//            ↳ drives the openvpn_client bufferevent until IP_ASSIGN arrives
+//            ↳ drives the vpn_client bufferevent until IP_ASSIGN arrives
 //              and tun0 is configured
 //
 //   Phase 2  gnmi_client::call(server_vip, gnmi_port, "/gnmi.gNMI/Get", req)
@@ -299,10 +299,10 @@ int main(int argc, const char *argv[]) {
 
     // vpn_client + gnmi_svc + event loop must stay in the same scope so their
     // bufferevents are alive for the entire duration of run_evt_loop.
-    openvpn_client vpn_client(vpn_server, port, status_file, tls);
+    vpn_client vpn_client(vpn_server, port, status_file, tls);
 
     // Phase 1: wait for the VPN tunnel and tun0 to come up before binding the
-    // gNMI server — the server will be reachable by openvpn_server via the tunnel.
+    // gNMI server — the server will be reachable by vpn_server via the tunnel.
     std::cout << "[main] waiting for VPN tunnel...\n";
     auto *base = evt_base::instance().get();
     while (!vpn_client.ip_assigned())
@@ -313,7 +313,7 @@ int main(int argc, const char *argv[]) {
               << " tls=" << (gnmi_tls.enabled ? "ON" : "OFF") << '\n';
 
     // Phase 2: start the gNMI server — now reachable via tun0.
-    // openvpn_server connects here (tunnel IP:gnmi_port) after the push delay.
+    // vpn_server connects here (tunnel IP:gnmi_port) after the push delay.
     server gnmi_svc("0.0.0.0", gnmi_port, gnmi_tls);
 
     // Phase 3 (optional): fire a one-shot gNMI probe to the VPN server.
@@ -358,7 +358,7 @@ int main(int argc, const char *argv[]) {
 
     // svc_module + vpn must stay in scope for the entire event loop.
     server svc_module("0.0.0.0", 58989, gnmi_tls);
-    openvpn_server vpn("0.0.0.0", 1194, pool_start, pool_end, tls,
+    vpn_server vpn("0.0.0.0", 1194, pool_start, pool_end, tls,
                        server_ip, netmask, mqtt_sub);
 
     run_evt_loop{}();

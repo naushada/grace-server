@@ -216,7 +216,7 @@ protected:
   void raw_watch_write(bool enable);
 
   // For inbound peers constructed from a pre-built bufferevent (plain or TLS).
-  // openvpn_peer uses this after openvpn_server calls wrap_accepted().
+  // vpn_peer uses this after vpn_server calls wrap_accepted().
   evt_io(struct bufferevent *bev, const std::string &peer_host)
       : m_from_host(peer_host),
         m_buffer_evt_p(bev),

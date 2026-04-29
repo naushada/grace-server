@@ -4,8 +4,8 @@
 #include <cstdint>
 #include <string>
 
-// MQTT broker connection details shared by openvpn_server (stores and passes
-// to peers) and openvpn_peer (creates its own per-connection subscription).
+// MQTT broker connection details shared by vpn_server (stores and passes
+// to peers) and vpn_peer (creates its own per-connection subscription).
 struct mqtt_sub_cfg {
   bool        enabled{false};
   std::string host{"localhost"};

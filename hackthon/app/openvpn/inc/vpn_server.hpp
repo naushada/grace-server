@@ -1,5 +1,5 @@
-#ifndef __openvpn_server_hpp__
-#define __openvpn_server_hpp__
+#ifndef __vpn_server_hpp__
+#define __vpn_server_hpp__
 
 #include "framework.hpp"
 #include "tls_config.hpp"
@@ -9,7 +9,7 @@
 #include <string>
 #include <unordered_map>
 
-class openvpn_peer;
+class vpn_peer;
 
 // IP address pool supporting any IPv4 range — enables 1000+ concurrent clients.
 class ip_pool {
@@ -32,17 +32,17 @@ private:
 };
 
 // VPN tunnel server.  Accepts clients, assigns virtual IPs from the pool, and
-// creates one openvpn_peer per connection.  TLS is optional.
+// creates one vpn_peer per connection.  TLS is optional.
 //
 // When mqtt_sub is enabled, the broker config is forwarded to each peer on
 // connect so the peer can subscribe to its own "fwd/<vip>" topic and handle
 // gNMI requests from the CLI independently.
-class openvpn_server : public evt_io {
+class vpn_server : public evt_io {
 public:
   using handle_t   = int32_t;
-  using peer_map_t = std::unordered_map<handle_t, std::unique_ptr<openvpn_peer>>;
+  using peer_map_t = std::unordered_map<handle_t, std::unique_ptr<vpn_peer>>;
 
-  openvpn_server(const std::string  &host,
+  vpn_server(const std::string  &host,
                  uint16_t            port,
                  const std::string  &pool_start = "10.8.0.2",
                  const std::string  &pool_end   = "10.8.0.254",
@@ -51,7 +51,7 @@ public:
                  const std::string  &netmask    = "255.255.255.0",
                  const mqtt_sub_cfg &mqtt_sub   = {});
 
-  virtual ~openvpn_server();
+  virtual ~vpn_server();
 
   std::int32_t handle_connect(const handle_t &channel,
                                const std::string &peer_host) override;
@@ -75,4 +75,4 @@ private:
   mqtt_sub_cfg                   m_mqtt_cfg;  // forwarded to each peer on connect
 };
 
-#endif // __openvpn_server_hpp__
+#endif // __vpn_server_hpp__

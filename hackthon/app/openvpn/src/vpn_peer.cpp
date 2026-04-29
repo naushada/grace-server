@@ -1,8 +1,8 @@
-#ifndef __openvpn_peer_cpp__
-#define __openvpn_peer_cpp__
+#ifndef __vpn_peer_cpp__
+#define __vpn_peer_cpp__
 
-#include "openvpn_peer.hpp"
-#include "openvpn_server.hpp"
+#include "vpn_peer.hpp"
+#include "vpn_server.hpp"
 #include "gnmi_client.hpp"
 
 #include <arpa/inet.h>
@@ -16,20 +16,20 @@
 // ---------------------------------------------------------------------------
 
 // Shared post-construction setup called from both constructors.
-void openvpn_peer::setup_mqtt(const mqtt_sub_cfg &cfg) {
+void vpn_peer::setup_mqtt(const mqtt_sub_cfg &cfg) {
   if (!cfg.enabled) return;
   m_gnmi_port = cfg.gnmi_port;
   const std::string client_id = "vpn-peer-" + m_assigned_ip;
   m_mqtt_io = std::make_unique<mqtt_io>(
       cfg.host, cfg.port, client_id, on_mqtt_message, this);
   m_mqtt_io->subscribe("fwd/" + m_assigned_ip);
-  std::cout << "[openvpn_peer] " << m_assigned_ip
+  std::cout << "[vpn_peer] " << m_assigned_ip
             << " MQTT subscribed to fwd/" << m_assigned_ip
             << " on " << cfg.host << ":" << cfg.port << '\n';
 }
 
-openvpn_peer::openvpn_peer(int32_t channel, const std::string &peer_host,
-                             openvpn_server *parent,
+vpn_peer::vpn_peer(int32_t channel, const std::string &peer_host,
+                             vpn_server *parent,
                              const std::string &assigned_ip,
                              const std::string &netmask,
                              const mqtt_sub_cfg &mqtt)
@@ -39,8 +39,8 @@ openvpn_peer::openvpn_peer(int32_t channel, const std::string &peer_host,
   setup_mqtt(mqtt);
 }
 
-openvpn_peer::openvpn_peer(struct bufferevent *bev, const std::string &peer_host,
-                             openvpn_server *parent,
+vpn_peer::vpn_peer(struct bufferevent *bev, const std::string &peer_host,
+                             vpn_server *parent,
                              const std::string &assigned_ip,
                              const std::string &netmask,
                              const mqtt_sub_cfg &mqtt)
@@ -58,10 +58,10 @@ openvpn_peer::openvpn_peer(struct bufferevent *bev, const std::string &peer_host
 // Payload format: rpc_path '\0' proto_bytes
 // Forwards to the client's gNMI server through the VPN tunnel, then publishes
 // the response on "resp/<vip>" for gnmi-client-svc to relay back to the CLI.
-void openvpn_peer::on_mqtt_message(struct mosquitto * /*mosq*/, void *userdata,
+void vpn_peer::on_mqtt_message(struct mosquitto * /*mosq*/, void *userdata,
                                     const struct mosquitto_message *msg) {
   if (!msg || !msg->payload || msg->payloadlen <= 0) return;
-  auto *self = static_cast<openvpn_peer *>(userdata);
+  auto *self = static_cast<vpn_peer *>(userdata);
 
   const char  *raw = static_cast<const char *>(msg->payload);
   const size_t sz  = static_cast<size_t>(msg->payloadlen);
@@ -71,7 +71,7 @@ void openvpn_peer::on_mqtt_message(struct mosquitto * /*mosq*/, void *userdata,
   const std::string rpc_path(raw, sep - raw);
   const std::string proto_bytes(sep + 1, sz - (sep - raw) - 1);
 
-  std::cout << "[openvpn_peer] MQTT \xe2\x86\x90 fwd/" << self->m_assigned_ip
+  std::cout << "[vpn_peer] MQTT \xe2\x86\x90 fwd/" << self->m_assigned_ip
             << " rpc=" << rpc_path << " " << proto_bytes.size() << "B"
             << " \xe2\x86\x92 gNMI " << self->m_assigned_ip
             << ":" << self->m_gnmi_port << '\n';
@@ -92,7 +92,7 @@ void openvpn_peer::on_mqtt_message(struct mosquitto * /*mosq*/, void *userdata,
         const std::string resp_topic = "resp/" + self->m_assigned_ip;
         self->m_mqtt_io->publish(resp_topic, payload.data(),
                                   static_cast<int>(payload.size()));
-        std::cout << "[openvpn_peer] MQTT \xe2\x86\x92 " << resp_topic
+        std::cout << "[vpn_peer] MQTT \xe2\x86\x92 " << resp_topic
                   << " status=" << r.grpc_status << '\n';
       });
 }
@@ -101,7 +101,7 @@ void openvpn_peer::on_mqtt_message(struct mosquitto * /*mosq*/, void *userdata,
 // TLS handshake complete
 // ---------------------------------------------------------------------------
 
-std::string openvpn_peer::extract_cn(struct bufferevent *bev) {
+std::string vpn_peer::extract_cn(struct bufferevent *bev) {
   SSL *ssl = bufferevent_openssl_get_ssl(bev);
   if (!ssl) return {};
   X509 *cert = SSL_get_peer_certificate(ssl);
@@ -113,13 +113,13 @@ std::string openvpn_peer::extract_cn(struct bufferevent *bev) {
   return cn;
 }
 
-std::int32_t openvpn_peer::handle_connect(const std::int32_t &,
+std::int32_t vpn_peer::handle_connect(const std::int32_t &,
                                            const std::string &peer_host) {
   m_peer_cn = extract_cn(get_bufferevt());
   if (m_peer_cn.empty())
-    std::cout << "[openvpn_peer] " << peer_host << " connected (plain TCP)\n";
+    std::cout << "[vpn_peer] " << peer_host << " connected (plain TCP)\n";
   else
-    std::cout << "[openvpn_peer] " << peer_host
+    std::cout << "[vpn_peer] " << peer_host
               << " authenticated CN=\"" << m_peer_cn << "\"\n";
   return 0;
 }
@@ -128,7 +128,7 @@ std::int32_t openvpn_peer::handle_connect(const std::int32_t &,
 // Frame helpers
 // ---------------------------------------------------------------------------
 
-void openvpn_peer::send_frame(uint8_t type, const std::string &payload) {
+void vpn_peer::send_frame(uint8_t type, const std::string &payload) {
   const uint32_t len    = static_cast<uint32_t>(payload.size());
   const uint32_t len_be = htonl(len);
   std::string frame;
@@ -139,13 +139,13 @@ void openvpn_peer::send_frame(uint8_t type, const std::string &payload) {
   tx(frame.data(), frame.size());
 }
 
-void openvpn_peer::send_ip_assign() {
+void vpn_peer::send_ip_assign() {
   const std::string payload = m_assigned_ip + " " + m_netmask;
   send_frame(TYPE_IP_ASSIGN, payload);
-  std::cout << "[openvpn_peer] IP_ASSIGN " << payload << "\n";
+  std::cout << "[vpn_peer] IP_ASSIGN " << payload << "\n";
 }
 
-size_t openvpn_peer::process_frames(const std::string &buf) {
+size_t vpn_peer::process_frames(const std::string &buf) {
   size_t consumed = 0;
   while (buf.size() - consumed >= HEADER_LEN) {
     const uint8_t type = static_cast<uint8_t>(buf[consumed]);
@@ -157,14 +157,14 @@ size_t openvpn_peer::process_frames(const std::string &buf) {
     consumed += HEADER_LEN + len;
     switch (type) {
     case TYPE_DATA:
-      std::cout << "[openvpn_peer] DATA " << len
+      std::cout << "[vpn_peer] DATA " << len
                 << " bytes from " << m_assigned_ip << "\n";
       break;
     case TYPE_DISCONNECT:
-      std::cout << "[openvpn_peer] DISCONNECT from " << m_assigned_ip << "\n";
+      std::cout << "[vpn_peer] DISCONNECT from " << m_assigned_ip << "\n";
       break;
     default:
-      std::cerr << "[openvpn_peer] unknown frame type 0x"
+      std::cerr << "[vpn_peer] unknown frame type 0x"
                 << std::hex << int(type) << std::dec << "\n";
       break;
     }
@@ -176,7 +176,7 @@ size_t openvpn_peer::process_frames(const std::string &buf) {
 // evt_io hook overrides
 // ---------------------------------------------------------------------------
 
-std::int32_t openvpn_peer::handle_read(const std::int32_t & /*channel*/,
+std::int32_t vpn_peer::handle_read(const std::int32_t & /*channel*/,
                                         const std::string &data,
                                         const bool &dry_run) {
   if (dry_run) return 0;
@@ -186,25 +186,25 @@ std::int32_t openvpn_peer::handle_read(const std::int32_t & /*channel*/,
   return static_cast<int32_t>(consumed);
 }
 
-std::int32_t openvpn_peer::handle_close(const std::int32_t &channel) {
-  std::cout << "[openvpn_peer] closed, releasing " << m_assigned_ip << "\n";
+std::int32_t vpn_peer::handle_close(const std::int32_t &channel) {
+  std::cout << "[vpn_peer] closed, releasing " << m_assigned_ip << "\n";
   // Reset MQTT before calling parent (which destroys this object).
   m_mqtt_io.reset();
   m_parent->handle_close(channel);
   return 0;
 }
 
-std::int32_t openvpn_peer::handle_event(const std::int32_t &channel,
+std::int32_t vpn_peer::handle_event(const std::int32_t &channel,
                                          const std::uint16_t & /*event*/) {
-  std::cerr << "[openvpn_peer] timeout channel=" << channel
+  std::cerr << "[vpn_peer] timeout channel=" << channel
             << " ip=" << m_assigned_ip << "\n";
   m_mqtt_io.reset();
   m_parent->handle_close(channel);
   return 0;
 }
 
-std::int32_t openvpn_peer::handle_write(const std::int32_t & /*channel*/) {
+std::int32_t vpn_peer::handle_write(const std::int32_t & /*channel*/) {
   return 0;
 }
 
-#endif // __openvpn_peer_cpp__
+#endif // __vpn_peer_cpp__

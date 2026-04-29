@@ -20,11 +20,11 @@
 //
 // Startup sequence (phased, no nested event loops):
 //   Phase 1: event_base_loop(EVLOOP_ONCE) until VPN tunnel + tun0 are up.
-//            openvpn_client installs iptables PREROUTING DNAT for the VIP.
+//            vpn_client installs iptables PREROUTING DNAT for the VIP.
 //   Phase 2 (optional): blocking gNMI probe to the server VIP.
 //   Phase 3: event_base_dispatch — keep tunnel alive indefinitely.
 
-#include "openvpn_client.hpp"
+#include "vpn_client.hpp"
 #include "gnmi_client.hpp"
 #include "tls_config.hpp"
 #include "framework.hpp"
@@ -134,8 +134,8 @@ int main(int argc, const char *argv[]) {
             << (gnmi_probe ? " gnmi-probe=ON" : "") << '\n';
 
   // Phase 1: connect and wait for IP assignment.
-  // openvpn_client installs the iptables DNAT rule as soon as the VIP is known.
-  openvpn_client vpn(vpn_server, port, status_file, tls,
+  // vpn_client installs the iptables DNAT rule as soon as the VIP is known.
+  vpn_client vpn(vpn_server, port, status_file, tls,
                      gnmi_port, gnmi_fwd_ip, gnmi_fwd_port);
 
   std::cout << "[vpn_client] waiting for VPN tunnel...\n";

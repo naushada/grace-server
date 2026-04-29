@@ -1,5 +1,5 @@
-#ifndef __openvpn_client_hpp__
-#define __openvpn_client_hpp__
+#ifndef __vpn_client_hpp__
+#define __vpn_client_hpp__
 
 #include "framework.hpp"
 #include "tls_config.hpp"
@@ -23,7 +23,7 @@
 //   This lets the vpn-server's gNMI requests (sent to the VIP) reach an
 //   external gnmi-server-svc without the vpn-client running its own server.
 //   The rule is torn down on disconnect/reconnect so it stays in sync with the VIP.
-class openvpn_client : public evt_io {
+class vpn_client : public evt_io {
 public:
   static constexpr uint8_t TYPE_IP_ASSIGN  = 0x01;
   static constexpr uint8_t TYPE_DATA       = 0x02;
@@ -31,14 +31,14 @@ public:
   static constexpr size_t  HEADER_LEN      = 5;
   static constexpr int     RECONNECT_DELAY_S = 3;
 
-  openvpn_client(const std::string &host, uint16_t port,
+  vpn_client(const std::string &host, uint16_t port,
                   std::string        status_file  = "/tmp/vpn_status.lua",
                   const tls_config  &tls          = {},
                   uint16_t           gnmi_port    = 58989,
                   std::string        gnmi_fwd_ip  = "",
                   uint16_t           gnmi_fwd_port = 58989);
 
-  virtual ~openvpn_client();
+  virtual ~vpn_client();
 
   const std::string &assigned_ip() const { return m_assigned_ip; }
   const std::string &tun_if()      const { return m_tun_name; }
@@ -97,4 +97,4 @@ private:
   uint16_t                 m_gnmi_fwd_port{58989};
 };
 
-#endif // __openvpn_client_hpp__
+#endif // __vpn_client_hpp__

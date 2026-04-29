@@ -2,7 +2,7 @@
 #define __readline_cpp__
 
 #include "readline.hpp"
-#include "openvpn_tunnel_client.hpp"
+#include "vpn_tunnel_client.hpp"
 
 #include <algorithm>
 #include <chrono>
@@ -607,7 +607,7 @@ static void handle_gnmi_update(const std::map<std::string, std::string> &args) {
 
   // Connect through VPN tunnel before sending the update.
   if (!tunnel_host.empty()) {
-    const auto tr = openvpn_tunnel_client::connect(tunnel_host, tunnel_port);
+    const auto tr = vpn_tunnel_client::connect(tunnel_host, tunnel_port);
     if (!tr.ok) {
       std::cout << "[gnmi_update] VPN tunnel error: " << tr.message << "\n";
       return;
@@ -649,7 +649,7 @@ static void handle_gnmi_replace(const std::map<std::string, std::string> &args) 
       std::stoi(get_arg(args, "tunnel_port", "1194")));
 
   if (!tunnel_host.empty()) {
-    const auto tr = openvpn_tunnel_client::connect(tunnel_host, tunnel_port);
+    const auto tr = vpn_tunnel_client::connect(tunnel_host, tunnel_port);
     if (!tr.ok) {
       std::cout << "[gnmi_replace] VPN tunnel error: " << tr.message << "\n";
       return;
@@ -689,7 +689,7 @@ static void handle_gnmi_delete(const std::map<std::string, std::string> &args) {
       std::stoi(get_arg(args, "tunnel_port", "1194")));
 
   if (!tunnel_host.empty()) {
-    const auto tr = openvpn_tunnel_client::connect(tunnel_host, tunnel_port);
+    const auto tr = vpn_tunnel_client::connect(tunnel_host, tunnel_port);
     if (!tr.ok) {
       std::cout << "[gnmi_delete] VPN tunnel error: " << tr.message << "\n";
       return;

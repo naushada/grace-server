@@ -1,7 +1,7 @@
-#ifndef __openvpn_client_cpp__
-#define __openvpn_client_cpp__
+#ifndef __vpn_client_cpp__
+#define __vpn_client_cpp__
 
-#include "openvpn_client.hpp"
+#include "vpn_client.hpp"
 #include "lua_engine.hpp"
 
 #include <cstring>
@@ -23,19 +23,19 @@
 #include <cstdlib>
 
 // tun_io — wraps the TUN fd in evt_io so libevent delivers reads via handle_read.
-class openvpn_client::tun_io : public evt_io {
+class vpn_client::tun_io : public evt_io {
 public:
-  tun_io(evutil_socket_t fd, openvpn_client &owner)
+  tun_io(evutil_socket_t fd, vpn_client &owner)
       : evt_io(fd, "tun"), m_owner(owner) {}
 
   std::int32_t handle_read(const std::int32_t &, const std::string &data,
                             const bool &dry_run) override {
     if (!dry_run && !data.empty())
-      m_owner.send_frame(openvpn_client::TYPE_DATA, data);
+      m_owner.send_frame(vpn_client::TYPE_DATA, data);
     return 0;
   }
 private:
-  openvpn_client &m_owner;
+  vpn_client &m_owner;
 };
 
 // ---------------------------------------------------------------------------
@@ -44,7 +44,7 @@ private:
 
 // evt_io(host, port, ssl_ctx_ptr) handles both plain TCP (null ctx) and TLS
 // (non-null ctx) outbound connections — no TLS wiring needed here.
-openvpn_client::openvpn_client(const std::string &host, uint16_t port,
+vpn_client::vpn_client(const std::string &host, uint16_t port,
                                  std::string status_file,
                                  const tls_config &tls,
                                  uint16_t gnmi_port,
@@ -56,14 +56,14 @@ openvpn_client::openvpn_client(const std::string &host, uint16_t port,
       m_gnmi_port(gnmi_port),
       m_gnmi_fwd_ip(std::move(gnmi_fwd_ip)),
       m_gnmi_fwd_port(gnmi_fwd_port) {
-  std::cout << "[openvpn_client] connecting to " << host << ":" << port
+  std::cout << "[vpn_client] connecting to " << host << ":" << port
             << " tls=" << (tls.enabled ? "ON" : "OFF");
   if (!m_gnmi_fwd_ip.empty())
     std::cout << " gnmi-fwd=" << m_gnmi_fwd_ip << ":" << m_gnmi_fwd_port;
   std::cout << '\n';
 }
 
-openvpn_client::~openvpn_client() {
+vpn_client::~vpn_client() {
   close_tun();
 }
 
@@ -71,7 +71,7 @@ openvpn_client::~openvpn_client() {
 // evt_io hooks
 // ---------------------------------------------------------------------------
 
-std::int32_t openvpn_client::handle_connect(const std::int32_t &ch,
+std::int32_t vpn_client::handle_connect(const std::int32_t &ch,
                                               const std::string & /*peer*/) {
   // client_event_cb passes an empty peer string — resolve actual IP from fd.
   char peer_ip[INET6_ADDRSTRLEN] = "<unknown>";
@@ -91,13 +91,13 @@ std::int32_t openvpn_client::handle_connect(const std::int32_t &ch,
   // Clear it now so an idle established tunnel is not torn down.
   bufferevent_set_timeouts(get_bufferevt(), nullptr, nullptr);
 
-  std::cout << "[openvpn_client] connected to " << m_server_host
+  std::cout << "[vpn_client] connected to " << m_server_host
             << " (" << peer_ip << "):" << m_server_port
             << ", waiting for IP_ASSIGN\n";
   return 0;
 }
 
-std::int32_t openvpn_client::handle_read(const std::int32_t & /*ch*/,
+std::int32_t vpn_client::handle_read(const std::int32_t & /*ch*/,
                                            const std::string &data,
                                            const bool &dry_run) {
   if (dry_run) return 0;
@@ -107,8 +107,8 @@ std::int32_t openvpn_client::handle_read(const std::int32_t & /*ch*/,
   return static_cast<int32_t>(consumed);
 }
 
-std::int32_t openvpn_client::handle_close(const std::int32_t & /*ch*/) {
-  std::cerr << "[openvpn_client] connection closed\n";
+std::int32_t vpn_client::handle_close(const std::int32_t & /*ch*/) {
+  std::cerr << "[vpn_client] connection closed\n";
   if (m_ip_assigned)
     write_status_lua(m_status_file, m_assigned_ip, m_tun_name, "Down",
                      std::time(nullptr));
@@ -120,9 +120,9 @@ std::int32_t openvpn_client::handle_close(const std::int32_t & /*ch*/) {
   return 0;
 }
 
-std::int32_t openvpn_client::handle_event(const std::int32_t & /*ch*/,
+std::int32_t vpn_client::handle_event(const std::int32_t & /*ch*/,
                                             const std::uint16_t & /*ev*/) {
-  std::cerr << "[openvpn_client] timeout/error\n";
+  std::cerr << "[vpn_client] timeout/error\n";
   if (m_ip_assigned)
     write_status_lua(m_status_file, m_assigned_ip, m_tun_name, "Down",
                      std::time(nullptr));
@@ -134,14 +134,14 @@ std::int32_t openvpn_client::handle_event(const std::int32_t & /*ch*/,
   return 0;
 }
 
-void openvpn_client::schedule_reconnect() {
-  std::cout << "[openvpn_client] reconnecting in " << RECONNECT_DELAY_S
+void vpn_client::schedule_reconnect() {
+  std::cout << "[vpn_client] reconnecting in " << RECONNECT_DELAY_S
             << "s...\n";
   arm_timer(TIMER_RECONNECT, {RECONNECT_DELAY_S, 0});
 }
 
-std::int32_t openvpn_client::handle_timeout(int /*timer_id*/) {
-  std::cout << "[openvpn_client] retrying " << m_server_host
+std::int32_t vpn_client::handle_timeout(int /*timer_id*/) {
+  std::cout << "[vpn_client] retrying " << m_server_host
             << ":" << m_server_port << "\n";
   bufferevent_socket_connect_hostname(get_bufferevt(), nullptr,
                                       AF_UNSPEC,
@@ -150,7 +150,7 @@ std::int32_t openvpn_client::handle_timeout(int /*timer_id*/) {
   return 0;
 }
 
-std::int32_t openvpn_client::handle_write(const std::int32_t & /*ch*/) {
+std::int32_t vpn_client::handle_write(const std::int32_t & /*ch*/) {
   return 0;
 }
 
@@ -158,7 +158,7 @@ std::int32_t openvpn_client::handle_write(const std::int32_t & /*ch*/) {
 // Frame helpers
 // ---------------------------------------------------------------------------
 
-std::string openvpn_client::encode_frame(uint8_t type,
+std::string vpn_client::encode_frame(uint8_t type,
                                            const std::string &payload) {
   const uint32_t len_be = htonl(static_cast<uint32_t>(payload.size()));
   std::string frame;
@@ -169,7 +169,7 @@ std::string openvpn_client::encode_frame(uint8_t type,
   return frame;
 }
 
-bool openvpn_client::try_decode_frame(const std::string &buf, size_t offset,
+bool vpn_client::try_decode_frame(const std::string &buf, size_t offset,
                                        uint8_t &out_type,
                                        std::string &out_payload,
                                        size_t &out_consumed) {
@@ -184,12 +184,12 @@ bool openvpn_client::try_decode_frame(const std::string &buf, size_t offset,
   return true;
 }
 
-void openvpn_client::send_frame(uint8_t type, const std::string &payload) {
+void vpn_client::send_frame(uint8_t type, const std::string &payload) {
   const auto f = encode_frame(type, payload);
   tx(f.data(), f.size());
 }
 
-size_t openvpn_client::process_frames() {
+size_t vpn_client::process_frames() {
   size_t consumed = 0;
   while (true) {
     uint8_t t{}; std::string p{}; size_t used{};
@@ -201,12 +201,12 @@ size_t openvpn_client::process_frames() {
       m_assigned_ip = p.substr(0, sp);
       const std::string netmask = (sp != std::string::npos) ? p.substr(sp + 1) : "255.255.255.0";
       m_ip_assigned = true;
-      std::cout << "[openvpn_client] IP_ASSIGN: " << m_assigned_ip << " " << netmask << "\n";
+      std::cout << "[vpn_client] IP_ASSIGN: " << m_assigned_ip << " " << netmask << "\n";
       m_tun_fd = open_tun();
       if (m_tun_fd < 0)
-        std::cerr << "[openvpn_client] TUN unavailable (need CAP_NET_ADMIN)\n";
+        std::cerr << "[vpn_client] TUN unavailable (need CAP_NET_ADMIN)\n";
       else {
-        std::cout << "[openvpn_client] kernel assigned " << m_tun_name << "\n";
+        std::cout << "[vpn_client] kernel assigned " << m_tun_name << "\n";
         assign_tun_ip(m_assigned_ip, netmask);
         m_tun_io = std::make_unique<tun_io>(m_tun_fd, *this);
         setup_nat_forwarding(m_assigned_ip);
@@ -221,13 +221,13 @@ size_t openvpn_client::process_frames() {
 #endif
       break;
     case TYPE_DISCONNECT:
-      std::cout << "[openvpn_client] DISCONNECT from server\n";
+      std::cout << "[vpn_client] DISCONNECT from server\n";
       write_status_lua(m_status_file, m_assigned_ip, m_tun_name, "Down",
                         std::time(nullptr));
       close_tun();
       break;
     default:
-      std::cerr << "[openvpn_client] unknown frame 0x"
+      std::cerr << "[vpn_client] unknown frame 0x"
                 << std::hex << int(t) << std::dec << "\n";
       break;
     }
@@ -239,15 +239,15 @@ size_t openvpn_client::process_frames() {
 // TUN interface — kernel chooses the name
 // ---------------------------------------------------------------------------
 
-int openvpn_client::open_tun() {
+int vpn_client::open_tun() {
 #ifdef __linux__
   int fd = ::open("/dev/net/tun", O_RDWR);
-  if (fd < 0) { std::cerr << "[openvpn_client] open tun: " << strerror(errno) << "\n"; return -1; }
+  if (fd < 0) { std::cerr << "[vpn_client] open tun: " << strerror(errno) << "\n"; return -1; }
   struct ifreq ifr{};
   ifr.ifr_flags = IFF_TUN | IFF_NO_PI;
   // Empty name → kernel assigns next free tunX; reads actual name back.
   if (::ioctl(fd, TUNSETIFF, &ifr) < 0) {
-    std::cerr << "[openvpn_client] TUNSETIFF: " << strerror(errno) << "\n";
+    std::cerr << "[vpn_client] TUNSETIFF: " << strerror(errno) << "\n";
     ::close(fd); return -1;
   }
   m_tun_name = ifr.ifr_name;
@@ -257,11 +257,11 @@ int openvpn_client::open_tun() {
 #endif
 }
 
-void openvpn_client::assign_tun_ip(const std::string &ip, const std::string &netmask) {
+void vpn_client::assign_tun_ip(const std::string &ip, const std::string &netmask) {
 #ifdef __linux__
   int sock = ::socket(AF_INET, SOCK_DGRAM, 0);
   if (sock < 0) {
-    std::cerr << "[openvpn_client] assign_tun_ip: socket: " << strerror(errno) << "\n";
+    std::cerr << "[vpn_client] assign_tun_ip: socket: " << strerror(errno) << "\n";
     return;
   }
 
@@ -273,26 +273,26 @@ void openvpn_client::assign_tun_ip(const std::string &ip, const std::string &net
   // IP address
   inet_pton(AF_INET, ip.c_str(), &sin->sin_addr);
   if (::ioctl(sock, SIOCSIFADDR, &ifr) < 0)
-    std::cerr << "[openvpn_client] SIOCSIFADDR: " << strerror(errno) << "\n";
+    std::cerr << "[vpn_client] SIOCSIFADDR: " << strerror(errno) << "\n";
 
   // Netmask /24
   inet_pton(AF_INET, netmask.c_str(), &sin->sin_addr);
   if (::ioctl(sock, SIOCSIFNETMASK, &ifr) < 0)
-    std::cerr << "[openvpn_client] SIOCSIFNETMASK: " << strerror(errno) << "\n";
+    std::cerr << "[vpn_client] SIOCSIFNETMASK: " << strerror(errno) << "\n";
 
   // Bring the interface up
   if (::ioctl(sock, SIOCGIFFLAGS, &ifr) == 0) {
     ifr.ifr_flags |= IFF_UP | IFF_RUNNING;
     if (::ioctl(sock, SIOCSIFFLAGS, &ifr) < 0)
-      std::cerr << "[openvpn_client] SIOCSIFFLAGS: " << strerror(errno) << "\n";
+      std::cerr << "[vpn_client] SIOCSIFFLAGS: " << strerror(errno) << "\n";
   }
 
   ::close(sock);
-  std::cout << "[openvpn_client] " << m_tun_name << " configured: " << ip << "/24 UP\n";
+  std::cout << "[vpn_client] " << m_tun_name << " configured: " << ip << "/24 UP\n";
 #endif
 }
 
-void openvpn_client::close_tun() {
+void vpn_client::close_tun() {
 #ifdef __linux__
   m_tun_io.reset();
   if (m_tun_fd >= 0) { ::close(m_tun_fd); m_tun_fd = -1; }
@@ -304,7 +304,7 @@ void openvpn_client::close_tun() {
 // NAT forwarding — PREROUTING DNAT so inbound gNMI on VIP reaches gnmi-server
 // ---------------------------------------------------------------------------
 
-void openvpn_client::setup_nat_forwarding(const std::string &vip) {
+void vpn_client::setup_nat_forwarding(const std::string &vip) {
 #ifdef __linux__
   if (m_gnmi_fwd_ip.empty() || vip.empty()) return;
 
@@ -322,12 +322,12 @@ void openvpn_client::setup_nat_forwarding(const std::string &vip) {
   // MASQUERADE so the gnmi-server's reply is src-natted back through this host.
   std::system("iptables -t nat -A POSTROUTING -j MASQUERADE >/dev/null 2>&1");
 
-  std::cout << "[openvpn_client] NAT DNAT: " << vip << ":" << m_gnmi_port
+  std::cout << "[vpn_client] NAT DNAT: " << vip << ":" << m_gnmi_port
             << " \xe2\x86\x92 " << m_gnmi_fwd_ip << ":" << m_gnmi_fwd_port << '\n';
 #endif
 }
 
-void openvpn_client::teardown_nat_forwarding(const std::string &vip) {
+void vpn_client::teardown_nat_forwarding(const std::string &vip) {
 #ifdef __linux__
   if (m_gnmi_fwd_ip.empty() || vip.empty()) return;
 
@@ -337,7 +337,7 @@ void openvpn_client::teardown_nat_forwarding(const std::string &vip) {
       " -p tcp --dport " + std::to_string(m_gnmi_port) +
       " -j DNAT --to-destination " + m_gnmi_fwd_ip + ":" + std::to_string(m_gnmi_fwd_port);
   std::system(dnat.c_str());
-  std::cout << "[openvpn_client] NAT DNAT removed for " << vip << '\n';
+  std::cout << "[vpn_client] NAT DNAT removed for " << vip << '\n';
 #endif
 }
 
@@ -345,7 +345,7 @@ void openvpn_client::teardown_nat_forwarding(const std::string &vip) {
 // Status Lua — all Lua file I/O via lua_file::write_table
 // ---------------------------------------------------------------------------
 
-void openvpn_client::write_status_lua(const std::string &path,
+void vpn_client::write_status_lua(const std::string &path,
                                         const std::string &service_ip,
                                         const std::string &tun_if,
                                         const std::string &status,
@@ -358,4 +358,4 @@ void openvpn_client::write_status_lua(const std::string &path,
   });
 }
 
-#endif // __openvpn_client_cpp__
+#endif // __vpn_client_cpp__

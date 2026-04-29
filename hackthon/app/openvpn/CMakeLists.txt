@@ -13,7 +13,7 @@ include_directories(${LUA_INCLUDE_DIR})
 
 set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -std=c++20 -g -Wall -Wextra")
 
-# openvpn headers (tls_config.hpp, openvpn_*.hpp)
+# vpn headers (tls_config.hpp, vpn_*.hpp)
 include_directories(inc)
 # shared app headers (framework.hpp, server_app.hpp, gnmi_client.hpp, ...)
 include_directories(../inc)
@@ -24,9 +24,9 @@ include_directories(${CMAKE_CURRENT_BINARY_DIR}/../proto_gen)
 
 # Sources shared by both standalone binaries.
 set(SHARED_SOURCES
-  src/openvpn_client.cpp
-  src/openvpn_server.cpp
-  src/openvpn_peer.cpp
+  src/vpn_client.cpp
+  src/vpn_server.cpp
+  src/vpn_peer.cpp
   ../src/framework.cpp
   ../src/server_app.cpp
   ../src/client_app.cpp

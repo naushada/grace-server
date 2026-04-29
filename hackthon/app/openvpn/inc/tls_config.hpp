@@ -8,7 +8,7 @@
 #include <iostream>
 #include <string>
 
-// TLS configuration shared by openvpn_server and openvpn_client.
+// TLS configuration shared by vpn_server and vpn_client.
 // Build an SSL_CTX once at startup and pass it around; the context is
 // shared across all connections.
 struct tls_config {
@@ -33,7 +33,7 @@ struct tls_config {
     if (!ca_file.empty()) {
       SSL_CTX_load_verify_locations(ctx.get(), ca_file.c_str(), nullptr);
       // Require client to present a certificate signed by the CA.
-      // CN-based authorisation is then enforced in openvpn_peer::handle_connect.
+      // CN-based authorisation is then enforced in vpn_peer::handle_connect.
       SSL_CTX_set_verify(ctx.get(),
                          SSL_VERIFY_PEER | SSL_VERIFY_FAIL_IF_NO_PEER_CERT,
                          nullptr);

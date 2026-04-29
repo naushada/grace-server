@@ -4,11 +4,11 @@
 // FrameTest      — encode/decode round-trips
 // StatusLuaTest  — lua_file::write_table output format
 // TlsConfigTest  — tls_config disabled/enabled struct invariants
-// OpenvpnClientTest — frame constants, multi-frame sequence
+// VpnClientTest — frame constants, multi-frame sequence
 
-#include "openvpn_client.hpp"
-#include "openvpn_peer.hpp"
-#include "openvpn_server.hpp"
+#include "vpn_client.hpp"
+#include "vpn_peer.hpp"
+#include "vpn_server.hpp"
 #include "tls_config.hpp"
 #include "lua_engine.hpp"
 
@@ -102,22 +102,22 @@ TEST_F(IpPoolTest, AvailableDecrementsOnAssign) {
 class FrameTest : public ::testing::Test {};
 
 TEST_F(FrameTest, EncodeFrameHasCorrectHeader) {
-  const auto f = openvpn_client::encode_frame(openvpn_client::TYPE_IP_ASSIGN,
+  const auto f = vpn_client::encode_frame(vpn_client::TYPE_IP_ASSIGN,
                                                "10.8.0.3");
-  ASSERT_GE(f.size(), openvpn_client::HEADER_LEN);
-  EXPECT_EQ(static_cast<uint8_t>(f[0]), openvpn_client::TYPE_IP_ASSIGN);
+  ASSERT_GE(f.size(), vpn_client::HEADER_LEN);
+  EXPECT_EQ(static_cast<uint8_t>(f[0]), vpn_client::TYPE_IP_ASSIGN);
   uint32_t len_be = 0;
   std::memcpy(&len_be, f.data() + 1, 4);
   EXPECT_EQ(ntohl(len_be), 8u);
-  EXPECT_EQ(f.substr(openvpn_client::HEADER_LEN), "10.8.0.3");
+  EXPECT_EQ(f.substr(vpn_client::HEADER_LEN), "10.8.0.3");
 }
 
 TEST_F(FrameTest, RoundTrip) {
   const std::string payload = "hello tunnel";
-  const auto frame = openvpn_client::encode_frame(openvpn_client::TYPE_DATA, payload);
+  const auto frame = vpn_client::encode_frame(vpn_client::TYPE_DATA, payload);
   uint8_t t{}; std::string p{}; size_t c{};
-  ASSERT_TRUE(openvpn_client::try_decode_frame(frame, 0, t, p, c));
-  EXPECT_EQ(t, openvpn_client::TYPE_DATA);
+  ASSERT_TRUE(vpn_client::try_decode_frame(frame, 0, t, p, c));
+  EXPECT_EQ(t, vpn_client::TYPE_DATA);
   EXPECT_EQ(p, payload);
   EXPECT_EQ(c, frame.size());
 }
@@ -125,39 +125,39 @@ TEST_F(FrameTest, RoundTrip) {
 TEST_F(FrameTest, IncompleteHeaderReturnsFalse) {
   const std::string buf = "\x01\x00\x00";
   uint8_t t{}; std::string p{}; size_t c{};
-  EXPECT_FALSE(openvpn_client::try_decode_frame(buf, 0, t, p, c));
+  EXPECT_FALSE(vpn_client::try_decode_frame(buf, 0, t, p, c));
 }
 
 TEST_F(FrameTest, IncompletePayloadReturnsFalse) {
-  const auto frame = openvpn_client::encode_frame(openvpn_client::TYPE_DATA, "0123456789");
-  const std::string trunc = frame.substr(0, openvpn_client::HEADER_LEN + 3);
+  const auto frame = vpn_client::encode_frame(vpn_client::TYPE_DATA, "0123456789");
+  const std::string trunc = frame.substr(0, vpn_client::HEADER_LEN + 3);
   uint8_t t{}; std::string p{}; size_t c{};
-  EXPECT_FALSE(openvpn_client::try_decode_frame(trunc, 0, t, p, c));
+  EXPECT_FALSE(vpn_client::try_decode_frame(trunc, 0, t, p, c));
 }
 
 TEST_F(FrameTest, EmptyPayload) {
-  const auto f = openvpn_client::encode_frame(openvpn_client::TYPE_DISCONNECT, "");
+  const auto f = vpn_client::encode_frame(vpn_client::TYPE_DISCONNECT, "");
   uint8_t t{}; std::string p{}; size_t c{};
-  ASSERT_TRUE(openvpn_client::try_decode_frame(f, 0, t, p, c));
-  EXPECT_EQ(t, openvpn_client::TYPE_DISCONNECT);
+  ASSERT_TRUE(vpn_client::try_decode_frame(f, 0, t, p, c));
+  EXPECT_EQ(t, vpn_client::TYPE_DISCONNECT);
   EXPECT_TRUE(p.empty());
-  EXPECT_EQ(c, openvpn_client::HEADER_LEN);
+  EXPECT_EQ(c, vpn_client::HEADER_LEN);
 }
 
 TEST_F(FrameTest, MultiFrameSequence) {
-  const auto f1 = openvpn_client::encode_frame(openvpn_client::TYPE_IP_ASSIGN, "10.8.0.4");
-  const auto f2 = openvpn_client::encode_frame(openvpn_client::TYPE_DATA, "payload");
+  const auto f1 = vpn_client::encode_frame(vpn_client::TYPE_IP_ASSIGN, "10.8.0.4");
+  const auto f2 = vpn_client::encode_frame(vpn_client::TYPE_DATA, "payload");
   const std::string stream = f1 + f2;
 
   size_t offset = 0;
   uint8_t t{}; std::string p{}; size_t c{};
 
-  ASSERT_TRUE(openvpn_client::try_decode_frame(stream, offset, t, p, c));
-  EXPECT_EQ(t, openvpn_client::TYPE_IP_ASSIGN); EXPECT_EQ(p, "10.8.0.4");
+  ASSERT_TRUE(vpn_client::try_decode_frame(stream, offset, t, p, c));
+  EXPECT_EQ(t, vpn_client::TYPE_IP_ASSIGN); EXPECT_EQ(p, "10.8.0.4");
   offset += c;
 
-  ASSERT_TRUE(openvpn_client::try_decode_frame(stream, offset, t, p, c));
-  EXPECT_EQ(t, openvpn_client::TYPE_DATA); EXPECT_EQ(p, "payload");
+  ASSERT_TRUE(vpn_client::try_decode_frame(stream, offset, t, p, c));
+  EXPECT_EQ(t, vpn_client::TYPE_DATA); EXPECT_EQ(p, "payload");
 }
 
 // ==========================================================================
@@ -179,7 +179,7 @@ protected:
 };
 
 TEST_F(StatusLuaTest, ConnectedContainsAllFields) {
-  openvpn_client::write_status_lua(m_path, "10.8.0.3", "tun2", "Connected", 1700000000);
+  vpn_client::write_status_lua(m_path, "10.8.0.3", "tun2", "Connected", 1700000000);
   const auto c = read_file();
   EXPECT_NE(c.find("service_ip"),  std::string::npos);
   EXPECT_NE(c.find("10.8.0.3"),    std::string::npos);
@@ -193,12 +193,12 @@ TEST_F(StatusLuaTest, ConnectedContainsAllFields) {
 }
 
 TEST_F(StatusLuaTest, DownStatus) {
-  openvpn_client::write_status_lua(m_path, "10.8.0.3", "tun0", "Down", 1);
+  vpn_client::write_status_lua(m_path, "10.8.0.3", "tun0", "Down", 1);
   EXPECT_NE(read_file().find("Down"), std::string::npos);
 }
 
 TEST_F(StatusLuaTest, KernelAssignedTunIfRecorded) {
-  openvpn_client::write_status_lua(m_path, "10.8.0.5", "tun99", "Connected", 100);
+  vpn_client::write_status_lua(m_path, "10.8.0.5", "tun99", "Connected", 100);
   EXPECT_NE(read_file().find("tun99"), std::string::npos);
 }
 
@@ -246,22 +246,22 @@ TEST_F(TlsConfigTest, EnabledClientWithNoCredentialsStillBuildsCtx) {
 }
 
 // ==========================================================================
-// openvpn_client constants
+// vpn_client constants
 // ==========================================================================
 
-class OpenvpnClientTest : public ::testing::Test {};
+class VpnClientTest : public ::testing::Test {};
 
-TEST_F(OpenvpnClientTest, TypeConstants) {
-  EXPECT_EQ(openvpn_client::TYPE_IP_ASSIGN,  0x01u);
-  EXPECT_EQ(openvpn_client::TYPE_DATA,       0x02u);
-  EXPECT_EQ(openvpn_client::TYPE_DISCONNECT, 0x03u);
-  EXPECT_EQ(openvpn_client::HEADER_LEN,      5u);
+TEST_F(VpnClientTest, TypeConstants) {
+  EXPECT_EQ(vpn_client::TYPE_IP_ASSIGN,  0x01u);
+  EXPECT_EQ(vpn_client::TYPE_DATA,       0x02u);
+  EXPECT_EQ(vpn_client::TYPE_DISCONNECT, 0x03u);
+  EXPECT_EQ(vpn_client::HEADER_LEN,      5u);
 }
 
-TEST_F(OpenvpnClientTest, PeerTypeConstantsMatchClient) {
+TEST_F(VpnClientTest, PeerTypeConstantsMatchClient) {
   // Server and client must agree on frame types.
-  EXPECT_EQ(openvpn_peer::TYPE_IP_ASSIGN,  openvpn_client::TYPE_IP_ASSIGN);
-  EXPECT_EQ(openvpn_peer::TYPE_DATA,       openvpn_client::TYPE_DATA);
-  EXPECT_EQ(openvpn_peer::TYPE_DISCONNECT, openvpn_client::TYPE_DISCONNECT);
-  EXPECT_EQ(openvpn_peer::HEADER_LEN,      openvpn_client::HEADER_LEN);
+  EXPECT_EQ(vpn_peer::TYPE_IP_ASSIGN,  vpn_client::TYPE_IP_ASSIGN);
+  EXPECT_EQ(vpn_peer::TYPE_DATA,       vpn_client::TYPE_DATA);
+  EXPECT_EQ(vpn_peer::TYPE_DISCONNECT, vpn_client::TYPE_DISCONNECT);
+  EXPECT_EQ(vpn_peer::HEADER_LEN,      vpn_client::HEADER_LEN);
 }

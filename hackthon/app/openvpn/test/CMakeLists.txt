@@ -17,18 +17,18 @@ include_directories(
   ${LIBEVENT_INCLUDE_DIRS}
   ${NGHTTP2_INCLUDE_DIRS}
   ${LUA_INCLUDE_DIR}
-  ${CMAKE_CURRENT_SOURCE_DIR}/../inc       # openvpn headers + tls_config.hpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/../inc       # vpn headers + tls_config.hpp
   ${CMAKE_CURRENT_SOURCE_DIR}/../../inc    # framework.hpp, gnmi_client.hpp, ...
   ${CMAKE_CURRENT_BINARY_DIR}/../../proto_gen  # gnmi.pb.h etc.
 )
 
 # Production sources exercised by the tests.
 # gnmi_client.cpp (and its deps grpc_session + http2) must be included because
-# openvpn_server.cpp calls gnmi_client::push_async at link time.
-set(OPENVPN_SRCS_UNDER_TEST
-  ${CMAKE_CURRENT_SOURCE_DIR}/../src/openvpn_client.cpp
-  ${CMAKE_CURRENT_SOURCE_DIR}/../src/openvpn_server.cpp
-  ${CMAKE_CURRENT_SOURCE_DIR}/../src/openvpn_peer.cpp
+# vpn_server.cpp calls gnmi_client::push_async at link time.
+set(VPN_SRCS_UNDER_TEST
+  ${CMAKE_CURRENT_SOURCE_DIR}/../src/vpn_client.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/../src/vpn_server.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/../src/vpn_peer.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/../../src/framework.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/../../src/mqtt_io.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/../../src/gnmi_client.cpp
@@ -37,12 +37,12 @@ set(OPENVPN_SRCS_UNDER_TEST
   ${CMAKE_CURRENT_SOURCE_DIR}/../../src/lua_engine.cpp
 )
 
-add_executable(openvpn_tests
-  openvpn_test.cpp
-  ${OPENVPN_SRCS_UNDER_TEST}
+add_executable(vpn_tests
+  vpn_test.cpp
+  ${VPN_SRCS_UNDER_TEST}
 )
 
-target_link_libraries(openvpn_tests PRIVATE
+target_link_libraries(vpn_tests PRIVATE
   gnmi_proto
   mosquitto
   GTest::gtest
@@ -56,4 +56,4 @@ target_link_libraries(openvpn_tests PRIVATE
   crypto
 )
 
-gtest_discover_tests(openvpn_tests)
+gtest_discover_tests(vpn_tests)

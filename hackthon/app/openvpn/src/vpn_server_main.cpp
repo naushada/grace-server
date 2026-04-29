@@ -1,6 +1,6 @@
 // vpn_server — standalone VPN tunnel server.
 //
-// When a client connects, the assigned openvpn_peer subscribes to the MQTT
+// When a client connects, the assigned vpn_peer subscribes to the MQTT
 // broker on "fwd/<client-vip>" and handles gNMI Get/Update/Replace/Delete
 // requests forwarded from the CLI via gnmi-client-svc.  Responses are
 // published back on "resp/<client-vip>" for the relay to return to the CLI.
@@ -19,7 +19,7 @@
 //   --mqtt-port=<port>       MQTT broker port          (default: 1883)
 //   --gnmi-port=<port>       Client gNMI port peers connect to (default: 58989)
 
-#include "openvpn_server.hpp"
+#include "vpn_server.hpp"
 #include "server_app.hpp"
 #include "tls_config.hpp"
 #include "vpn_types.hpp"
@@ -102,8 +102,8 @@ int main(int argc, const char *argv[]) {
   // gNMI server on this host — reachable by probe clients through the tunnel.
   server gnmi_svc("0.0.0.0", 58989);
 
-  // VPN tunnel server — each accepted connection becomes an openvpn_peer.
-  openvpn_server vpn("0.0.0.0", port, pool_start, pool_end, tls,
+  // VPN tunnel server — each accepted connection becomes an vpn_peer.
+  vpn_server vpn("0.0.0.0", port, pool_start, pool_end, tls,
                      server_ip, netmask, mqtt);
 
   run_evt_loop{}();

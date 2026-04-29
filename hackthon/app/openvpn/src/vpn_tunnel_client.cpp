@@ -1,7 +1,7 @@
-#ifndef __openvpn_tunnel_client_cpp__
-#define __openvpn_tunnel_client_cpp__
+#ifndef __vpn_tunnel_client_cpp__
+#define __vpn_tunnel_client_cpp__
 
-#include "openvpn_tunnel_client.hpp"
+#include "vpn_tunnel_client.hpp"
 #include "framework.hpp"
 
 #include <arpa/inet.h>
@@ -58,7 +58,7 @@ public:
     if (type == TYPE_IP_ASSIGN) {
       m_assigned_ip = m_recv_buf.substr(HEADER_LEN, len);
       m_ok          = true;
-      std::cout << "[openvpn_tunnel] assigned IP=" << m_assigned_ip << "\n";
+      std::cout << "[vpn_tunnel] assigned IP=" << m_assigned_ip << "\n";
     } else {
       m_message = "unexpected frame type from server";
     }
@@ -76,7 +76,7 @@ public:
 
   std::int32_t handle_event(const std::int32_t & /*channel*/,
                              const std::uint16_t & /*events*/) override {
-    std::cerr << "[openvpn_tunnel] timed out\n";
+    std::cerr << "[vpn_tunnel] timed out\n";
     m_message = "timeout";
     m_done    = true;
     return 0;
@@ -95,15 +95,15 @@ private:
 };
 
 // ---------------------------------------------------------------------------
-// openvpn_tunnel_client::connect
+// vpn_tunnel_client::connect
 // ---------------------------------------------------------------------------
 
-openvpn_tunnel_client::result
-openvpn_tunnel_client::connect(const std::string &host, uint16_t port) {
+vpn_tunnel_client::result
+vpn_tunnel_client::connect(const std::string &host, uint16_t port) {
   tunnel_session sess(host, port);
   while (!sess.done())
     event_base_loop(evt_base::instance().get(), EVLOOP_ONCE);
   return {sess.ok(), sess.assigned_ip(), sess.message()};
 }
 
-#endif // __openvpn_tunnel_client_cpp__
+#endif // __vpn_tunnel_client_cpp__

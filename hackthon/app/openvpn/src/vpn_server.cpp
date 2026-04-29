@@ -1,8 +1,8 @@
-#ifndef __openvpn_server_cpp__
-#define __openvpn_server_cpp__
+#ifndef __vpn_server_cpp__
+#define __vpn_server_cpp__
 
-#include "openvpn_server.hpp"
-#include "openvpn_peer.hpp"
+#include "vpn_server.hpp"
+#include "vpn_peer.hpp"
 
 #include <arpa/inet.h>
 #include <cerrno>
@@ -75,10 +75,10 @@ int32_t ip_pool::find_channel(const std::string &ip) const {
 }
 
 // ---------------------------------------------------------------------------
-// openvpn_server
+// vpn_server
 // ---------------------------------------------------------------------------
 
-openvpn_server::openvpn_server(const std::string  &host,
+vpn_server::vpn_server(const std::string  &host,
                                  uint16_t            port,
                                  const std::string  &pool_start,
                                  const std::string  &pool_end,
@@ -89,14 +89,14 @@ openvpn_server::openvpn_server(const std::string  &host,
     : evt_io(host, port, tls.build_server_ctx(), listener_tag{}),
       m_pool(pool_start, pool_end), m_netmask(netmask),
       m_mqtt_cfg(mqtt_sub) {
-  std::cout << "[openvpn_server] " << host << ":" << port
+  std::cout << "[vpn_server] " << host << ":" << port
             << " pool=" << pool_start << "\xe2\x80\x93" << pool_end
             << " tls=" << (tls.enabled ? "ON" : "OFF")
             << " mqtt=" << (mqtt_sub.enabled ? "ON" : "OFF") << '\n';
   open_server_tun(server_ip);
 }
 
-openvpn_server::~openvpn_server() {
+vpn_server::~vpn_server() {
   m_server_tun_io.reset();
   if (m_server_tun_fd >= 0) ::close(m_server_tun_fd);
   m_peers.clear();
@@ -106,26 +106,26 @@ openvpn_server::~openvpn_server() {
 // Connection handling
 // ---------------------------------------------------------------------------
 
-std::int32_t openvpn_server::handle_connect(const handle_t &channel,
+std::int32_t vpn_server::handle_connect(const handle_t &channel,
                                               const std::string &peer_host) {
   const std::string ip = m_pool.assign(channel);
   if (ip.empty()) {
-    std::cerr << "[openvpn_server] pool exhausted, rejecting " << peer_host << '\n';
+    std::cerr << "[vpn_server] pool exhausted, rejecting " << peer_host << '\n';
     return -1;
   }
 
   auto *bev = wrap_accepted(channel);
   // Pass the MQTT broker config so the peer subscribes to fwd/<vip> itself.
-  auto peer = std::make_unique<openvpn_peer>(bev, peer_host, this, ip,
+  auto peer = std::make_unique<vpn_peer>(bev, peer_host, this, ip,
                                               m_netmask, m_mqtt_cfg);
   m_peers.emplace(channel, std::move(peer));
   manage_client_route(ip, true);
-  std::cout << "[openvpn_server] accepted " << peer_host
+  std::cout << "[vpn_server] accepted " << peer_host
             << " \xe2\x86\x92 " << ip << (has_tls() ? " (TLS)" : "") << '\n';
   return 0;
 }
 
-std::int32_t openvpn_server::handle_close(const handle_t &channel) {
+std::int32_t vpn_server::handle_close(const handle_t &channel) {
   const std::string ip = m_pool.get(channel);
   if (!ip.empty()) manage_client_route(ip, false);
   m_pool.release(channel);
@@ -137,9 +137,9 @@ std::int32_t openvpn_server::handle_close(const handle_t &channel) {
 // Server TUN — routes inbound IP packets to the right peer
 // ---------------------------------------------------------------------------
 
-class openvpn_server::server_tun_io : public evt_io {
+class vpn_server::server_tun_io : public evt_io {
 public:
-  server_tun_io(evutil_socket_t fd, openvpn_server &owner)
+  server_tun_io(evutil_socket_t fd, vpn_server &owner)
       : evt_io(fd, "tun"), m_owner(owner) {}
 
   std::int32_t handle_read(const std::int32_t &, const std::string &data,
@@ -156,20 +156,20 @@ public:
     return 0;
   }
 private:
-  openvpn_server &m_owner;
+  vpn_server &m_owner;
 };
 
-int openvpn_server::open_server_tun(const std::string &server_ip) {
+int vpn_server::open_server_tun(const std::string &server_ip) {
 #ifdef __linux__
   m_server_tun_fd = ::open("/dev/net/tun", O_RDWR);
   if (m_server_tun_fd < 0) {
-    std::cerr << "[openvpn_server] open tun: " << strerror(errno) << '\n';
+    std::cerr << "[vpn_server] open tun: " << strerror(errno) << '\n';
     return -1;
   }
   struct ifreq ifr{};
   ifr.ifr_flags = IFF_TUN | IFF_NO_PI;
   if (::ioctl(m_server_tun_fd, TUNSETIFF, &ifr) < 0) {
-    std::cerr << "[openvpn_server] TUNSETIFF: " << strerror(errno) << '\n';
+    std::cerr << "[vpn_server] TUNSETIFF: " << strerror(errno) << '\n';
     ::close(m_server_tun_fd); m_server_tun_fd = -1; return -1;
   }
   m_server_tun_name = ifr.ifr_name;
@@ -184,14 +184,14 @@ int openvpn_server::open_server_tun(const std::string &server_ip) {
   ifr.ifr_flags |= IFF_UP | IFF_RUNNING;
   ::ioctl(sock, SIOCSIFFLAGS, &ifr);
   ::close(sock);
-  std::cout << "[openvpn_server] tun " << m_server_tun_name
+  std::cout << "[vpn_server] tun " << m_server_tun_name
             << " configured: " << server_ip << "/24 UP\n";
   m_server_tun_io = std::make_unique<server_tun_io>(m_server_tun_fd, *this);
 #endif
   return 0;
 }
 
-void openvpn_server::manage_client_route(const std::string &client_ip, bool add) {
+void vpn_server::manage_client_route(const std::string &client_ip, bool add) {
 #ifdef __linux__
   if (m_server_tun_name.empty()) return;
   struct rtentry rt{};
@@ -206,13 +206,13 @@ void openvpn_server::manage_client_route(const std::string &client_ip, bool add)
   rt.rt_dev   = const_cast<char *>(m_server_tun_name.c_str());
   int sock = ::socket(AF_INET, SOCK_DGRAM, 0);
   if (::ioctl(sock, add ? SIOCADDRT : SIOCDELRT, &rt) < 0)
-    std::cerr << "[openvpn_server] route " << (add ? "add" : "del")
+    std::cerr << "[vpn_server] route " << (add ? "add" : "del")
               << " " << client_ip << ": " << strerror(errno) << '\n';
   else
-    std::cout << "[openvpn_server] route " << (add ? "added" : "removed")
+    std::cout << "[vpn_server] route " << (add ? "added" : "removed")
               << " host " << client_ip << " dev " << m_server_tun_name << '\n';
   ::close(sock);
 #endif
 }
 
-#endif // __openvpn_server_cpp__
+#endif // __vpn_server_cpp__
