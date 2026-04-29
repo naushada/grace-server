@@ -1,11 +1,10 @@
 #ifndef __server_app_hpp__
 #define __server_app_hpp__
 
+#include "client_app.hpp"
 #include "framework.hpp"
 #include "tls_config.hpp"
 #include <unordered_map>
-
-class connected_client;
 
 class server : public evt_io {
 public:
