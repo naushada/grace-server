@@ -343,23 +343,8 @@ int main(int argc, const char *argv[]) {
     const std::string server_ip  = get_flag(argc, argv, "server-ip",  "10.8.0.1");
     const std::string netmask    = get_flag(argc, argv, "netmask",    "255.255.255.0");
 
-    // Build a gNMI GetRequest once; openvpn_server fires it at each connecting client.
-    gnmi_push_cfg gnmi_push;
-    gnmi_push.enabled  = get_flag(argc, argv, "gnmi-push", "false") == "true";
-    gnmi_push.port     = get_port_flag(argc, argv, "gnmi-port", 58989);
-    gnmi_push.tls      = gnmi_tls;
-    gnmi_push.delay_s  = static_cast<int>(
-        std::stoi(get_flag(argc, argv, "gnmi-push-delay", "2")));
-    if (gnmi_push.enabled) {
-      gnmi::GetRequest req;
-      req.mutable_prefix()->set_target("VIEWER");
-      req.add_path()->add_elem()->set_name("interfaces");
-      req.set_encoding(gnmi::JSON);
-      req.SerializeToString(&gnmi_push.request_pb);
-    }
-
-    // Optional MQTT subscriber: receives gNMI requests from gnmi-client-svc
-    // and routes them into the VPN tunnel via push_async.
+    // Per-peer MQTT config: when --mqtt-host is set, each connecting peer
+    // subscribes to fwd/<vip> and handles gNMI requests from gnmi-client-svc.
     mqtt_sub_cfg mqtt_sub;
     mqtt_sub.enabled   = !get_flag(argc, argv, "mqtt-host", "").empty();
     mqtt_sub.host      = get_flag(argc, argv, "mqtt-host", "localhost");
@@ -368,14 +353,13 @@ int main(int argc, const char *argv[]) {
 
     std::cout << "[main] mode=server tls=" << (tls.enabled ? "ON" : "OFF")
               << " gnmi-tls=" << (gnmi_tls.enabled ? "ON" : "OFF")
-              << " gnmi-push=" << (gnmi_push.enabled ? "ON" : "OFF")
               << " mqtt=" << (mqtt_sub.enabled ? "ON" : "OFF")
               << " pool=" << pool_start << "–" << pool_end << '\n';
 
     // svc_module + vpn must stay in scope for the entire event loop.
     server svc_module("0.0.0.0", 58989, gnmi_tls);
     openvpn_server vpn("0.0.0.0", 1194, pool_start, pool_end, tls,
-                       server_ip, netmask, gnmi_push, mqtt_sub);
+                       server_ip, netmask, mqtt_sub);
 
     run_evt_loop{}();
   }

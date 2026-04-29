@@ -1,5 +1,10 @@
 // vpn_server — standalone VPN tunnel server.
 //
+// When a client connects, the assigned openvpn_peer subscribes to the MQTT
+// broker on "fwd/<client-vip>" and handles gNMI Get/Update/Replace/Delete
+// requests forwarded from the CLI via gnmi-client-svc.  Responses are
+// published back on "resp/<client-vip>" for the relay to return to the CLI.
+//
 // Flags:
 //   --port=<port>            VPN listen port           (default: 1194)
 //   --server-ip=<ip>         Server TUN IP             (default: 10.8.0.1)
@@ -10,22 +15,15 @@
 //   --cert=<path>            PEM server certificate
 //   --key=<path>             PEM private key
 //   --ca=<path>              PEM CA certificate
-//   --gnmi-push=true         Push a gNMI Get to each client after tunnel up
-//   --gnmi-port=<port>       Client gNMI port to push to   (default: 58989)
-//   --gnmi-push-delay=<s>    Seconds before push            (default: 2)
-//   --gnmi-tls=true          Enable TLS when pushing to client gNMI server
-//   --gnmi-cert=<path>       PEM cert for gNMI TLS
-//   --gnmi-key=<path>        PEM key for gNMI TLS
-//   --gnmi-ca=<path>         PEM CA for gNMI TLS
-//   --mqtt-host=<host>       MQTT broker — enables MQTT subscriber on fwd/#
-//   --mqtt-port=<port>       MQTT broker port              (default: 1883)
+//   --mqtt-host=<host>       MQTT broker — enables per-peer fwd/<vip> subscriber
+//   --mqtt-port=<port>       MQTT broker port          (default: 1883)
+//   --gnmi-port=<port>       Client gNMI port peers connect to (default: 58989)
 
 #include "openvpn_server.hpp"
 #include "server_app.hpp"
-#include "gnmi_client.hpp"
 #include "tls_config.hpp"
+#include "vpn_types.hpp"
 #include "framework.hpp"
-#include "gnmi/gnmi.pb.h"
 
 #include <cstdint>
 #include <iostream>
@@ -62,15 +60,9 @@ static void print_usage(const char *prog) {
     << "  --cert=<path>            PEM server certificate\n"
     << "  --key=<path>             PEM private key\n"
     << "  --ca=<path>              PEM CA certificate\n"
-    << "  --gnmi-push=true         Push gNMI Get to each client after tunnel up\n"
-    << "  --gnmi-port=<port>       Client gNMI port to push to  (default: 58989)\n"
-    << "  --gnmi-push-delay=<s>    Seconds before push           (default: 2)\n"
-    << "  --gnmi-tls=true          Enable TLS on gNMI push client\n"
-    << "  --gnmi-cert=<path>       PEM cert for gNMI TLS\n"
-    << "  --gnmi-key=<path>        PEM key for gNMI TLS\n"
-    << "  --gnmi-ca=<path>         PEM CA for gNMI TLS\n"
-    << "  --mqtt-host=<host>       MQTT broker (enables subscriber on fwd/#)\n"
-    << "  --mqtt-port=<port>       MQTT broker port             (default: 1883)\n";
+    << "  --mqtt-host=<host>       MQTT broker — enables per-peer gNMI forwarding\n"
+    << "  --mqtt-port=<port>       MQTT broker port          (default: 1883)\n"
+    << "  --gnmi-port=<port>       Client gNMI port to forward to (default: 58989)\n";
 }
 
 int main(int argc, const char *argv[]) {
@@ -81,20 +73,11 @@ int main(int argc, const char *argv[]) {
     return 0;
   }
 
-  // VPN tunnel TLS.
   const tls_config tls{
     get_flag(argc, argv, "tls", "false") == "true",
     get_flag(argc, argv, "cert", ""),
     get_flag(argc, argv, "key",  ""),
     get_flag(argc, argv, "ca",   ""),
-  };
-
-  // gNMI push-client TLS (used when pushing a Get to connected VPN clients).
-  const tls_config gnmi_tls{
-    get_flag(argc, argv, "gnmi-tls", "false") == "true",
-    get_flag(argc, argv, "gnmi-cert", ""),
-    get_flag(argc, argv, "gnmi-key",  ""),
-    get_flag(argc, argv, "gnmi-ca",   ""),
   };
 
   const std::string server_ip  = get_flag(argc, argv, "server-ip",  "10.8.0.1");
@@ -103,41 +86,25 @@ int main(int argc, const char *argv[]) {
   const std::string netmask    = get_flag(argc, argv, "netmask",    "255.255.255.0");
   const uint16_t    port       = get_port(argc, argv, "port", 1194);
 
-  // gNMI push configuration — server fires this at each newly-connected client.
-  gnmi_push_cfg gnmi_push;
-  gnmi_push.enabled  = get_flag(argc, argv, "gnmi-push", "false") == "true";
-  gnmi_push.port     = get_port(argc, argv, "gnmi-port", 58989);
-  gnmi_push.tls      = gnmi_tls;
-  gnmi_push.delay_s  = std::stoi(get_flag(argc, argv, "gnmi-push-delay", "2"));
-  if (gnmi_push.enabled) {
-    gnmi::GetRequest req;
-    req.mutable_prefix()->set_target("VIEWER");
-    req.add_path()->add_elem()->set_name("interfaces");
-    req.set_encoding(gnmi::JSON);
-    req.SerializeToString(&gnmi_push.request_pb);
-  }
-
-  // MQTT subscriber — receives gNMI requests from gnmi-client-svc and injects
-  // them through the VPN tunnel to the addressed client.
-  mqtt_sub_cfg mqtt_sub;
-  mqtt_sub.enabled   = !get_flag(argc, argv, "mqtt-host", "").empty();
-  mqtt_sub.host      = get_flag(argc, argv, "mqtt-host", "localhost");
-  mqtt_sub.port      = get_port(argc, argv, "mqtt-port", 1883);
-  mqtt_sub.gnmi_port = get_port(argc, argv, "gnmi-port", 58989);
+  // MQTT broker config — forwarded to each peer on connect.
+  // Each peer subscribes to "fwd/<vip>" and handles incoming gNMI requests.
+  mqtt_sub_cfg mqtt;
+  mqtt.enabled   = !get_flag(argc, argv, "mqtt-host", "").empty();
+  mqtt.host      = get_flag(argc, argv, "mqtt-host", "localhost");
+  mqtt.port      = get_port(argc, argv, "mqtt-port", 1883);
+  mqtt.gnmi_port = get_port(argc, argv, "gnmi-port", 58989);
 
   std::cout << "[vpn_server] port=" << port
             << " tls=" << (tls.enabled ? "ON" : "OFF")
-            << " gnmi-tls=" << (gnmi_tls.enabled ? "ON" : "OFF")
-            << " gnmi-push=" << (gnmi_push.enabled ? "ON" : "OFF")
-            << " mqtt=" << (mqtt_sub.enabled ? "ON" : "OFF")
+            << " mqtt=" << (mqtt.enabled ? mqtt.host + ":" + std::to_string(mqtt.port) : "OFF")
             << " pool=" << pool_start << "\xe2\x80\x93" << pool_end << '\n';
 
-  // gNMI server on this host — reachable by VPN clients through the tunnel.
-  server gnmi_svc("0.0.0.0", 58989, gnmi_tls);
+  // gNMI server on this host — reachable by probe clients through the tunnel.
+  server gnmi_svc("0.0.0.0", 58989);
 
-  // VPN tunnel server — accepts clients, assigns IPs, routes frames.
+  // VPN tunnel server — each accepted connection becomes an openvpn_peer.
   openvpn_server vpn("0.0.0.0", port, pool_start, pool_end, tls,
-                     server_ip, netmask, gnmi_push, mqtt_sub);
+                     server_ip, netmask, mqtt);
 
   run_evt_loop{}();
   return 0;

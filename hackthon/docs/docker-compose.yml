@@ -38,9 +38,9 @@ services:
   #   Opens a kernel TUN interface (tun0) with server IP 10.8.0.1/24.
   #   Assigns virtual IPs from the pool to connecting clients.
   #   Adds/removes per-client host routes via SIOCADDRT/SIOCDELRT.
-  #   When --mqtt-host is set (mqtt profile), subscribes to "fwd/#" on the
-  #   mosquitto broker; parses each message as rpc_path+'\0'+proto_bytes and
-  #   forwards via gnmi_client::push_async(dest_ip, gnmi_port, rpc_path, pb).
+  #   When --mqtt-host is set (mqtt profile), each accepted peer subscribes
+  #   to "fwd/<vip>" on the mosquitto broker independently and forwards
+  #   gNMI requests via gnmi_client::push_async through the VPN tunnel.
   # ─────────────────────────────────────────────────────────────────────────
   vpn-server:
     image: marvel:release
@@ -51,9 +51,6 @@ services:
       - --pool-start=10.8.0.2
       - --pool-end=10.8.0.254
       - --netmask=255.255.255.0
-      - --gnmi-push=true        # push a gNMI Get to each client after tunnel up
-      - --gnmi-port=58989       # client gNMI server port (accessible via tunnel)
-      - --gnmi-push-delay=2     # seconds to wait for client gNMI server to start
     ports:
       - "1194:1194"      # VPN tunnel (TCP)
       - "58989:58989"    # gNMI gRPC
@@ -355,10 +352,11 @@ services:
   #       ▼
   #   mosquitto broker
   #       ▼
-  #   [Stage 3] vpn-server  (subscribes to "fwd/#" via --mqtt-host)
-  #       │  parses topic → dest_ip, splits payload → rpc_path + proto_bytes
-  #       │  calls gnmi_client::push_async(dest_ip, 58989, rpc_path, proto_bytes)
-  #       │  → HTTP/2 gRPC frame injected into VPN tunnel via openvpn_peer
+  #   [Stage 3] openvpn_peer  (per-client, subscribes to "fwd/<vip>")
+  #       │  parses payload → rpc_path + proto_bytes
+  #       │  calls gnmi_client::push_async(vip, 58989, rpc_path, proto_bytes)
+  #       │  → HTTP/2 gRPC frame injected into VPN tunnel
+  #       │  response published to "resp/<vip>" for gnmi-client-svc relay
   #       ▼
   #   VPN tunnel (TCP 1194, tun0 10.8.0.0/24)
   #       ▼

@@ -3,7 +3,6 @@
 
 #include "openvpn_server.hpp"
 #include "openvpn_peer.hpp"
-#include "gnmi_client.hpp"
 
 #include <arpa/inet.h>
 #include <cerrno>
@@ -29,7 +28,7 @@
 uint32_t ip_pool::to_u32(const std::string &ip) {
   struct in_addr a{};
   inet_pton(AF_INET, ip.c_str(), &a);
-  return ntohl(a.s_addr); // host byte order for arithmetic comparison
+  return ntohl(a.s_addr);
 }
 
 std::string ip_pool::to_str(uint32_t addr) {
@@ -68,115 +67,44 @@ std::string ip_pool::get(int32_t channel) const {
   return it != m_assigned.end() ? to_str(it->second) : std::string{};
 }
 
+int32_t ip_pool::find_channel(const std::string &ip) const {
+  const uint32_t addr = to_u32(ip);
+  for (const auto &[ch, a] : m_assigned)
+    if (a == addr) return ch;
+  return -1;
+}
+
 // ---------------------------------------------------------------------------
 // openvpn_server
 // ---------------------------------------------------------------------------
 
-openvpn_server::openvpn_server(const std::string   &host,
-                                 uint16_t             port,
-                                 const std::string   &pool_start,
-                                 const std::string   &pool_end,
-                                 const tls_config    &tls,
-                                 const std::string   &server_ip,
-                                 const std::string   &netmask,
-                                 const gnmi_push_cfg &gnmi_push,
-                                 const mqtt_sub_cfg  &mqtt_sub)
+openvpn_server::openvpn_server(const std::string  &host,
+                                 uint16_t            port,
+                                 const std::string  &pool_start,
+                                 const std::string  &pool_end,
+                                 const tls_config   &tls,
+                                 const std::string  &server_ip,
+                                 const std::string  &netmask,
+                                 const mqtt_sub_cfg &mqtt_sub)
     : evt_io(host, port, tls.build_server_ctx(), listener_tag{}),
       m_pool(pool_start, pool_end), m_netmask(netmask),
-      m_gnmi_push(gnmi_push) {
+      m_mqtt_cfg(mqtt_sub) {
   std::cout << "[openvpn_server] " << host << ":" << port
-            << " pool=" << pool_start << "–" << pool_end
+            << " pool=" << pool_start << "\xe2\x80\x93" << pool_end
             << " tls=" << (tls.enabled ? "ON" : "OFF")
-            << " gnmi-push=" << (gnmi_push.enabled ? "ON" : "OFF")
             << " mqtt=" << (mqtt_sub.enabled ? "ON" : "OFF") << '\n';
   open_server_tun(server_ip);
-  if (mqtt_sub.enabled)
-    setup_mqtt(mqtt_sub);
 }
 
 openvpn_server::~openvpn_server() {
-  m_mqtt_io.reset(); // disconnects and cleans up mosquitto
   m_server_tun_io.reset();
   if (m_server_tun_fd >= 0) ::close(m_server_tun_fd);
   m_peers.clear();
 }
 
 // ---------------------------------------------------------------------------
-// MQTT subscriber — receives gNMI requests and forwards into the VPN tunnel
+// Connection handling
 // ---------------------------------------------------------------------------
-
-void openvpn_server::on_mqtt_message(struct mosquitto * /*mosq*/, void *userdata,
-                                      const struct mosquitto_message *msg) {
-  if (!msg || !msg->payload || msg->payloadlen <= 0) return;
-  auto *self = static_cast<openvpn_server *>(userdata);
-
-  // Topic format: "fwd/<virtual-ip>"
-  const std::string topic(msg->topic);
-  if (topic.size() <= 4 || topic.substr(0, 4) != "fwd/") return;
-  const std::string dest_ip = topic.substr(4);
-
-  // Payload format: rpc_path + '\0' + proto_bytes
-  const char *raw     = static_cast<const char *>(msg->payload);
-  const std::size_t sz = static_cast<std::size_t>(msg->payloadlen);
-  const char *sep = static_cast<const char *>(std::memchr(raw, '\0', sz));
-  if (!sep) return; // malformed — no null separator
-  const std::string rpc_path(raw, sep - raw);
-  const std::string proto_bytes(sep + 1, sz - (sep - raw) - 1);
-
-  std::cout << "[openvpn_server] MQTT ← fwd/" << dest_ip
-            << " rpc=" << rpc_path
-            << " payload=" << proto_bytes.size() << "B"
-            << " → push_async to " << dest_ip << ":" << self->m_mqtt_gnmi_port << '\n';
-
-  gnmi_client::push_async(
-      dest_ip, self->m_mqtt_gnmi_port, rpc_path, proto_bytes, {},
-      [self, dest_ip, rpc_path](const gnmi_client::response &r) {
-        if (!self->m_mqtt_io) return;
-        // Payload: rpc_path '\0' grpc_status '\0' grpc_message '\0' proto_bytes
-        std::string payload;
-        payload  = rpc_path;
-        payload += '\0';
-        payload += std::to_string(r.grpc_status);
-        payload += '\0';
-        payload += r.grpc_message;
-        payload += '\0';
-        payload += r.body_pb;
-        const std::string resp_topic = "resp/" + dest_ip;
-        self->m_mqtt_io->publish(resp_topic, payload.data(),
-                                 static_cast<int>(payload.size()));
-        std::cout << "[openvpn_server] MQTT → " << resp_topic
-                  << " status=" << r.grpc_status << '\n';
-      });
-}
-
-void openvpn_server::setup_mqtt(const mqtt_sub_cfg &cfg) {
-  m_mqtt_gnmi_port = cfg.gnmi_port;
-  m_mqtt_io = std::make_unique<mqtt_io>(
-      cfg.host, cfg.port, "vpn-server", on_mqtt_message, this);
-  m_mqtt_io->subscribe("fwd/#");
-  std::cout << "[openvpn_server] MQTT subscribed to fwd/# on "
-            << cfg.host << ":" << cfg.port << '\n';
-}
-
-// Context block passed to gnmi_push_cb via evtimer_new void* arg.
-struct gnmi_push_ctx {
-  openvpn_server *server;
-  std::string     client_ip;
-  struct event   *timer{nullptr};
-};
-
-void openvpn_server::gnmi_push_cb(evutil_socket_t, short, void *arg) {
-  auto *ctx = static_cast<gnmi_push_ctx *>(arg);
-  std::cout << "[openvpn_server] gNMI push → "
-            << ctx->client_ip << ":" << ctx->server->m_gnmi_push.port << '\n';
-  gnmi_client::push_async(ctx->client_ip,
-                           ctx->server->m_gnmi_push.port,
-                           ctx->server->m_gnmi_push.rpc_path,
-                           ctx->server->m_gnmi_push.request_pb,
-                           ctx->server->m_gnmi_push.tls);
-  event_free(ctx->timer);
-  delete ctx;
-}
 
 std::int32_t openvpn_server::handle_connect(const handle_t &channel,
                                               const std::string &peer_host) {
@@ -186,26 +114,14 @@ std::int32_t openvpn_server::handle_connect(const handle_t &channel,
     return -1;
   }
 
-  // wrap_accepted() is in evt_io: returns a TLS bev when the server was
-  // constructed with a TLS ctx, plain socket bev otherwise.
   auto *bev = wrap_accepted(channel);
-  auto peer = std::make_unique<openvpn_peer>(bev, peer_host, this, ip, m_netmask);
+  // Pass the MQTT broker config so the peer subscribes to fwd/<vip> itself.
+  auto peer = std::make_unique<openvpn_peer>(bev, peer_host, this, ip,
+                                              m_netmask, m_mqtt_cfg);
   m_peers.emplace(channel, std::move(peer));
   manage_client_route(ip, true);
   std::cout << "[openvpn_server] accepted " << peer_host
             << " \xe2\x86\x92 " << ip << (has_tls() ? " (TLS)" : "") << '\n';
-
-  // Schedule a gNMI push to the newly-connected client after a short delay
-  // so the client has time to configure its tun0 and start its gNMI server.
-  if (m_gnmi_push.enabled && !m_gnmi_push.request_pb.empty()) {
-    auto *ctx   = new gnmi_push_ctx{this, ip};
-    ctx->timer  = evtimer_new(evt_base::instance().get(), gnmi_push_cb, ctx);
-    const struct timeval tv{static_cast<time_t>(m_gnmi_push.delay_s), 0};
-    evtimer_add(ctx->timer, &tv);
-    std::cout << "[openvpn_server] gNMI push to " << ip
-              << " scheduled in " << m_gnmi_push.delay_s << "s\n";
-  }
-
   return 0;
 }
 
@@ -218,21 +134,9 @@ std::int32_t openvpn_server::handle_close(const handle_t &channel) {
 }
 
 // ---------------------------------------------------------------------------
-// ip_pool — reverse lookup: IP string → channel
+// Server TUN — routes inbound IP packets to the right peer
 // ---------------------------------------------------------------------------
 
-int32_t ip_pool::find_channel(const std::string &ip) const {
-  const uint32_t addr = to_u32(ip);
-  for (const auto &[ch, a] : m_assigned)
-    if (a == addr) return ch;
-  return -1;
-}
-
-// ---------------------------------------------------------------------------
-// Server TUN — receives IP packets from local stack, routes to right peer
-// ---------------------------------------------------------------------------
-
-// server_tun_io — wraps server TUN fd in evt_io; routes inbound IP packets to peers.
 class openvpn_server::server_tun_io : public evt_io {
 public:
   server_tun_io(evutil_socket_t fd, openvpn_server &owner)
@@ -269,7 +173,6 @@ int openvpn_server::open_server_tun(const std::string &server_ip) {
     ::close(m_server_tun_fd); m_server_tun_fd = -1; return -1;
   }
   m_server_tun_name = ifr.ifr_name;
-  // Assign server IP and bring up
   int sock = ::socket(AF_INET, SOCK_DGRAM, 0);
   auto *sin = reinterpret_cast<struct sockaddr_in *>(&ifr.ifr_addr);
   sin->sin_family = AF_INET;
@@ -281,7 +184,7 @@ int openvpn_server::open_server_tun(const std::string &server_ip) {
   ifr.ifr_flags |= IFF_UP | IFF_RUNNING;
   ::ioctl(sock, SIOCSIFFLAGS, &ifr);
   ::close(sock);
-  std::cout << "[openvpn_server] tun " << ifr.ifr_name
+  std::cout << "[openvpn_server] tun " << m_server_tun_name
             << " configured: " << server_ip << "/24 UP\n";
   m_server_tun_io = std::make_unique<server_tun_io>(m_server_tun_fd, *this);
 #endif
@@ -298,7 +201,7 @@ void openvpn_server::manage_client_route(const std::string &client_ip, bool add)
     inet_pton(AF_INET, ip.c_str(), &s->sin_addr);
   };
   set_addr(rt.rt_dst,     client_ip);
-  set_addr(rt.rt_genmask, "255.255.255.255"); // host route
+  set_addr(rt.rt_genmask, "255.255.255.255");
   rt.rt_flags = RTF_UP | RTF_HOST;
   rt.rt_dev   = const_cast<char *>(m_server_tun_name.c_str());
   int sock = ::socket(AF_INET, SOCK_DGRAM, 0);

@@ -2,42 +2,18 @@
 #define __openvpn_server_hpp__
 
 #include "framework.hpp"
-#include "gnmi_client.hpp"  // gnmi_push_cfg, gnmi_client::push_async
-#include "mqtt_io.hpp"
 #include "tls_config.hpp"
+#include "vpn_types.hpp"
 
 #include <set>
 #include <string>
 #include <unordered_map>
 
-// Configuration for the optional MQTT subscriber built into openvpn_server.
-// When enabled, an mqtt_io (framework-compliant, event-driven) connects to the
-// broker and subscribes to "fwd/#".  Each arriving message is forwarded as a
-// gNMI request through the VPN tunnel:
-//   topic   = "fwd/<virtual-ip>"  (published by gnmi-client-svc relay)
-//   payload = rpc_path + '\0' + proto_bytes
-// The server splits payload on '\0' then calls
-// gnmi_client::push_async(dest_ip, gnmi_port, rpc_path, proto_bytes).
-struct mqtt_sub_cfg {
-  bool        enabled{false};
-  std::string host{"localhost"};
-  uint16_t    port{1883};
-  uint16_t    gnmi_port{58989};
-};
-
 class openvpn_peer;
 
 // IP address pool supporting any IPv4 range — enables 1000+ concurrent clients.
-//
-// Scalability note: libevent uses epoll on Linux, handling 65 K+ concurrent fds
-// in a single thread (C10K is solved at the I/O layer).  The only hard cap was
-// this pool being limited to a /24 (253 addresses).  Switching to uint32_t host
-// addresses lets operators configure e.g. "10.8.0.2"–"10.9.255.254" giving
-// 131 070 assignable virtual IPs with ~12 bytes per entry.
 class ip_pool {
 public:
-  // start_ip / end_ip as dotted-decimal strings, e.g. "10.8.0.2", "10.8.0.254"
-  // For 1000+ clients use a /22 or larger: "10.8.0.2" → "10.11.255.254"
   ip_pool(const std::string &start_ip = "10.8.0.2",
           const std::string &end_ip   = "10.8.0.254");
 
@@ -55,25 +31,25 @@ private:
   std::unordered_map<int32_t, uint32_t> m_assigned;
 };
 
-// TCP tunnel server.  Inherits the server-side evt_io constructor
-// (evconnlistener); creates one openvpn_peer per accepted connection and
-// assigns a virtual IP from the pool.  TLS is optional: when enabled each
-// accepted fd is wrapped in bufferevent_openssl_socket_new before the peer
-// object is constructed.
+// VPN tunnel server.  Accepts clients, assigns virtual IPs from the pool, and
+// creates one openvpn_peer per connection.  TLS is optional.
+//
+// When mqtt_sub is enabled, the broker config is forwarded to each peer on
+// connect so the peer can subscribe to its own "fwd/<vip>" topic and handle
+// gNMI requests from the CLI independently.
 class openvpn_server : public evt_io {
 public:
   using handle_t   = int32_t;
   using peer_map_t = std::unordered_map<handle_t, std::unique_ptr<openvpn_peer>>;
 
-  openvpn_server(const std::string   &host,
-                 uint16_t             port,
-                 const std::string   &pool_start  = "10.8.0.2",
-                 const std::string   &pool_end    = "10.8.0.254",
-                 const tls_config    &tls         = {},
-                 const std::string   &server_ip   = "10.8.0.1",
-                 const std::string   &netmask     = "255.255.255.0",
-                 const gnmi_push_cfg &gnmi_push   = {},
-                 const mqtt_sub_cfg  &mqtt_sub    = {});
+  openvpn_server(const std::string  &host,
+                 uint16_t            port,
+                 const std::string  &pool_start = "10.8.0.2",
+                 const std::string  &pool_end   = "10.8.0.254",
+                 const tls_config   &tls        = {},
+                 const std::string  &server_ip  = "10.8.0.1",
+                 const std::string  &netmask    = "255.255.255.0",
+                 const mqtt_sub_cfg &mqtt_sub   = {});
 
   virtual ~openvpn_server();
 
@@ -87,19 +63,8 @@ private:
   class server_tun_io;
   friend class server_tun_io;
 
-  // Timer callback: fires delay_s seconds after a VPN client connects.
-  // Calls gnmi_client::push_async() to the client's VPN IP — safe inside
-  // the running event loop because push_async is non-blocking.
-  static void gnmi_push_cb(evutil_socket_t, short, void *ctx);
-
-  // MQTT message callback — called by mqtt_io when a "fwd/<ip>" message arrives.
-  // Parses rpc_path + '\0' + proto_bytes, calls gnmi_client::push_async().
-  static void on_mqtt_message(struct mosquitto *, void *userdata,
-                               const struct mosquitto_message *msg);
-
   int  open_server_tun(const std::string &server_ip);
   void manage_client_route(const std::string &client_ip, bool add);
-  void setup_mqtt(const mqtt_sub_cfg &cfg);
 
   ip_pool                        m_pool;
   peer_map_t                     m_peers;
@@ -107,9 +72,7 @@ private:
   std::string                    m_server_tun_name;
   std::unique_ptr<server_tun_io> m_server_tun_io;
   int                            m_server_tun_fd{-1};
-  gnmi_push_cfg                  m_gnmi_push;
-  std::unique_ptr<mqtt_io>       m_mqtt_io;
-  uint16_t                       m_mqtt_gnmi_port{58989};
+  mqtt_sub_cfg                   m_mqtt_cfg;  // forwarded to each peer on connect
 };
 
 #endif // __openvpn_server_hpp__

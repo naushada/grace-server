@@ -19,11 +19,9 @@ services:
       - --pool-start=10.8.0.2
       - --pool-end=10.8.0.254
       - --netmask=255.255.255.0
-      - --gnmi-push=true
-      - --gnmi-port=58989
-      - --gnmi-push-delay=2
       - --mqtt-host=mosquitto
       - --mqtt-port=1883
+      - --gnmi-port=58989
     depends_on:
       mosquitto:
         condition: service_healthy

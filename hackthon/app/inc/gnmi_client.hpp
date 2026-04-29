@@ -7,16 +7,6 @@
 #include <functional>
 #include <string>
 
-// Configuration for a server-initiated async gNMI push to a connected client.
-struct gnmi_push_cfg {
-  bool        enabled{false};
-  uint16_t    port{58989};
-  tls_config  tls{};
-  int         delay_s{2};            // seconds to wait before connecting (let client start gNMI server)
-  std::string rpc_path{"/gnmi.gNMI/Get"};
-  std::string request_pb;            // pre-serialised proto bytes (set by main before handing to server)
-};
-
 // gnmi_client makes a blocking unary gRPC call using the libevent bufferevent
 // interface (the same event base used by the rest of the process).
 // All socket I/O goes through evt_io (framework.hpp) — no raw POSIX sockets.
