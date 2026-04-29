@@ -362,8 +362,32 @@ services:
   #       └  processes gNMI Get / Update, sends reply back through tunnel
   # ═════════════════════════════════════════════════════════════════════════
 
+  # ═════════════════════════════════════════════════════════════════════════
+  # Standard OpenVPN + gNMI + MQTT stack  (profile: openvpn)
+  #
+  # All six services below share the openvpn profile and start together:
+  #
+  #   mosquitto        → MQTT broker (no deps)
+  #   gnmi-server-svc  → gNMI target on app-net (no deps)
+  #   gnmi-client-svc  → MQTT relay: cli/<vip> → fwd/<vip>
+  #                       depends on: mosquitto healthy
+  #   openvpn-server   → system openvpn server + per-client MQTT subscriber
+  #                       depends on: mosquitto healthy
+  #   openvpn-client   → system openvpn client + iptables DNAT
+  #                       depends on: openvpn-server healthy, gnmi-server-svc started
+  #   cli              → interactive Marvel> REPL
+  #                       depends on: mosquitto healthy, gnmi-client-svc started,
+  #                                   openvpn-server started
+  #
+  # Startup order:
+  #   mosquitto (healthy) ──► gnmi-client-svc
+  #                      ──► openvpn-server (healthy) ──► openvpn-client
+  #                      ──► cli
+  #   gnmi-server-svc (immediate, no deps)
+  # ═════════════════════════════════════════════════════════════════════════
+
   # ─────────────────────────────────────────────────────────────────────────
-  # mosquitto — MQTT broker.  Profile: mqtt, openvpn
+  # mosquitto — MQTT broker.  Profile: openvpn, mqtt
   # ─────────────────────────────────────────────────────────────────────────
   mosquitto:
     image: eclipse-mosquitto:2
@@ -380,15 +404,15 @@ services:
       timeout: 3s
       retries: 10
     profiles:
-      - mqtt
       - openvpn
+      - mqtt
     restart: unless-stopped
 
   # ─────────────────────────────────────────────────────────────────────────
-  # gnmi-server-svc — standalone gNMI server.  Profile: mqtt, openvpn
-  #   Lives on app-net (172.21.0.0/24) — invisible to vpn-net.
-  #   Receives gNMI requests forwarded via iptables DNAT from vpn-client
-  #   or openvpn-client.
+  # gnmi-server-svc — gNMI target server.  Profile: openvpn, mqtt
+  #   Lives on app-net (172.21.0.0/24) — not reachable from vpn-net directly.
+  #   Traffic reaches it only via iptables DNAT installed by openvpn-client.
+  #   No depends_on — starts immediately alongside mosquitto.
   # ─────────────────────────────────────────────────────────────────────────
   gnmi-server-svc:
     image: marvel:release
@@ -400,16 +424,14 @@ services:
       app-net:
         ipv4_address: 172.21.0.5
     profiles:
-      - mqtt
       - openvpn
+      - mqtt
     restart: unless-stopped
 
   # ─────────────────────────────────────────────────────────────────────────
-  # gnmi-client-svc — MQTT relay.  Profile: mqtt, openvpn
-  #   Subscribes to "cli/#" (messages from cli_app).
-  #   Re-publishes each message unchanged on "fwd/<ip>" for vpn-server or
-  #   openvpn-server.  Only depends on mosquitto — the VPN server that
-  #   consumes fwd/<vip> varies by profile.
+  # gnmi-client-svc — MQTT relay.  Profile: openvpn, mqtt
+  #   Subscribes to cli/# and republishes on fwd/<vip> for openvpn-server.
+  #   Depends on: mosquitto healthy
   # ─────────────────────────────────────────────────────────────────────────
   gnmi-client-svc:
     image: marvel:release
@@ -425,63 +447,15 @@ services:
       mosquitto:
         condition: service_healthy
     profiles:
-      - mqtt
       - openvpn
+      - mqtt
     restart: unless-stopped
 
   # ─────────────────────────────────────────────────────────────────────────
-  # cli  Profile: mqtt, openvpn
-  #   Interactive readline REPL (Marvel> prompt).
-  #   Connects to the MQTT broker via MQTT_HOST / MQTT_PORT env vars.
-  #   Publishes gNMI requests on "cli/<target-vip>" and receives responses
-  #   on "cli_resp/<target-vip>" via gnmi-client-svc.
-  #
-  #   Attach after the stack is up:
-  #     docker compose -f docs/docker-compose.yml --profile openvpn attach cli
-  #   Detach without stopping: Ctrl-P Ctrl-Q
-  # ─────────────────────────────────────────────────────────────────────────
-  cli:
-    image: marvel:release
-    entrypoint: /app/cli_app
-    stdin_open: true
-    tty: true
-    environment:
-      MQTT_HOST: mosquitto
-      MQTT_PORT: "1883"
-    networks:
-      vpn-net:
-        ipv4_address: 172.20.0.18
-    depends_on:
-      mosquitto:
-        condition: service_healthy
-      gnmi-client-svc:
-        condition: service_started
-    profiles:
-      - openvpn
-    restart: "no"
-
-  # ═════════════════════════════════════════════════════════════════════════
-  # Standard OpenVPN wrapper services  (profile: openvpn)
-  #
-  # These use the system openvpn binary (installed via the openvpn package).
-  # openvpn_server monitors connected clients via the management interface
-  # (status poll every 5 s) and, when mqtt-host is set, subscribes to
-  # "fwd/<client-vip>" on the MQTT broker and forwards gNMI requests through
-  # the tunnel to each client's gNMI service.
-  # openvpn_client detects tunnel-up from the openvpn log, extracts the
-  # assigned VIP and installs iptables PREROUTING DNAT rules:
-  #   <vip>:80    → fwd-host:80
-  #   <vip>:443   → fwd-host:443
-  #   <vip>:58989 → fwd-host:58989  (gNMI server on gnmi-server-svc)
-  # ═════════════════════════════════════════════════════════════════════════
-
-  # ─────────────────────────────────────────────────────────────────────────
   # openvpn-server  Profile: openvpn
-  #   Spawns the system openvpn binary in --server mode.
-  #   Management interface on 127.0.0.1:7505, polled every 5 s for client VIPs.
-  #   MQTT forwarding enabled — each connected client gets a per-VIP subscriber
-  #   on "fwd/<vip>"; gNMI requests are forwarded through the tunnel and
-  #   responses published on "resp/<vip>" for gnmi-client-svc to relay back.
+  #   Spawns system openvpn --server; polls management interface every 5 s.
+  #   Per-client MQTT subscriber on fwd/<vip> — forwards gNMI through tunnel.
+  #   Depends on: mosquitto healthy
   # ─────────────────────────────────────────────────────────────────────────
   openvpn-server:
     image: marvel:release
@@ -499,7 +473,7 @@ services:
       vpn-net:
         ipv4_address: 172.20.0.15
     healthcheck:
-      # openvpn management interface on 7505 (0x1D51) confirms the server is ready.
+      # Management interface on 7505 (0x1D51) opens only after openvpn is ready.
       test: ["CMD", "bash", "-c", "grep -q ':1D51' /proc/net/tcp"]
       interval: 3s
       timeout: 3s
@@ -514,9 +488,9 @@ services:
 
   # ─────────────────────────────────────────────────────────────────────────
   # openvpn-client  Profile: openvpn
-  #   Spawns the system openvpn binary in --client mode.
-  #   Waits for "Initialization Sequence Completed" in openvpn stdout, then
-  #   installs iptables DNAT rules for ports 80, 443, 58989 → gnmi-server-svc.
+  #   Spawns system openvpn --client; installs iptables DNAT on tunnel-up:
+  #     <vip>:80,443,58989 → gnmi-server-svc (172.21.0.5)
+  #   Depends on: openvpn-server healthy, gnmi-server-svc started
   # ─────────────────────────────────────────────────────────────────────────
   openvpn-client:
     image: marvel:release
@@ -540,6 +514,39 @@ services:
     depends_on:
       openvpn-server:
         condition: service_healthy
+      gnmi-server-svc:
+        condition: service_started
     profiles:
       - openvpn
     restart: unless-stopped
+
+  # ─────────────────────────────────────────────────────────────────────────
+  # cli  Profile: openvpn
+  #   Interactive readline REPL (Marvel> prompt).
+  #   Publishes gNMI requests on cli/<vip>; receives responses on cli_resp/<vip>.
+  #   Attach: docker compose --profile openvpn attach cli
+  #   Detach without stopping: Ctrl-P Ctrl-Q
+  #   Depends on: mosquitto healthy, gnmi-client-svc started,
+  #               openvpn-server started
+  # ─────────────────────────────────────────────────────────────────────────
+  cli:
+    image: marvel:release
+    entrypoint: /app/cli_app
+    stdin_open: true
+    tty: true
+    environment:
+      MQTT_HOST: mosquitto
+      MQTT_PORT: "1883"
+    networks:
+      vpn-net:
+        ipv4_address: 172.20.0.18
+    depends_on:
+      mosquitto:
+        condition: service_healthy
+      gnmi-client-svc:
+        condition: service_started
+      openvpn-server:
+        condition: service_started
+    profiles:
+      - openvpn
+    restart: "no"
