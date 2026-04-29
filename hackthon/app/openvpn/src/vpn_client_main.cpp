@@ -1,5 +1,9 @@
 // vpn_client — standalone VPN tunnel client.
 //
+// Responsibility: VPN tunnel management + iptables NAT forwarding only.
+// The gNMI server is always a separate service (gnmi-server-svc); this
+// binary never starts an embedded gNMI server.
+//
 // Flags:
 //   --server=<host>          VPN server address        (default: 127.0.0.1)
 //   --port=<port>            VPN server port           (default: 1194)
@@ -9,25 +13,18 @@
 //   --key=<path>             PEM private key
 //   --ca=<path>              PEM CA certificate
 //   --gnmi-port=<port>       gNMI port on the assigned VIP  (default: 58989)
-//   --gnmi-fwd-ip=<ip>       Forward VIP:<gnmi-port> to this IP (forwarding mode)
-//   --gnmi-fwd-port=<port>   Target port for forwarding       (default: gnmi-port)
-//   --gnmi-tls=true          TLS for embedded gNMI server (no-fwd mode only)
-//   --gnmi-cert=<path>       PEM cert for embedded gNMI TLS
-//   --gnmi-key=<path>        PEM key for embedded gNMI TLS
-//   --gnmi-ca=<path>         PEM CA for embedded gNMI TLS
-//   --gnmi-probe=true        Fire a one-shot gNMI Get to the server VIP
+//   --gnmi-fwd-ip=<ip>       Forward VIP:<gnmi-port> → this IP (gnmi-server-svc)
+//   --gnmi-fwd-port=<port>   Target port for the DNAT rule    (default: gnmi-port)
+//   --gnmi-probe=true        Fire a one-shot gNMI Get to the server VIP (diagnostic)
 //   --server-vip=<ip>        Server-side VPN IP to probe  (default: 10.8.0.1)
 //
 // Startup sequence (phased, no nested event loops):
 //   Phase 1: event_base_loop(EVLOOP_ONCE) until VPN tunnel + tun0 are up.
-//            openvpn_client installs iptables DNAT if --gnmi-fwd-ip is set.
-//   Phase 2: forwarding mode — DNAT already active, no embedded server started.
-//            embedded mode  — start in-process gNMI server on 0.0.0.0:<gnmi-port>.
-//   Phase 3 (optional): blocking gNMI probe to the server VIP.
-//   Phase 4: event_base_dispatch — keep tunnel alive indefinitely.
+//            openvpn_client installs iptables PREROUTING DNAT for the VIP.
+//   Phase 2 (optional): blocking gNMI probe to the server VIP.
+//   Phase 3: event_base_dispatch — keep tunnel alive indefinitely.
 
 #include "openvpn_client.hpp"
-#include "server_app.hpp"
 #include "gnmi_client.hpp"
 #include "tls_config.hpp"
 #include "framework.hpp"
@@ -69,22 +66,10 @@ static void print_usage(const char *prog) {
     << "  --key=<path>             PEM private key\n"
     << "  --ca=<path>              PEM CA certificate\n"
     << "  --gnmi-port=<port>       gNMI port on the assigned VIP (default: 58989)\n"
-    << "  --gnmi-fwd-ip=<ip>       Forward VIP:<gnmi-port> to this IP (gnmi-server)\n"
-    << "  --gnmi-fwd-port=<port>   Target port for forwarding   (default: gnmi-port)\n"
-    << "  --gnmi-tls=true          Enable TLS on embedded gNMI server (no-fwd mode)\n"
-    << "  --gnmi-cert=<path>       PEM cert for gNMI TLS\n"
-    << "  --gnmi-key=<path>        PEM key for gNMI TLS\n"
-    << "  --gnmi-ca=<path>         PEM CA for gNMI TLS\n"
-    << "  --gnmi-probe=true        Fire a one-shot gNMI Get to the server VIP\n"
-    << "  --server-vip=<ip>        Server-side VPN IP to probe  (default: 10.8.0.1)\n"
-    << "\n"
-    << "  Forwarding mode (--gnmi-fwd-ip set):\n"
-    << "    After VIP assignment, installs iptables PREROUTING DNAT so gNMI\n"
-    << "    traffic arriving at <vip>:<gnmi-port> is forwarded to\n"
-    << "    <gnmi-fwd-ip>:<gnmi-fwd-port>.  No embedded gNMI server is started.\n"
-    << "\n"
-    << "  Embedded mode (--gnmi-fwd-ip not set):\n"
-    << "    Starts an in-process gNMI server on 0.0.0.0:<gnmi-port>.\n";
+    << "  --gnmi-fwd-ip=<ip>       DNAT destination IP (gnmi-server-svc address)\n"
+    << "  --gnmi-fwd-port=<port>   DNAT destination port         (default: gnmi-port)\n"
+    << "  --gnmi-probe=true        One-shot gNMI Get to server VIP (diagnostic)\n"
+    << "  --server-vip=<ip>        Server-side VPN IP to probe  (default: 10.8.0.1)\n";
 }
 
 static void dump_gnmi_response(const gnmi_client::response &r) {
@@ -120,21 +105,11 @@ int main(int argc, const char *argv[]) {
     return 0;
   }
 
-  // VPN tunnel TLS.
   const tls_config tls{
     get_flag(argc, argv, "tls", "false") == "true",
     get_flag(argc, argv, "cert", ""),
     get_flag(argc, argv, "key",  ""),
     get_flag(argc, argv, "ca",   ""),
-  };
-
-  // gNMI server TLS — used when the VPN server pushes a gNMI request back
-  // through the tunnel to this client's gNMI server.
-  const tls_config gnmi_tls{
-    get_flag(argc, argv, "gnmi-tls", "false") == "true",
-    get_flag(argc, argv, "gnmi-cert", ""),
-    get_flag(argc, argv, "gnmi-key",  ""),
-    get_flag(argc, argv, "gnmi-ca",   ""),
   };
 
   const std::string vpn_server    = get_flag(argc, argv, "server", "127.0.0.1");
@@ -146,19 +121,20 @@ int main(int argc, const char *argv[]) {
   const bool        gnmi_probe    = get_flag(argc, argv, "gnmi-probe", "false") == "true";
   const std::string server_vip    = get_flag(argc, argv, "server-vip", "10.8.0.1");
 
+  if (gnmi_fwd_ip.empty()) {
+    std::cerr << "[vpn_client] --gnmi-fwd-ip is required (gnmi-server-svc address)\n";
+    print_usage(argv[0]);
+    return 1;
+  }
+
   std::cout << "[vpn_client] server=" << vpn_server << ":" << port
             << " tls=" << (tls.enabled ? "ON" : "OFF")
-            << " gnmi-port=" << gnmi_port;
-  if (!gnmi_fwd_ip.empty())
-    std::cout << " gnmi-fwd=" << gnmi_fwd_ip << ":" << gnmi_fwd_port;
-  else
-    std::cout << " gnmi-tls=" << (gnmi_tls.enabled ? "ON" : "OFF");
-  if (gnmi_probe) std::cout << " gnmi-probe=ON";
-  std::cout << '\n';
+            << " gnmi-port=" << gnmi_port
+            << " gnmi-fwd=" << gnmi_fwd_ip << ":" << gnmi_fwd_port
+            << (gnmi_probe ? " gnmi-probe=ON" : "") << '\n';
 
-  // Phase 1: connect to VPN server and wait for tun0 + IP assignment.
-  // gnmi_fwd_ip / gnmi_fwd_port are stored so openvpn_client can install the
-  // iptables DNAT rule immediately after the VIP is assigned.
+  // Phase 1: connect and wait for IP assignment.
+  // openvpn_client installs the iptables DNAT rule as soon as the VIP is known.
   openvpn_client vpn(vpn_server, port, status_file, tls,
                      gnmi_port, gnmi_fwd_ip, gnmi_fwd_port);
 
@@ -167,19 +143,11 @@ int main(int argc, const char *argv[]) {
   while (!vpn.ip_assigned())
     event_base_loop(base, EVLOOP_ONCE);
 
-  std::cout << "[vpn_client] tunnel up, assigned=" << vpn.assigned_ip() << '\n';
+  std::cout << "[vpn_client] tunnel up, assigned=" << vpn.assigned_ip()
+            << " — DNAT " << vpn.assigned_ip() << ":" << gnmi_port
+            << " \xe2\x86\x92 " << gnmi_fwd_ip << ":" << gnmi_fwd_port << '\n';
 
-  // Phase 2: start an embedded gNMI server only when NOT in forwarding mode.
-  // In forwarding mode the iptables DNAT rule already routes gNMI traffic to
-  // an external gnmi-server-svc; no in-process server is needed.
-  std::unique_ptr<server> gnmi_svc;
-  if (gnmi_fwd_ip.empty()) {
-    std::cout << "[vpn_client] starting embedded gNMI server port=" << gnmi_port
-              << " tls=" << (gnmi_tls.enabled ? "ON" : "OFF") << '\n';
-    gnmi_svc = std::make_unique<server>("0.0.0.0", gnmi_port, gnmi_tls);
-  }
-
-  // Phase 3 (optional): one-shot gNMI probe to the server VIP.
+  // Phase 2 (optional): one-shot gNMI diagnostic probe to the server VIP.
   if (gnmi_probe) {
     std::cout << "[vpn_client] probing " << server_vip << ":" << gnmi_port << "\n";
 
@@ -192,12 +160,12 @@ int main(int argc, const char *argv[]) {
     req.SerializeToString(&req_pb);
 
     const auto resp = gnmi_client::call(server_vip, gnmi_port,
-                                        "/gnmi.gNMI/Get", req_pb, gnmi_tls);
+                                        "/gnmi.gNMI/Get", req_pb);
     dump_gnmi_response(resp);
     std::cout << "[vpn_client] probe done, tunnel remains open\n";
   }
 
-  // Phase 4: keep the tunnel alive.
+  // Phase 3: keep the tunnel alive.
   run_evt_loop{}();
   return 0;
 }
