@@ -8,6 +8,7 @@
 #include <chrono>
 #include <cstring>
 #include <cstdlib>
+#include <set>
 #include <mosquitto.h>
 
 // ---------------------------------------------------------------------------
@@ -32,28 +33,50 @@ struct cli_resp_t {
 };
 static cli_resp_t g_cli_resp;
 
-// mosquitto message callback — fires when cli_resp/<ip> delivers a response.
-static void on_cli_response(struct mosquitto* /*mosq*/, void* /*ud*/,
-                             const struct mosquitto_message *msg) {
-  if (!msg || !msg->payload || msg->payloadlen <= 0) return;
-  const char  *raw = static_cast<const char *>(msg->payload);
-  const size_t sz  = static_cast<size_t>(msg->payloadlen);
+// VIPs currently connected through the OpenVPN server (updated via clients/# retained messages).
+static std::set<std::string> g_connected_vips;
 
-  // Parse: rpc_path '\0' status_str '\0' grpc_message '\0' proto_bytes
-  const char *s1 = static_cast<const char *>(std::memchr(raw, '\0', sz));
-  if (!s1) return;
-  g_cli_resp.rpc_path = std::string(raw, s1 - raw);
+// Unified mosquitto message callback:
+//   clients/<vip>   — retained lifecycle events from openvpn-server
+//   cli_resp/<ip>   — gNMI response from gnmi-client-svc
+static void on_message(struct mosquitto* /*mosq*/, void* /*ud*/,
+                        const struct mosquitto_message *msg) {
+  if (!msg || !msg->topic) return;
+  const std::string topic(msg->topic);
 
-  const char *s2 = static_cast<const char *>(std::memchr(s1 + 1, '\0', sz - static_cast<size_t>(s1 + 1 - raw)));
-  if (!s2) return;
-  g_cli_resp.grpc_status = std::stoi(std::string(s1 + 1, s2 - s1 - 1));
+  if (topic.rfind("clients/", 0) == 0) {
+    const std::string vip = topic.substr(8);
+    if (msg->payloadlen > 0) {
+      g_connected_vips.insert(vip);
+      std::cout << "\n[vpn] client connected: " << vip << "\nMarvel> " << std::flush;
+    } else {
+      g_connected_vips.erase(vip);
+      std::cout << "\n[vpn] client disconnected: " << vip << "\nMarvel> " << std::flush;
+    }
+    return;
+  }
 
-  const char *s3 = static_cast<const char *>(std::memchr(s2 + 1, '\0', sz - static_cast<size_t>(s2 + 1 - raw)));
-  if (!s3) return;
-  g_cli_resp.grpc_message = std::string(s2 + 1, s3 - s2 - 1);
+  if (topic.rfind("cli_resp/", 0) == 0) {
+    if (!msg->payload || msg->payloadlen <= 0) return;
+    const char  *raw = static_cast<const char *>(msg->payload);
+    const size_t sz  = static_cast<size_t>(msg->payloadlen);
 
-  g_cli_resp.proto_bytes = std::string(s3 + 1, sz - static_cast<size_t>(s3 + 1 - raw));
-  g_cli_resp.received = true;
+    // Parse: rpc_path '\0' status_str '\0' grpc_message '\0' proto_bytes
+    const char *s1 = static_cast<const char *>(std::memchr(raw, '\0', sz));
+    if (!s1) return;
+    g_cli_resp.rpc_path = std::string(raw, s1 - raw);
+
+    const char *s2 = static_cast<const char *>(std::memchr(s1 + 1, '\0', sz - static_cast<size_t>(s1 + 1 - raw)));
+    if (!s2) return;
+    g_cli_resp.grpc_status = std::stoi(std::string(s1 + 1, s2 - s1 - 1));
+
+    const char *s3 = static_cast<const char *>(std::memchr(s2 + 1, '\0', sz - static_cast<size_t>(s2 + 1 - raw)));
+    if (!s3) return;
+    g_cli_resp.grpc_message = std::string(s2 + 1, s3 - s2 - 1);
+
+    g_cli_resp.proto_bytes = std::string(s3 + 1, sz - static_cast<size_t>(s3 + 1 - raw));
+    g_cli_resp.received = true;
+  }
 }
 
 // Print a decoded gNMI response received over the MQTT return path.
@@ -93,7 +116,6 @@ static void mqtt_gnmi_publish(const std::string &target_ip,
   // Subscribe to response topic BEFORE publishing to avoid a race.
   const std::string resp_topic = "cli_resp/" + target_ip;
   g_cli_resp = {};
-  mosquitto_message_callback_set(g_mosq, on_cli_response);
   mosquitto_subscribe(g_mosq, nullptr, resp_topic.c_str(), 0);
   mosquitto_loop(g_mosq, 10, 1);  // flush SUBSCRIBE
 
@@ -130,7 +152,6 @@ static void mqtt_gnmi_publish(const std::string &target_ip,
     print_mqtt_response(g_cli_resp);
 
   mosquitto_unsubscribe(g_mosq, nullptr, resp_topic.c_str());
-  mosquitto_message_callback_set(g_mosq, nullptr);
 }
 
 // ---------------------------------------------------------------------------
@@ -723,6 +744,16 @@ void process_command(const std::string &line) {
   std::string cmd_name;
   ss >> cmd_name;
 
+  // Built-in commands that don't require a lua definition.
+  if (cmd_name == "clients") {
+    if (g_connected_vips.empty())
+      std::cout << "[vpn] no clients connected\n";
+    else
+      for (const auto &vip : g_connected_vips)
+        std::cout << "  " << vip << '\n';
+    return;
+  }
+
   // Accept either a filename key OR a first-level command key inside any
   // loaded file.
   bool found =
@@ -873,6 +904,10 @@ int main() {
         g_mosq = nullptr;
       } else {
         std::cout << "[mqtt] connected to " << mqtt_host << ":" << port << '\n';
+        mosquitto_message_callback_set(g_mosq, on_message);
+        mosquitto_subscribe(g_mosq, nullptr, "clients/#", 0);
+        mosquitto_loop(g_mosq, 10, 1);  // flush SUBSCRIBE + receive any retained messages
+        std::cout << "[mqtt] subscribed to clients/#\n";
       }
     }
   }
