@@ -8,17 +8,21 @@
 //   --cert=<path>            PEM client certificate
 //   --key=<path>             PEM private key
 //   --ca=<path>              PEM CA certificate
-//   --gnmi-port=<port>       gNMI server listen port   (default: 58989)
-//   --gnmi-tls=true          Enable TLS on gNMI server
-//   --gnmi-cert=<path>       PEM cert for gNMI TLS
-//   --gnmi-key=<path>        PEM key for gNMI TLS
-//   --gnmi-ca=<path>         PEM CA for gNMI TLS
+//   --gnmi-port=<port>       gNMI port on the assigned VIP  (default: 58989)
+//   --gnmi-fwd-ip=<ip>       Forward VIP:<gnmi-port> to this IP (forwarding mode)
+//   --gnmi-fwd-port=<port>   Target port for forwarding       (default: gnmi-port)
+//   --gnmi-tls=true          TLS for embedded gNMI server (no-fwd mode only)
+//   --gnmi-cert=<path>       PEM cert for embedded gNMI TLS
+//   --gnmi-key=<path>        PEM key for embedded gNMI TLS
+//   --gnmi-ca=<path>         PEM CA for embedded gNMI TLS
 //   --gnmi-probe=true        Fire a one-shot gNMI Get to the server VIP
 //   --server-vip=<ip>        Server-side VPN IP to probe  (default: 10.8.0.1)
 //
 // Startup sequence (phased, no nested event loops):
 //   Phase 1: event_base_loop(EVLOOP_ONCE) until VPN tunnel + tun0 are up.
-//   Phase 2: start gNMI server on the assigned virtual IP.
+//            openvpn_client installs iptables DNAT if --gnmi-fwd-ip is set.
+//   Phase 2: forwarding mode — DNAT already active, no embedded server started.
+//            embedded mode  — start in-process gNMI server on 0.0.0.0:<gnmi-port>.
 //   Phase 3 (optional): blocking gNMI probe to the server VIP.
 //   Phase 4: event_base_dispatch — keep tunnel alive indefinitely.
 
