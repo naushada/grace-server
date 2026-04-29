@@ -191,7 +191,16 @@ void openvpn_client::parse_line(const std::string &line) {
     if (looks_like_ipv4(vip)) { m_assigned_ip = vip; goto vip_found; }
   }
 
+  // PUSH_REPLY embedded (no device name): "...ifconfig 10.8.0.6 10.8.0.5,peer-id..."
+  // VIP is the first token after "ifconfig "; token_after trims trailing commas.
+  if (m_assigned_ip.empty() && line.find("PUSH") != std::string::npos &&
+      line.find("ifconfig ") != std::string::npos) {
+    const auto vip = token_after(line, "ifconfig ");
+    if (looks_like_ipv4(vip)) { m_assigned_ip = vip; goto vip_found; }
+  }
+
   // Legacy openvpn (ifconfig): "ifconfig tun0 10.8.0.x 10.8.0.1"
+  // VIP is the second token (first is the device name).
   if (m_assigned_ip.empty() && line.find("ifconfig ") != std::string::npos) {
     std::istringstream ss(line);
     std::string tok;
