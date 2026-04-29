@@ -235,6 +235,11 @@ openvpn_server::openvpn_server(uint16_t vpn_port,
   // mgmt_io connects to the management socket immediately; its handle_event
   // will retry every 2s until openvpn has opened the port.
   m_mgmt_io = std::make_unique<mgmt_io>(mgmt_port, *this);
+
+  // Server-level publisher for retained clients/<vip> lifecycle events.
+  if (mqtt.enabled)
+    m_event_mqtt = std::make_unique<mqtt_io>(
+        mqtt.host, mqtt.port, "ovpn-srv-events", nullptr, nullptr);
 #else
   (void)vpn_port; (void)tls; (void)mgmt_port; (void)mqtt;
   std::cerr << "[openvpn_server] only supported on Linux\n";
@@ -244,6 +249,7 @@ openvpn_server::openvpn_server(uint16_t vpn_port,
 openvpn_server::~openvpn_server() {
 #ifdef __linux__
   m_mgmt_io.reset();
+  m_event_mqtt.reset();
   m_proc_io.reset();
   m_peers.clear();
   if (m_pipe_r >= 0) { ::close(m_pipe_r); m_pipe_r = -1; }
@@ -266,13 +272,27 @@ void openvpn_server::on_client_connect(const std::string &vip) {
       m_mqtt.host, m_mqtt.port, client_id, on_mqtt_message, this);
   mio->subscribe("fwd/" + vip);
   m_peers.emplace(vip, std::move(mio));
+
+  // Publish retained so the CLI (and any late subscriber) immediately knows
+  // this VIP is reachable.  topic: clients/<vip>  payload: "connected"
+  if (m_event_mqtt)
+    m_event_mqtt->publish("clients/" + vip, "connected", 9, 0, /*retain=*/true);
+
   std::cout << "[openvpn_server] client connected vip=" << vip
-            << " — subscribed to fwd/" << vip << '\n';
+            << " — subscribed to fwd/" << vip
+            << " — published clients/" << vip << '\n';
 }
 
 void openvpn_server::on_client_disconnect(const std::string &vip) {
   m_peers.erase(vip);
-  std::cout << "[openvpn_server] client disconnected vip=" << vip << '\n';
+
+  // Clear the retained message so subscribers know this VIP is gone.
+  // An empty retained payload removes the retained message from the broker.
+  if (m_event_mqtt)
+    m_event_mqtt->publish("clients/" + vip, nullptr, 0, 0, /*retain=*/true);
+
+  std::cout << "[openvpn_server] client disconnected vip=" << vip
+            << " — cleared clients/" << vip << '\n';
 }
 
 // ---------------------------------------------------------------------------

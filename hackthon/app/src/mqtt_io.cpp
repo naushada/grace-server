@@ -98,10 +98,10 @@ void mqtt_io::subscribe(const std::string &topic, int qos) {
 }
 
 int mqtt_io::publish(const std::string &topic, const void *payload,
-                     int payloadlen, int qos) {
+                     int payloadlen, int qos, bool retain) {
   if (!m_mosq) return MOSQ_ERR_INVAL;
   const int rc = mosquitto_publish(m_mosq, nullptr, topic.c_str(),
-                                    payloadlen, payload, qos, false);
+                                    payloadlen, payload, qos, retain);
   if (rc == MOSQ_ERR_SUCCESS)
     raw_watch_write(true); // flush PUBLISH packet
   return rc;

@@ -66,6 +66,9 @@ private:
   // Per-VIP MQTT subscriber — one per connected client.
   std::unordered_map<std::string, std::unique_ptr<mqtt_io>> m_peers;
 
+  // Server-level MQTT publisher — publishes retained clients/<vip> events.
+  std::unique_ptr<mqtt_io> m_event_mqtt;
+
   std::unique_ptr<proc_io> m_proc_io;
   std::unique_ptr<mgmt_io> m_mgmt_io;
 };

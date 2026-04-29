@@ -36,9 +36,10 @@ public:
   void subscribe(const std::string &topic, int qos = 0);
 
   // Queue an MQTT PUBLISH and arm the write event to flush it.
-  // Returns a MOSQ_ERR_* code.
+  // retain=true stores the last value on the broker so late subscribers
+  // receive it immediately on subscribe.  Returns a MOSQ_ERR_* code.
   int publish(const std::string &topic, const void *payload, int payloadlen,
-              int qos = 0);
+              int qos = 0, bool retain = false);
 
   // evt_io overrides — called by framework when the mosquitto socket is ready.
   std::int32_t handle_read(const std::int32_t &, const std::string &,
