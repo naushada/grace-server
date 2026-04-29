@@ -24,7 +24,7 @@ public:
       : evt_io(host, port, tls.build_server_ctx(), listener_tag{}),
         m_clients() {}
 
-  virtual ~server() { m_clients.clear(); }
+  virtual ~server();
 
   client_t &clients() { return m_clients; }
 

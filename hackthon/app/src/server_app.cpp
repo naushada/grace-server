@@ -5,6 +5,8 @@
 #include "client_app.hpp"
 #include "framework.hpp"
 
+server::~server() { m_clients.clear(); }
+
 std::int32_t server::handle_connect(const std::int32_t &channel,
                                     const std::string &peer_host) {
   // wrap_accepted() returns a TLS bufferevent when this server was constructed
