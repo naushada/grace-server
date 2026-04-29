@@ -1,7 +1,10 @@
-# Override file for the mqtt profile.
+# Override file for the mqtt / mqtt-tls profiles.
 # Adds --mqtt-host/--mqtt-port to vpn-server so it subscribes to mosquitto,
 # and wires vpn-server's depends_on to mosquitto.
-# Also ensures registration-svc is healthy before gnmi-client-svc starts.
+# Also ensures registration-svc is healthy before vpn-server starts.
+#
+# registration-svc and telemetry-svc each listen on both plain and TLS ports
+# simultaneously (dual-port mode), so no separate *-tls services are needed.
 #
 # Usage:
 #   docker compose -f docs/docker-compose.yml \

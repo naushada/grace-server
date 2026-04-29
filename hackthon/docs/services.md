@@ -18,18 +18,18 @@ Two Docker bridge networks are used:
 ```
 vpn-net  172.20.0.0/24
 ┌────────────────────────────────────────────────────────────────────┐
-│  vpn-server        172.20.0.2    (tun0 10.8.0.1)                   │
-│  vpn-client        172.20.0.3    (tun0 10.8.0.X)  ──┐             │
-│  vpn-server-tls    172.20.0.5    (tun0 10.9.0.1)     │ also on     │
-│  vpn-client-tls    172.20.0.6    (tun0 10.9.0.X)     │ app-net     │
-│  gnmi-server       172.20.0.7                         │             │
-│  gnmi-server-tls   172.20.0.8                         │             │
-│  gnmi-client       172.20.0.9                         │             │
-│  gnmi-client-tls   172.20.0.10                        │             │
-│  mosquitto         172.20.0.11                        │             │
-│  gnmi-client-svc   172.20.0.12   (MQTT relay)        │             │
-│  registration-svc  172.20.0.13   (gNMI port 58988)   │             │
-│  telemetry-svc     172.20.0.14   (gNMI port 58989)   │             │
+│  vpn-server            172.20.0.2    (tun0 10.8.0.1)               │
+│  vpn-client            172.20.0.3    (tun0 10.8.0.X)  ──┐         │
+│  vpn-server-tls        172.20.0.5    (tun0 10.9.0.1)    │ also on  │
+│  vpn-client-tls        172.20.0.6    (tun0 10.9.0.X)    │ app-net  │
+│  gnmi-server           172.20.0.7                         │         │
+│  gnmi-server-tls       172.20.0.8                         │         │
+│  gnmi-client           172.20.0.9                         │         │
+│  gnmi-client-tls       172.20.0.10                        │         │
+│  mosquitto             172.20.0.11                        │         │
+│  gnmi-client-svc       172.20.0.12   (MQTT relay)        │         │
+│  registration-svc      172.20.0.13   (58988 plain, 58992 TLS)       │
+│  telemetry-svc         172.20.0.14   (58989 plain, 58993 TLS)       │
 └────────────────────────────────────────────────────────────────────┘
                                                         │
 app-net  172.21.0.0/24                                  │
@@ -103,21 +103,21 @@ docker compose -f docs/docker-compose.yml --profile tls up
 |-|-|
 | **Mode** | `--mode=gnmi-server` |
 | **IP** | `172.20.0.13` |
-| **Port (host→container)** | `58988:58988` |
-| **Profile** | `registration`, `mqtt` |
-| **Healthcheck** | `/proc/net/tcp` contains `:E66C` (58988 = 0xE66C) |
+| **Ports (host→container)** | `58988:58988` (plain), `58992:58992` (TLS) |
+| **Profile** | `registration`, `registration-tls`, `mqtt`, `mqtt-tls` |
+| **Healthcheck** | `/proc/net/tcp` contains `:E66C` (58988) and `:E670` (58992) |
 
-Dedicated gNMI server for **device registration**.  Runs the same binary as all
-other gNMI services but on port 58988, keeping registration traffic clearly
-separated from operational telemetry (58989).
+Dedicated gNMI server for **device registration**.  Runs two listeners
+simultaneously on the same container — plain TCP on port 58988 and mutual-TLS
+on port 58992 — so plain and TLS clients can reach it without a separate service.
+Certs are baked into the image at `/app/certs/`.
 
 Typical usage via the VPN tunnel:
 - `/gnmi.gNMI/Set` — device registers itself (writes identity/config leaf)
 - `/gnmi.gNMI/Get` — device or operator queries registration state
 
-Included in the `mqtt` profile so it is present whenever the full MQTT stack is
-running.  `docker-compose.mqtt.yml` adds a `service_healthy` dependency so
-`vpn-server` does not start until this service is ready.
+`docker-compose.mqtt.yml` adds a `service_healthy` dependency so `vpn-server`
+does not start until this service is ready.
 
 ---
 
@@ -127,20 +127,18 @@ running.  `docker-compose.mqtt.yml` adds a `service_healthy` dependency so
 |-|-|
 | **Mode** | `--mode=gnmi-server` |
 | **IP** | `172.20.0.14` |
-| **Port (host→container)** | `58991:58989` |
-| **Profile** | `telemetry`, `mqtt` |
-| **Healthcheck** | `/proc/net/tcp` contains `:E66D` (58989 = 0xE66D) |
+| **Ports (host→container)** | `58991:58989` (plain), `58993:58993` (TLS) |
+| **Profile** | `telemetry`, `telemetry-tls`, `mqtt`, `mqtt-tls` |
+| **Healthcheck** | `/proc/net/tcp` contains `:E66D` (58989) and `:E671` (58993) |
 
-Dedicated gNMI server for **telemetry collection**.  Same binary as
-`registration-svc`, different IP (`172.20.0.14`) and host-side port (`58991`).
-Host port 58991 is used to avoid collision with the standalone `gnmi-server`
-service which already claims `58989:58989`.
+Dedicated gNMI server for **telemetry collection**.  Same dual-listener design
+as `registration-svc` — plain TCP on port 58989 and TLS on port 58993.  Host
+port 58991 maps the plain TCP port to avoid collision with the standalone
+`gnmi-server` service which already claims `58989:58989`.
 
 Typical usage via the VPN tunnel:
 - `/gnmi.gNMI/Set` — device pushes a telemetry sample
 - `/gnmi.gNMI/Get` — operator subscribes to or polls a telemetry stream
-
-Included in the `mqtt` profile alongside `registration-svc`.
 
 ---
 
@@ -246,8 +244,8 @@ The MQTT relay.  Subscribes to `cli/#` and `resp/#` and re-publishes:
 | `gnmi-client-tls` | 172.20.0.10 | — | — | — |
 | `mosquitto` | 172.20.0.11 | 1883 | 1883 | pub/sub probe |
 | `gnmi-client-svc` | 172.20.0.12 | — | — | — |
-| `registration-svc` | 172.20.0.13 | 58988 | 58988 | `:E66C` |
-| `telemetry-svc` | 172.20.0.14 | 58989 | 58991 | `:E66D` |
+| `registration-svc` | 172.20.0.13 | 58988 (plain), 58992 (TLS) | 58988, 58992 | `:E66C` + `:E670` |
+| `telemetry-svc` | 172.20.0.14 | 58989 (plain), 58993 (TLS) | 58991, 58993 | `:E66D` + `:E671` |
 | `gnmi-server-svc` | 172.21.0.5 | 58989 | — | — |
 
 ---
@@ -260,9 +258,12 @@ The MQTT relay.  Subscribes to `cli/#` and `resp/#` and re-publishes:
 | `tls` | + `vpn-server-tls`, `vpn-client-tls` |
 | `gnmi` | + `gnmi-server`, `gnmi-client` |
 | `gnmi-tls` | + `gnmi-server-tls`, `gnmi-client-tls` |
-| `registration` | + `registration-svc` |
-| `telemetry` | + `telemetry-svc` |
+| `registration` | + `registration-svc` (plain 58988 + TLS 58992) |
+| `registration-tls` | + `registration-svc` (same service, both ports) |
+| `telemetry` | + `telemetry-svc` (plain 58989 + TLS 58993) |
+| `telemetry-tls` | + `telemetry-svc` (same service, both ports) |
 | `mqtt` | + `mosquitto`, `gnmi-server-svc`, `gnmi-client-svc`, `registration-svc`, `telemetry-svc`, `vpn-server` (with MQTT args via overlay) |
+| `mqtt-tls` | + same services as `mqtt`; each service already handles TLS on its second port |
 
 ---
 
@@ -288,10 +289,25 @@ Starts: `mosquitto`, `vpn-server` (with `--mqtt-host`), `vpn-client`,
 docker compose -f docs/docker-compose.yml --profile registration up
 ```
 
-### Telemetry service only
+### Telemetry service only (plain TCP)
 ```bash
 docker compose -f docs/docker-compose.yml --profile telemetry up
 ```
+
+### Registration + Telemetry (both serve plain + TLS automatically)
+```bash
+docker compose -f docs/docker-compose.yml --profile registration-tls --profile telemetry-tls up
+```
+Each service listens on both its plain port and TLS port within the same container.
+
+### Full MQTT gNMI stack (plain + TLS on every service)
+```bash
+docker compose -f docs/docker-compose.yml \
+               -f docs/docker-compose.mqtt.yml \
+               --profile mqtt up
+```
+`registration-svc` and `telemetry-svc` each serve both plain and TLS clients
+with no additional services required.
 
 ### TLS tunnel
 ```bash
@@ -308,5 +324,7 @@ port in hex (big-endian, zero-padded to 4 digits):
 | Port | Hex | Service |
 |------|-----|---------|
 | 1194 | `04AA` | `vpn-server`, `vpn-server-tls` |
-| 58988 | `E66C` | `registration-svc` |
-| 58989 | `E66D` | `telemetry-svc` |
+| 58988 | `E66C` | `registration-svc` (plain) |
+| 58989 | `E66D` | `telemetry-svc` (plain) |
+| 58992 | `E670` | `registration-svc` (TLS) |
+| 58993 | `E671` | `telemetry-svc` (TLS) |

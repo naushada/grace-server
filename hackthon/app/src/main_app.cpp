@@ -131,8 +131,12 @@ static void print_usage(const char *prog) {
     << "  " << prog << " --mode=gnmi-server [options]\n"
     << "       Standalone gNMI server — no VPN, no TUN device needed.\n"
     << "       Intended for gnmi-server-svc behind an nftables/socat proxy.\n"
-    << "    --gnmi-port=<port>       Listen port  (default: 58989)\n"
-    << "    --gnmi-tls/--gnmi-cert/--gnmi-key/--gnmi-ca  TLS options\n"
+    << "    --gnmi-port=<port>       Plain TCP listen port       (default: 58989)\n"
+    << "    --gnmi-tls-port=<port>   TLS listen port (optional); when set, both\n"
+    << "                             plain and TLS listeners run simultaneously\n"
+    << "    --gnmi-tls=true          Single-port TLS mode (ignored when\n"
+    << "                             --gnmi-tls-port is set)\n"
+    << "    --gnmi-cert/--gnmi-key/--gnmi-ca  PEM files for TLS\n"
     << "\n"
     << "  gnmi-mqtt-client options:\n"
     << "    --mqtt-host=<host>       MQTT broker address       (default: localhost)\n"
@@ -222,18 +226,40 @@ int main(int argc, const char *argv[]) {
   // ── gnmi-server ──────────────────────────────────────────────────────────
   // Pure gNMI server with no VPN — used by gnmi-server-svc in docker-compose.
   // Listens on --gnmi-port (default 58989); TLS optional via --gnmi-tls flags.
+  //
+  // Dual-port mode: when --gnmi-tls-port is given, two listeners run in the
+  // same event loop — plain TCP on --gnmi-port and TLS on --gnmi-tls-port.
+  // This lets a single container serve both plain and TLS clients without
+  // needing a separate *-tls service.  --gnmi-tls=true is ignored in this mode
+  // (the plain listener is always plain, the TLS listener always TLS).
   if (mode == "gnmi-server") {
-    const tls_config gnmi_tls{
-      get_flag(argc, argv, "gnmi-tls", "false") == "true",
+    const uint16_t gnmi_port     = get_port_flag(argc, argv, "gnmi-port", 58989);
+    const uint16_t gnmi_tls_port = get_port_flag(argc, argv, "gnmi-tls-port", 0);
+    const tls_config tls_cfg{
+      true,  // enabled — only consulted when building the TLS listener ctx
       get_flag(argc, argv, "gnmi-cert", ""),
       get_flag(argc, argv, "gnmi-key",  ""),
       get_flag(argc, argv, "gnmi-ca",   ""),
     };
-    const uint16_t gnmi_port = get_port_flag(argc, argv, "gnmi-port", 58989);
-    std::cout << "[main] mode=gnmi-server port=" << gnmi_port
-              << " tls=" << (gnmi_tls.enabled ? "ON" : "OFF") << '\n';
-    server gnmi_svc("0.0.0.0", gnmi_port, gnmi_tls);
-    run_evt_loop{}();
+
+    if (gnmi_tls_port != 0) {
+      // Dual-port: plain listener on gnmi_port, TLS listener on gnmi_tls_port.
+      std::cout << "[main] mode=gnmi-server plain=" << gnmi_port
+                << " tls=" << gnmi_tls_port << '\n';
+      server plain_svc("0.0.0.0", gnmi_port);
+      server tls_svc("0.0.0.0", gnmi_tls_port, tls_cfg);
+      run_evt_loop{}();
+    } else {
+      // Single-port: plain or TLS depending on --gnmi-tls flag.
+      const tls_config single_tls{
+        get_flag(argc, argv, "gnmi-tls", "false") == "true",
+        tls_cfg.cert_file, tls_cfg.key_file, tls_cfg.ca_file,
+      };
+      std::cout << "[main] mode=gnmi-server port=" << gnmi_port
+                << " tls=" << (single_tls.enabled ? "ON" : "OFF") << '\n';
+      server gnmi_svc("0.0.0.0", gnmi_port, single_tls);
+      run_evt_loop{}();
+    }
     return 0;
   }
 
