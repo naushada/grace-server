@@ -77,6 +77,9 @@ include_directories(openvpn/inc)
 include_directories(${NGHTTP2_INCLUDE_DIRS})
 file(GLOB SOURCES "src/*.cpp")
 file(GLOB OPENVPN_SOURCES "openvpn/src/*.cpp")
+# Exclude standalone-binary entry points — they have their own main() and are
+# built by app/openvpn/CMakeLists.txt as vpn_server / vpn_client.
+list(FILTER OPENVPN_SOURCES EXCLUDE REGEX ".*_main\\.cpp$")
 add_executable(app ${SOURCES} ${OPENVPN_SOURCES})
 target_include_directories(app PRIVATE ${PROTO_GEN_DIR})
 target_link_libraries(app PUBLIC
