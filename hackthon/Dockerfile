@@ -70,6 +70,8 @@ RUN printf 'Acquire::Check-Valid-Until "false";\nAcquire::Check-Date "false";\n'
     libmosquitto1 \
     mosquitto-clients \
     nftables \
+    iptables \
+    openvpn \
     socat \
   && rm -rf /var/lib/apt/lists/*
 
@@ -87,6 +89,8 @@ COPY --from=build --chown=edge:cordoba /src/build/app/app /app/app
 COPY --from=build --chown=edge:cordoba /src/build/app/cli/cli_app /app/cli_app
 COPY --from=build --chown=edge:cordoba /src/build/app/openvpn/vpn_server /app/vpn_server
 COPY --from=build --chown=edge:cordoba /src/build/app/openvpn/vpn_client /app/vpn_client
+COPY --from=build --chown=edge:cordoba /src/build/app/openvpn/openvpn_server /app/openvpn_server
+COPY --from=build --chown=edge:cordoba /src/build/app/openvpn/openvpn_client /app/openvpn_client
 
 # fs_app in readline.cpp / fs_app.cpp watches /app/command for .lua command
 # definitions. Ship the sample StartDownlinkConnectionsTestRequest.lua so the
@@ -105,7 +109,7 @@ COPY --from=build --chown=edge:cordoba /src/app/openvpn/command/ /app/command/
 # These are intentionally self-signed test credentials — do NOT use in production.
 COPY --chown=edge:cordoba certs/ /app/certs/
 
-# Standalone VPN binaries (preferred over /app/app --mode=server/client):
+# Custom-protocol VPN binaries (vpn_server / vpn_client):
 #
 #   Plain server:
 #     docker run --cap-add NET_ADMIN --device /dev/net/tun marvel:release \
@@ -128,5 +132,27 @@ COPY --chown=edge:cordoba certs/ /app/certs/
 #                       --cert=/app/certs/client.pem \
 #                       --key=/app/certs/client.key \
 #                       --ca=/app/certs/ca.pem
+#
+# Standard OpenVPN wrapper binaries (openvpn_server / openvpn_client):
+# Require the system openvpn binary (included via the openvpn package above).
+#
+#   Plain server (no TLS, for testing):
+#     docker run --cap-add NET_ADMIN --device /dev/net/tun marvel:release \
+#       /app/openvpn_server
+#
+#   TLS server with MQTT forwarding:
+#     docker run --cap-add NET_ADMIN --device /dev/net/tun marvel:release \
+#       /app/openvpn_server --tls=true \
+#                           --cert=/app/certs/server.pem \
+#                           --key=/app/certs/server.key \
+#                           --ca=/app/certs/ca.pem \
+#                           --mqtt-host=mqtt-broker \
+#                           --gnmi-port=58989
+#
+#   Client — forward VIP ports to local services:
+#     docker run --cap-add NET_ADMIN --device /dev/net/tun marvel:release \
+#       /app/openvpn_client --server=<host> \
+#                           --fwd-host=127.0.0.1 \
+#                           --fwd-ports=80,443,58989
 
 CMD ["/app/vpn_server"]

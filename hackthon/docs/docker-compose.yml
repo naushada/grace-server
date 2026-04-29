@@ -427,3 +427,115 @@ services:
     profiles:
       - mqtt
     restart: unless-stopped
+
+  # ═════════════════════════════════════════════════════════════════════════
+  # Standard OpenVPN wrapper services  (profile: openvpn, openvpn-mqtt)
+  #
+  # These use the system openvpn binary (installed via the openvpn package).
+  # openvpn_server monitors connected clients via the management interface
+  # (status poll every 5 s) and, when mqtt-host is set, subscribes to
+  # "fwd/<client-vip>" on the MQTT broker and forwards gNMI requests through
+  # the tunnel to each client's gNMI service.
+  # openvpn_client detects tunnel-up from the openvpn log, extracts the
+  # assigned VIP and installs iptables PREROUTING DNAT rules:
+  #   <vip>:80    → fwd-host:80
+  #   <vip>:443   → fwd-host:443
+  #   <vip>:58989 → fwd-host:58989  (gNMI server on gnmi-server-svc)
+  # ═════════════════════════════════════════════════════════════════════════
+
+  # ─────────────────────────────────────────────────────────────────────────
+  # openvpn-server  Profile: openvpn, openvpn-mqtt
+  #   Spawns the system openvpn binary in --server mode.
+  #   Management interface on 127.0.0.1:7505, polled every 5 s for client VIPs.
+  # ─────────────────────────────────────────────────────────────────────────
+  openvpn-server:
+    image: marvel:release
+    <<: *tun-caps
+    command:
+      - /app/openvpn_server
+      - --port=1194
+      - --mgmt-port=7505
+    ports:
+      - "11194:1194"    # OpenVPN TCP tunnel (host 11194 avoids clash with vpn-server)
+    networks:
+      vpn-net:
+        ipv4_address: 172.20.0.15
+    healthcheck:
+      # openvpn management interface on 7505 (0x1D51) confirms the server is ready.
+      test: ["CMD", "bash", "-c", "grep -q ':1D51' /proc/net/tcp"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+      start_period: 5s
+    profiles:
+      - openvpn
+      - openvpn-mqtt
+    restart: unless-stopped
+
+  # ─────────────────────────────────────────────────────────────────────────
+  # openvpn-client  Profile: openvpn, openvpn-mqtt
+  #   Spawns the system openvpn binary in --client mode.
+  #   Waits for "Initialization Sequence Completed" in openvpn stdout, then
+  #   installs iptables DNAT rules for ports 80, 443, 58989 → gnmi-server-svc.
+  # ─────────────────────────────────────────────────────────────────────────
+  openvpn-client:
+    image: marvel:release
+    user: root
+    cap_add:
+      - NET_ADMIN
+      - NET_RAW
+    devices:
+      - /dev/net/tun:/dev/net/tun
+    command:
+      - /app/openvpn_client
+      - --server=openvpn-server
+      - --port=1194
+      - --fwd-host=172.21.0.5    # gnmi-server-svc on app-net
+      - --fwd-ports=80,443,58989
+    networks:
+      vpn-net:
+        ipv4_address: 172.20.0.16
+      app-net:
+        ipv4_address: 172.21.0.6
+    depends_on:
+      openvpn-server:
+        condition: service_healthy
+    profiles:
+      - openvpn
+      - openvpn-mqtt
+    restart: unless-stopped
+
+  # ─────────────────────────────────────────────────────────────────────────
+  # openvpn-server-mqtt  Profile: openvpn-mqtt
+  #   Same as openvpn-server but with MQTT forwarding enabled.
+  #   Each connected client gets a per-VIP subscriber on "fwd/<vip>".
+  #   gNMI requests from CLI flow: cli_app → gnmi-client-svc → fwd/<vip>
+  #     → openvpn_server → gNMI at <vip>:58989 (client's gnmi-server-svc)
+  # ─────────────────────────────────────────────────────────────────────────
+  openvpn-server-mqtt:
+    image: marvel:release
+    <<: *tun-caps
+    command:
+      - /app/openvpn_server
+      - --port=1194
+      - --mgmt-port=7505
+      - --mqtt-host=mosquitto
+      - --mqtt-port=1883
+      - --gnmi-port=58989
+    ports:
+      - "11195:1194"    # host port avoids clash with openvpn-server
+    networks:
+      vpn-net:
+        ipv4_address: 172.20.0.17
+    healthcheck:
+      test: ["CMD", "bash", "-c", "grep -q ':1D51' /proc/net/tcp"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+      start_period: 5s
+    depends_on:
+      mosquitto:
+        condition: service_healthy
+    profiles:
+      - openvpn-mqtt
+    restart: unless-stopped

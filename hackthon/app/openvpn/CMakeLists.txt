@@ -22,7 +22,7 @@ include_directories(${NGHTTP2_INCLUDE_DIRS})
 # From <build>/app/openvpn this resolves to <build>/app/proto_gen.
 include_directories(${CMAKE_CURRENT_BINARY_DIR}/../proto_gen)
 
-# Sources shared by both standalone binaries.
+# Sources shared by the custom-protocol VPN binaries.
 set(SHARED_SOURCES
   src/vpn_client.cpp
   src/vpn_server.cpp
@@ -30,6 +30,18 @@ set(SHARED_SOURCES
   ../src/framework.cpp
   ../src/server_app.cpp
   ../src/client_app.cpp
+  ../src/gnmi_client.cpp
+  ../src/grpc_session.cpp
+  ../src/http2.cpp
+  ../src/lua_engine.cpp
+  ../src/mqtt_io.cpp
+)
+
+# Sources shared by the standard-openvpn wrapper binaries.
+set(OVPN_SHARED_SOURCES
+  src/openvpn_client.cpp
+  src/openvpn_server.cpp
+  ../src/framework.cpp
   ../src/gnmi_client.cpp
   ../src/grpc_session.cpp
   ../src/http2.cpp
@@ -58,7 +70,7 @@ target_link_libraries(vpn_server PRIVATE
 )
 
 # ---------------------------------------------------------------------------
-# vpn_client — VPN tunnel client with optional TLS and embedded gNMI server.
+# vpn_client — custom-protocol VPN tunnel client.
 # ---------------------------------------------------------------------------
 add_executable(vpn_client
   src/vpn_client_main.cpp
@@ -66,6 +78,50 @@ add_executable(vpn_client
 )
 target_include_directories(vpn_client PRIVATE ${CMAKE_CURRENT_BINARY_DIR}/../proto_gen)
 target_link_libraries(vpn_client PRIVATE
+  gnmi_proto
+  mosquitto
+  Threads::Threads
+  ssl
+  crypto
+  ${LIBEVENT_LIBRARIES}
+  ${LIBEVENT_OPENSSL_LIBRARIES}
+  ${NGHTTP2_LIBRARIES}
+  ${LUA_LIBRARIES}
+)
+
+# ---------------------------------------------------------------------------
+# openvpn_client — wraps the system openvpn binary as a VPN client.
+#   Detects tunnel-up from openvpn stdout, installs iptables DNAT for
+#   fwd_ports so gNMI/HTTPS/HTTP traffic at the VIP reaches local services.
+# ---------------------------------------------------------------------------
+add_executable(openvpn_client
+  src/openvpn_client_main.cpp
+  ${OVPN_SHARED_SOURCES}
+)
+target_include_directories(openvpn_client PRIVATE ${CMAKE_CURRENT_BINARY_DIR}/../proto_gen)
+target_link_libraries(openvpn_client PRIVATE
+  gnmi_proto
+  mosquitto
+  Threads::Threads
+  ssl
+  crypto
+  ${LIBEVENT_LIBRARIES}
+  ${LIBEVENT_OPENSSL_LIBRARIES}
+  ${NGHTTP2_LIBRARIES}
+  ${LUA_LIBRARIES}
+)
+
+# ---------------------------------------------------------------------------
+# openvpn_server — wraps the system openvpn binary as a VPN server.
+#   Monitors connected clients via the management interface and forwards
+#   gNMI requests from MQTT (fwd/<vip>) to each client's gNMI service.
+# ---------------------------------------------------------------------------
+add_executable(openvpn_server
+  src/openvpn_server_main.cpp
+  ${OVPN_SHARED_SOURCES}
+)
+target_include_directories(openvpn_server PRIVATE ${CMAKE_CURRENT_BINARY_DIR}/../proto_gen)
+target_link_libraries(openvpn_server PRIVATE
   gnmi_proto
   mosquitto
   Threads::Threads
