@@ -212,6 +212,13 @@ void openvpn_client::parse_line(const std::string &line) {
     if (looks_like_ipv4(vip)) { m_assigned_ip = vip; goto vip_found; }
   }
 
+  // Kernel net API (OpenVPN 2.5+ on Linux):
+  //   "net_addr_ptp_v4_add: 10.8.0.6 peer 10.8.0.5 dev tun0"
+  if (m_assigned_ip.empty() && line.find("net_addr_ptp_v4_add:") != std::string::npos) {
+    const auto vip = token_after(line, "net_addr_ptp_v4_add: ");
+    if (looks_like_ipv4(vip)) { m_assigned_ip = vip; goto vip_found; }
+  }
+
   return;
 
 vip_found:
