@@ -223,7 +223,7 @@ via the `vpn-client` socat proxy.
 |-|-|
 | **Binary** | `/app/cli_app` |
 | **IP** | `172.20.0.18` |
-| **Profile** | `mqtt`, `openvpn` |
+| **Profile** | `openvpn` |
 | **Depends on** | `mosquitto` healthy, `gnmi-client-svc` started |
 
 Interactive readline REPL (`Marvel>` prompt).  Connects to the MQTT broker using
@@ -427,7 +427,7 @@ cli_app  →  cli/<vip>  →  gnmi-client-svc  →  fwd/<vip>
 | `registration-tls` | + `registration-svc` (same service, both ports) |
 | `telemetry` | + `telemetry-svc` (plain 58989 + TLS 58993) |
 | `telemetry-tls` | + `telemetry-svc` (same service, both ports) |
-| `mqtt` | + `mosquitto`, `gnmi-server-svc`, `gnmi-client-svc`, `cli`, `registration-svc`, `telemetry-svc`, `vpn-server` (with MQTT args via overlay) |
+| `mqtt` | + `mosquitto`, `gnmi-server-svc`, `gnmi-client-svc`, `registration-svc`, `telemetry-svc`, `vpn-server` (with MQTT args via overlay) |
 | `mqtt-tls` | + same services as `mqtt`; each service already handles TLS on its second port |
 | `openvpn` | + `mosquitto`, `gnmi-server-svc`, `gnmi-client-svc`, `cli`, `openvpn-server` (with MQTT), `openvpn-client` |
 

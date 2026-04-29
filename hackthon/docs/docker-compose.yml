@@ -457,7 +457,6 @@ services:
       gnmi-client-svc:
         condition: service_started
     profiles:
-      - mqtt
       - openvpn
     restart: "no"
 
