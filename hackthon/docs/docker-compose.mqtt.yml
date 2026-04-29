@@ -14,8 +14,7 @@
 services:
   vpn-server:
     command:
-      - /app/app
-      - --mode=server
+      - /app/vpn_server
       - --server-ip=10.8.0.1
       - --pool-start=10.8.0.2
       - --pool-end=10.8.0.254

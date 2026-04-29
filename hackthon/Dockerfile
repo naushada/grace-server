@@ -85,6 +85,8 @@ USER edge
 
 COPY --from=build --chown=edge:cordoba /src/build/app/app /app/app
 COPY --from=build --chown=edge:cordoba /src/build/app/cli/cli_app /app/cli_app
+COPY --from=build --chown=edge:cordoba /src/build/app/openvpn/vpn_server /app/vpn_server
+COPY --from=build --chown=edge:cordoba /src/build/app/openvpn/vpn_client /app/vpn_client
 
 # fs_app in readline.cpp / fs_app.cpp watches /app/command for .lua command
 # definitions. Ship the sample StartDownlinkConnectionsTestRequest.lua so the
@@ -103,20 +105,28 @@ COPY --from=build --chown=edge:cordoba /src/app/openvpn/command/ /app/command/
 # These are intentionally self-signed test credentials — do NOT use in production.
 COPY --chown=edge:cordoba certs/ /app/certs/
 
-# Default: server mode (plain TCP).
+# Standalone VPN binaries (preferred over /app/app --mode=server/client):
 #
-# TLS server:
-#   docker run --cap-add NET_ADMIN --device /dev/net/tun marvel:release \
-#     /app/app --mode=server --tls=true \
-#             --cert=/app/certs/server.pem --key=/app/certs/server.key \
-#             --ca=/app/certs/ca.pem
+#   Plain server:
+#     docker run --cap-add NET_ADMIN --device /dev/net/tun marvel:release \
+#       /app/vpn_server
 #
-# TLS client:
-#   docker run --cap-add NET_ADMIN --device /dev/net/tun marvel:release \
-#     /app/app --mode=client --server=<host> \
-#             --tls=true \
-#             --cert=/app/certs/client.pem --key=/app/certs/client.key \
-#             --ca=/app/certs/ca.pem \
-#             --status=/run/vpn_status.lua
+#   TLS server:
+#     docker run --cap-add NET_ADMIN --device /dev/net/tun marvel:release \
+#       /app/vpn_server --tls=true \
+#                       --cert=/app/certs/server.pem \
+#                       --key=/app/certs/server.key \
+#                       --ca=/app/certs/ca.pem
+#
+#   Plain client:
+#     docker run --cap-add NET_ADMIN --device /dev/net/tun marvel:release \
+#       /app/vpn_client --server=<host>
+#
+#   TLS client:
+#     docker run --cap-add NET_ADMIN --device /dev/net/tun marvel:release \
+#       /app/vpn_client --server=<host> --tls=true \
+#                       --cert=/app/certs/client.pem \
+#                       --key=/app/certs/client.key \
+#                       --ca=/app/certs/ca.pem
 
-CMD ["/app/app"]
+CMD ["/app/vpn_server"]

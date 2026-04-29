@@ -9,3 +9,4 @@ enable_testing()
 
 add_subdirectory(app)
 add_subdirectory(app/cli)
+add_subdirectory(app/openvpn)

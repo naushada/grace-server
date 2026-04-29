@@ -46,8 +46,7 @@ services:
     image: marvel:release
     <<: *tun-caps
     command:
-      - /app/app
-      - --mode=server
+      - /app/vpn_server
       - --server-ip=10.8.0.1
       - --pool-start=10.8.0.2
       - --pool-end=10.8.0.254
@@ -90,10 +89,9 @@ services:
     entrypoint: ["/bin/bash", "-c"]
     command:
       - |
-        /app/app --mode=client \
-                 --server=vpn-server \
-                 --port=1194 \
-                 --status=/run/vpn_status.lua &
+        /app/vpn_client --server=vpn-server \
+                        --port=1194 \
+                        --status=/run/vpn_status.lua &
         APP_PID=$$!
         until ip link show tun0 2>/dev/null | grep -q UP; do sleep 1; done
         VIP=$$(grep 'service_ip' /run/vpn_status.lua | grep -oE '[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+')
@@ -119,8 +117,7 @@ services:
     image: marvel:release
     <<: *tun-caps
     command:
-      - /app/app
-      - --mode=server
+      - /app/vpn_server
       - --server-ip=10.9.0.1
       - --pool-start=10.9.0.2
       - --pool-end=10.9.0.254
@@ -152,8 +149,7 @@ services:
     image: marvel:release
     <<: *tun-caps
     command:
-      - /app/app
-      - --mode=client
+      - /app/vpn_client
       - --server=vpn-server-tls
       - --port=1194
       - --status=/run/vpn_status.lua
@@ -294,8 +290,7 @@ services:
     image: marvel:release
     <<: *tun-caps
     command:
-      - /app/app
-      - --mode=client
+      - /app/vpn_client
       - --server=vpn-server
       - --port=1194
       - --status=/run/vpn_status.lua
@@ -319,8 +314,7 @@ services:
     image: marvel:release
     <<: *tun-caps
     command:
-      - /app/app
-      - --mode=client
+      - /app/vpn_client
       - --server=vpn-server-tls
       - --port=1194
       - --status=/run/vpn_status.lua
