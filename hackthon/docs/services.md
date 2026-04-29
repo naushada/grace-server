@@ -28,6 +28,7 @@ vpn-net  172.20.0.0/24
 │  gnmi-client-tls       172.20.0.10                       │             │
 │  mosquitto             172.20.0.11                       │             │
 │  gnmi-client-svc       172.20.0.12   (MQTT relay)       │             │
+│  cli                   172.20.0.18   (interactive REPL)  │             │
 │  registration-svc      172.20.0.13   (58988 plain, 58992 TLS)          │
 │  telemetry-svc         172.20.0.14   (58989 plain, 58993 TLS)          │
 │  openvpn-server        172.20.0.15   (system openvpn, port 11194)      │
@@ -216,14 +217,51 @@ via the `vpn-client` socat proxy.
 
 ---
 
+### `cli`
+
+| | |
+|-|-|
+| **Binary** | `/app/cli_app` |
+| **IP** | `172.20.0.18` |
+| **Profile** | `mqtt`, `openvpn` |
+| **Depends on** | `mosquitto` healthy, `gnmi-client-svc` started |
+
+Interactive readline REPL (`Marvel>` prompt).  Connects to the MQTT broker using
+the `MQTT_HOST` / `MQTT_PORT` environment variables (set automatically by Compose).
+
+Available commands inside the REPL:
+
+| Command | gNMI RPC | MQTT topic |
+|---------|----------|------------|
+| `gnmi_get <target-vip> <path>` | `Get` | `cli/<vip>` |
+| `gnmi_update <target-vip> <path> <val>` | `Set (Update)` | `cli/<vip>` |
+| `gnmi_replace <target-vip> <path> <val>` | `Set (Replace)` | `cli/<vip>` |
+| `gnmi_delete <target-vip> <path>` | `Set (Delete)` | `cli/<vip>` |
+
+Responses arrive on `cli_resp/<vip>` via `gnmi-client-svc`.  The container has
+`stdin_open: true` and `tty: true` so you can attach to it interactively:
+
+```bash
+# After the stack is running:
+docker compose -f docs/docker-compose.yml --profile openvpn attach cli
+
+# Detach without stopping the container:
+Ctrl-P  Ctrl-Q
+```
+
+`restart: "no"` — the container is not restarted automatically; re-attach or
+`docker compose ... start cli` to bring it back after detach or exit.
+
+---
+
 ### `gnmi-client-svc`
 
 | | |
 |-|-|
 | **Mode** | `--mode=gnmi-mqtt-client` |
 | **IP** | `172.20.0.12` |
-| **Profile** | `mqtt` |
-| **Depends on** | `mosquitto` healthy, `vpn-server` healthy, `vpn-client` started |
+| **Profile** | `mqtt`, `openvpn` |
+| **Depends on** | `mosquitto` healthy |
 
 The MQTT relay.  Subscribes to `cli/#` and `resp/#` and re-publishes:
 
@@ -368,6 +406,7 @@ cli_app  →  cli/<vip>  →  gnmi-client-svc  →  fwd/<vip>
 | `gnmi-client-tls` | 172.20.0.10 | — | — | — |
 | `mosquitto` | 172.20.0.11 | 1883 | 1883 | pub/sub probe |
 | `gnmi-client-svc` | 172.20.0.12 | — | — | — |
+| `cli` | 172.20.0.18 | — | — | — |
 | `registration-svc` | 172.20.0.13 | 58988 (plain), 58992 (TLS) | 58988, 58992 | `:E66C` + `:E670` |
 | `telemetry-svc` | 172.20.0.14 | 58989 (plain), 58993 (TLS) | 58991, 58993 | `:E66D` + `:E671` |
 | `openvpn-server` | 172.20.0.15 | 1194 (VPN), 7505 (mgmt) | 11194 | `:1D51` |
@@ -388,9 +427,9 @@ cli_app  →  cli/<vip>  →  gnmi-client-svc  →  fwd/<vip>
 | `registration-tls` | + `registration-svc` (same service, both ports) |
 | `telemetry` | + `telemetry-svc` (plain 58989 + TLS 58993) |
 | `telemetry-tls` | + `telemetry-svc` (same service, both ports) |
-| `mqtt` | + `mosquitto`, `gnmi-server-svc`, `gnmi-client-svc`, `registration-svc`, `telemetry-svc`, `vpn-server` (with MQTT args via overlay) |
+| `mqtt` | + `mosquitto`, `gnmi-server-svc`, `gnmi-client-svc`, `cli`, `registration-svc`, `telemetry-svc`, `vpn-server` (with MQTT args via overlay) |
 | `mqtt-tls` | + same services as `mqtt`; each service already handles TLS on its second port |
-| `openvpn` | + `openvpn-server` (with MQTT), `openvpn-client`, `mosquitto`, `gnmi-server-svc`, `gnmi-client-svc` |
+| `openvpn` | + `mosquitto`, `gnmi-server-svc`, `gnmi-client-svc`, `cli`, `openvpn-server` (with MQTT), `openvpn-client` |
 
 ---
 

@@ -429,8 +429,40 @@ services:
       - openvpn
     restart: unless-stopped
 
+  # ─────────────────────────────────────────────────────────────────────────
+  # cli  Profile: mqtt, openvpn
+  #   Interactive readline REPL (Marvel> prompt).
+  #   Connects to the MQTT broker via MQTT_HOST / MQTT_PORT env vars.
+  #   Publishes gNMI requests on "cli/<target-vip>" and receives responses
+  #   on "cli_resp/<target-vip>" via gnmi-client-svc.
+  #
+  #   Attach after the stack is up:
+  #     docker compose -f docs/docker-compose.yml --profile openvpn attach cli
+  #   Detach without stopping: Ctrl-P Ctrl-Q
+  # ─────────────────────────────────────────────────────────────────────────
+  cli:
+    image: marvel:release
+    entrypoint: /app/cli_app
+    stdin_open: true
+    tty: true
+    environment:
+      MQTT_HOST: mosquitto
+      MQTT_PORT: "1883"
+    networks:
+      vpn-net:
+        ipv4_address: 172.20.0.18
+    depends_on:
+      mosquitto:
+        condition: service_healthy
+      gnmi-client-svc:
+        condition: service_started
+    profiles:
+      - mqtt
+      - openvpn
+    restart: "no"
+
   # ═════════════════════════════════════════════════════════════════════════
-  # Standard OpenVPN wrapper services  (profile: openvpn, openvpn-mqtt)
+  # Standard OpenVPN wrapper services  (profile: openvpn)
   #
   # These use the system openvpn binary (installed via the openvpn package).
   # openvpn_server monitors connected clients via the management interface
