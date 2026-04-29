@@ -55,7 +55,7 @@ app-net  172.21.0.0/24                                        │
 | **Mode** | `--mode=server` |
 | **IP** | `172.20.0.2` |
 | **Ports (host→container)** | `1194:1194` (VPN tunnel), `58989:58989` (gNMI push) |
-| **Profile** | _(no profile — always started)_ |
+| **Profile** | `vpn` |
 | **Healthcheck** | `/proc/net/tcp` contains `:04AA` (port 1194) |
 
 Opens a kernel TUN interface (`tun0`, `10.8.0.1/24`) and accepts VPN clients on
@@ -74,7 +74,7 @@ the tunnel.  See [gnmi-mqtt-flow.md](gnmi-mqtt-flow.md) for the full flow.
 |-|-|
 | **Mode** | `--mode=client` |
 | **IP** | `172.20.0.3` (vpn-net), `172.21.0.3` (app-net) |
-| **Profile** | _(no profile — always started)_ |
+| **Profile** | `vpn` |
 | **Depends on** | `vpn-server` healthy |
 
 Connects to `vpn-server:1194`, receives a virtual IP (e.g. `10.8.0.3/24`),
@@ -419,7 +419,7 @@ cli_app  →  cli/<vip>  →  gnmi-client-svc  →  fwd/<vip>
 
 | Profile | Services started |
 |---------|-----------------|
-| _(none)_ | `vpn-server`, `vpn-client` |
+| `vpn` | `vpn-server`, `vpn-client` |
 | `tls` | + `vpn-server-tls`, `vpn-client-tls` |
 | `gnmi` | + `gnmi-server`, `gnmi-client` |
 | `gnmi-tls` | + `gnmi-server-tls`, `gnmi-client-tls` |

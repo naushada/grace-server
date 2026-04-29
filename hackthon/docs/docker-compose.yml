@@ -63,6 +63,8 @@ services:
       timeout: 2s
       retries: 15
       start_period: 3s
+    profiles:
+      - vpn
     restart: unless-stopped
 
   # ─────────────────────────────────────────────────────────────────────────
@@ -99,6 +101,8 @@ services:
     depends_on:
       vpn-server:
         condition: service_healthy
+    profiles:
+      - vpn
     restart: unless-stopped
 
   # ─────────────────────────────────────────────────────────────────────────
