@@ -276,13 +276,15 @@ on `app-net`.
 | **Binary** | `/app/openvpn_server` |
 | **IP** | `172.20.0.15` |
 | **Ports (host→container)** | `11194:1194` (OpenVPN TCP tunnel) |
-| **Profile** | `openvpn`, `openvpn-mqtt` |
+| **Profile** | `openvpn` |
+| **Depends on** | `mosquitto` healthy |
 | **Healthcheck** | `/proc/net/tcp` contains `:1D51` (management port 7505) |
 
 Spawns `openvpn --server --proto tcp-server --port 1194 --management 127.0.0.1 7505`.
 The management interface port (7505) is used as the healthcheck signal — it opens
 only after openvpn has finished initialising, which is more reliable than checking
-the VPN port itself.
+the VPN port itself.  MQTT forwarding is always enabled: each connected client gets
+a per-VIP subscriber on `fwd/<vip>` and responses are published on `resp/<vip>`.
 
 Key flags:
 
@@ -303,7 +305,7 @@ Key flags:
 |-|-|
 | **Binary** | `/app/openvpn_client` |
 | **IP** | `172.20.0.16` (vpn-net), `172.21.0.6` (app-net) |
-| **Profile** | `openvpn`, `openvpn-mqtt` |
+| **Profile** | `openvpn` |
 | **Depends on** | `openvpn-server` healthy |
 
 Spawns `openvpn --client --proto tcp-client --remote <server> <port>`.  Reads the
@@ -332,29 +334,12 @@ Key flags:
 
 ---
 
-### `openvpn-server-mqtt`
-
-| | |
-|-|-|
-| **Binary** | `/app/openvpn_server` |
-| **IP** | `172.20.0.17` |
-| **Ports (host→container)** | `11195:1194` |
-| **Profile** | `openvpn-mqtt` |
-| **Depends on** | `mosquitto` healthy |
-
-Same as `openvpn-server` but started with `--mqtt-host=mosquitto`.  When a client
-connects, `openvpn_server` creates a dedicated `mqtt_io` subscriber on
-`fwd/<client-vip>`.  Incoming MQTT payloads (format: `rpc_path '\0' proto_bytes`)
-are forwarded to the client's gNMI service at `<vip>:58989` via
-`gnmi_client::push_async`.  Responses are published on `resp/<client-vip>` for
-`gnmi-client-svc` to relay back to the CLI.
-
 The full gNMI-over-MQTT flow using the standard OpenVPN backend:
 
 ```
 cli_app  →  cli/<vip>  →  gnmi-client-svc  →  fwd/<vip>
                                                     ↓
-                                           openvpn-server-mqtt
+                                           openvpn-server
                                                     ↓
                                      gnmi_client::push_async(<vip>:58989)
                                                     ↓
@@ -387,7 +372,6 @@ cli_app  →  cli/<vip>  →  gnmi-client-svc  →  fwd/<vip>
 | `telemetry-svc` | 172.20.0.14 | 58989 (plain), 58993 (TLS) | 58991, 58993 | `:E66D` + `:E671` |
 | `openvpn-server` | 172.20.0.15 | 1194 (VPN), 7505 (mgmt) | 11194 | `:1D51` |
 | `openvpn-client` | 172.20.0.16 / 172.21.0.6 | — | — | — |
-| `openvpn-server-mqtt` | 172.20.0.17 | 1194 (VPN), 7505 (mgmt) | 11195 | `:1D51` |
 | `gnmi-server-svc` | 172.21.0.5 | 58989 | — | — |
 
 ---
@@ -406,8 +390,7 @@ cli_app  →  cli/<vip>  →  gnmi-client-svc  →  fwd/<vip>
 | `telemetry-tls` | + `telemetry-svc` (same service, both ports) |
 | `mqtt` | + `mosquitto`, `gnmi-server-svc`, `gnmi-client-svc`, `registration-svc`, `telemetry-svc`, `vpn-server` (with MQTT args via overlay) |
 | `mqtt-tls` | + same services as `mqtt`; each service already handles TLS on its second port |
-| `openvpn` | + `openvpn-server`, `openvpn-client` (standard openvpn binary, no MQTT) |
-| `openvpn-mqtt` | + `openvpn-server`, `openvpn-client`, `openvpn-server-mqtt`, `mosquitto`, `gnmi-server-svc`, `gnmi-client-svc` |
+| `openvpn` | + `openvpn-server` (with MQTT), `openvpn-client`, `mosquitto`, `gnmi-server-svc`, `gnmi-client-svc` |
 
 ---
 
@@ -458,34 +441,32 @@ with no additional services required.
 docker compose -f docs/docker-compose.yml --profile tls up
 ```
 
-### Standard OpenVPN pair (no MQTT, tunnel only)
+### Standard OpenVPN with MQTT gNMI forwarding (full stack)
 ```bash
 docker compose -f docs/docker-compose.yml --profile openvpn up
 ```
-Starts `openvpn-server` (system openvpn binary, port 11194 on host) and
-`openvpn-client` (connects to it, installs iptables DNAT for ports 80, 443,
-58989 → `gnmi-server-svc` on `app-net`).
-
-> **Note:** requires `NET_ADMIN` capability and `/dev/net/tun` — both are
-> set automatically by the Compose service definitions.
-
-### Standard OpenVPN with MQTT gNMI forwarding
-```bash
-docker compose -f docs/docker-compose.yml --profile openvpn-mqtt up
-```
-Starts the full standard-openvpn stack:
+Starts the complete standard-openvpn stack in one command:
 
 | Service | Role |
 |---------|------|
-| `openvpn-server-mqtt` | Wraps system openvpn server; per-client MQTT subscriber on `fwd/<vip>` |
-| `openvpn-client` | Wraps system openvpn client; iptables DNAT → `gnmi-server-svc` |
-| `mosquitto` | MQTT broker |
+| `mosquitto` | MQTT broker (172.20.0.11:1883) |
 | `gnmi-server-svc` | gNMI server on `app-net` (172.21.0.5:58989) |
 | `gnmi-client-svc` | MQTT relay: `cli/<vip>` → `fwd/<vip>`, `resp/<vip>` → `cli_resp/<vip>` |
+| `openvpn-server` | Wraps system openvpn server; per-client MQTT subscriber on `fwd/<vip>` |
+| `openvpn-client` | Wraps system openvpn client; iptables DNAT → `gnmi-server-svc` |
 
-CLI workflow is identical to the custom-protocol MQTT stack — `cli_app` publishes
-to `cli/<vip>`, `gnmi-client-svc` relays to `fwd/<vip>`, and `openvpn-server-mqtt`
-forwards the gNMI request through the tunnel to the client.
+Startup order enforced by `depends_on`:
+```
+mosquitto (healthy) → openvpn-server (healthy) → openvpn-client
+                    → gnmi-client-svc
+```
+
+CLI workflow: `cli_app` publishes to `cli/<vip>`, `gnmi-client-svc` relays to
+`fwd/<vip>`, `openvpn-server` forwards the gNMI request through the tunnel to
+`<vip>:58989`, and the response comes back on `resp/<vip>`.
+
+> **Note:** requires `NET_ADMIN` capability and `/dev/net/tun` — both are
+> set automatically by the Compose service definitions.
 
 ### Standard OpenVPN with TLS
 Add `--tls=true` and cert paths to `openvpn-server` / `openvpn-client` command in
