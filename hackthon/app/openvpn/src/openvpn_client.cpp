@@ -54,6 +54,8 @@ private:
 // Construction
 // ---------------------------------------------------------------------------
 
+openvpn_client::openvpn_client() = default;
+
 openvpn_client::openvpn_client(const std::string &server_host,
                                  uint16_t server_port,
                                  const tls_config &tls,

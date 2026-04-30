@@ -45,7 +45,7 @@ public:
 
 protected:
   // No-fork constructor for unit-test subclasses only.
-  openvpn_client() = default;
+  openvpn_client();
   // Parse one line from the openvpn log; updates m_assigned_ip / m_tunnel_up.
   void parse_line(const std::string &line);
 
