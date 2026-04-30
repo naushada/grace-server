@@ -2,6 +2,7 @@
 #define __openvpn_client_cpp__
 
 #include "openvpn_client.hpp"
+#include "openvpn_parse.hpp"
 #include "lua_engine.hpp"
 
 #include <algorithm>
@@ -149,23 +150,6 @@ openvpn_client::~openvpn_client() {
 // ---------------------------------------------------------------------------
 // Log parsing
 // ---------------------------------------------------------------------------
-
-// Extract the next whitespace-delimited token after 'key' in 'line'.
-static std::string token_after(const std::string &line, const std::string &key) {
-  const auto pos = line.find(key);
-  if (pos == std::string::npos) return {};
-  std::istringstream ss(line.substr(pos + key.size()));
-  std::string tok;
-  ss >> tok;
-  // Trim any trailing non-IPv4 characters (comma, colon, etc.)
-  const auto end = tok.find_first_not_of("0123456789.");
-  return tok.substr(0, end);
-}
-
-static bool looks_like_ipv4(const std::string &s) {
-  return s.size() >= 7 && s.find('.') != std::string::npos &&
-         s.find_first_not_of("0123456789.") == std::string::npos;
-}
 
 void openvpn_client::parse_line(const std::string &line) {
   std::cout << "[ovpn] " << line << '\n';

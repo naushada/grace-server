@@ -43,11 +43,16 @@ public:
   bool               tunnel_up()   const { return m_tunnel_up; }
   const std::string &assigned_ip() const { return m_assigned_ip; }
 
+protected:
+  // No-fork constructor for unit-test subclasses only.
+  openvpn_client() = default;
+  // Parse one line from the openvpn log; updates m_assigned_ip / m_tunnel_up.
+  void parse_line(const std::string &line);
+
 private:
   class proc_io;
   friend class proc_io;
 
-  void parse_line(const std::string &line);
   void setup_nat(const std::string &vip);
   void teardown_nat(const std::string &vip);
 
