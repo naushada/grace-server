@@ -33,7 +33,6 @@ vpn-net  172.20.0.0/24
 │  telemetry-svc         172.20.0.14   (58989 plain, 58993 TLS)          │
 │  openvpn-server        172.20.0.15   (system openvpn, port 11194)      │
 │  openvpn-client        172.20.0.16   (system openvpn)   ──┐            │
-│  openvpn-server-mqtt   172.20.0.17   (openvpn + MQTT)      │ also on   │
 └─────────────────────────────────────────────────────────────┼──────────┘
                                                               │
 app-net  172.21.0.0/24                                        │
@@ -229,14 +228,25 @@ via the `vpn-client` socat proxy.
 Interactive readline REPL (`Marvel>` prompt).  Connects to the MQTT broker using
 the `MQTT_HOST` / `MQTT_PORT` environment variables (set automatically by Compose).
 
+On startup the CLI subscribes to `clients/#` and receives any retained messages
+already present on the broker, so connected VIPs are immediately known even if
+clients connected before the CLI started.  Lifecycle events print inline at the
+prompt as they arrive:
+
+```
+[vpn] client connected: 10.8.0.6
+Marvel> _
+```
+
 Available commands inside the REPL:
 
-| Command | gNMI RPC | MQTT topic |
-|---------|----------|------------|
-| `gnmi_get <target-vip> <path>` | `Get` | `cli/<vip>` |
-| `gnmi_update <target-vip> <path> <val>` | `Set (Update)` | `cli/<vip>` |
-| `gnmi_replace <target-vip> <path> <val>` | `Set (Replace)` | `cli/<vip>` |
-| `gnmi_delete <target-vip> <path>` | `Set (Delete)` | `cli/<vip>` |
+| Command | Description | MQTT topic |
+|---------|-------------|------------|
+| `clients` | List VIPs currently connected through `openvpn-server` | _(local)_ |
+| `gnmi_get target=<vip> path=<yang-path>` | gNMI `Get` | `cli/<vip>` |
+| `gnmi_update target=<vip> path=<yang-path> value=<v>` | gNMI `Set (Update)` | `cli/<vip>` |
+| `gnmi_replace target=<vip> path=<yang-path> value=<v>` | gNMI `Set (Replace)` | `cli/<vip>` |
+| `gnmi_delete target=<vip> path=<yang-path>` | gNMI `Set (Delete)` | `cli/<vip>` |
 
 Responses arrive on `cli_resp/<vip>` via `gnmi-client-svc`.  The container has
 `stdin_open: true` and `tty: true` so you can attach to it interactively:
@@ -287,16 +297,20 @@ openvpn_server                          openvpn_client
 fork + execvp("openvpn --server …")    fork + execvp("openvpn --client …")
 stdout/stderr → pipe → proc_io          stdout/stderr → pipe → proc_io
                                           │
-management interface (TCP 7505)           │  parse log lines for:
-  ← status 2  (every 5 s)                │    "Initialization Sequence Completed"
-  → ROUTING TABLE rows                   │    "addr add local <vip>"
-  diff vs previous poll                  │    "ifconfig tun0 <vip>"
-    new VIP  → on_client_connect         │    "ifconfig_local=<vip>"
-    gone VIP → on_client_disconnect      │
-       │                                 │  tunnel up → iptables PREROUTING DNAT:
-       │  mqtt_io subscriber fwd/<vip>   │    <vip>:80    → fwd-host:80
-       │  gnmi_client::push_async        │    <vip>:443   → fwd-host:443
-       │  response → resp/<vip>          │    <vip>:58989 → fwd-host:58989
+management interface (TCP 7505)           │  parse log lines for VIP (in order):
+  ← status 2  (every 5 s)                │    1. PUSH_REPLY "ifconfig <vip> …"
+  → ROUTING TABLE rows                   │    2. "addr add … local <vip>"
+  diff vs previous poll                  │    3. "net_addr_ptp_v4_add: <vip>"
+    new VIP  → on_client_connect         │    4. "ifconfig tun0 <vip>"
+    gone VIP → on_client_disconnect      │    5. "ifconfig_local=<vip>"
+       │                                 │
+       │  MQTT: publish retained         │  "Initialization Sequence Completed"
+       │    clients/<vip> = "connected"  │    → tunnel_up = true
+       │  on disconnect: clear retained  │    → iptables PREROUTING DNAT:
+       │                                 │      <vip>:80    → fwd-host:80
+       │  mqtt_io subscriber fwd/<vip>   │      <vip>:443   → fwd-host:443
+       │  gnmi_client::push_async        │      <vip>:58989 → fwd-host:58989
+       │  response → resp/<vip>          │
 ```
 
 The `openvpn_server` binary never touches gNMI itself — it only monitors
@@ -541,6 +555,59 @@ docker compose -f docs/docker-compose.yml \
                -f docker-compose.override.yml \
                --profile openvpn up
 ```
+
+---
+
+## Unit Tests
+
+Tests live under `app/openvpn/test/` and `app/test/` and are built as part of
+the normal CMake build.  They run inside the Docker build container so no extra
+tooling is required on the host.
+
+### Building and running
+
+```bash
+# Full build then run all tests:
+docker build -t marvel:test --target builder .
+docker run --rm marvel:test bash -c "
+  cd /build && ctest --output-on-failure
+"
+
+# Or run a specific suite only:
+docker run --rm marvel:test bash -c "
+  cd /build/app/openvpn/test && ./openvpn_tests
+"
+```
+
+### Test suites
+
+#### `vpn_tests` — custom VPN protocol (`app/openvpn/test/vpn_test.cpp`)
+
+| Fixture | What it covers |
+|---------|---------------|
+| `IpPoolTest` | Assign / release / exhaust / large-pool scenarios |
+| `FrameTest` | `encode_frame` / `try_decode_frame` round-trips and edge cases |
+| `StatusLuaTest` | `lua_file::write_table` / `vpn_client::write_status_lua` output |
+| `TlsConfigTest` | `tls_config` disabled/enabled, bad paths, client-only mTLS |
+| `VpnClientTest` | Frame type constants; server/client constant agreement |
+
+#### `openvpn_tests` — standard OpenVPN wrapper (`app/openvpn/test/openvpn_test.cpp`)
+
+| Fixture | What it covers |
+|---------|---------------|
+| `ParseHelpersTest` | `token_after`, `looks_like_ipv4`, `parse_routing_row` (from `openvpn_parse.hpp`) |
+| `RoutingTableDiffTest` | Management-interface VIP-tracking algorithm: connect, disconnect, multi-client, header-row skip, log-line ignore, `GLOBAL STATS` terminator |
+| `OpenvpnClientVipTest` | VIP extraction across all 5 log-line formats: `PUSH_REPLY ifconfig`, `addr add local`, `net_addr_ptp_v4_add`, legacy `ifconfig tun`, `ifconfig_local=`; plus overwrite-guard |
+| `OpenvpnClientTunnelTest` | Tunnel-up flag sequencing (VIP before/after init-seq line) |
+| `MqttSubCfgTest` | `mqtt_sub_cfg` struct defaults and field assignment |
+
+### Key source files for testing
+
+| File | Purpose |
+|------|---------|
+| `app/openvpn/inc/openvpn_parse.hpp` | Inline helpers (`token_after`, `looks_like_ipv4`, `parse_routing_row`) and `routing_table_diff` struct extracted for direct testing |
+| `app/openvpn/inc/openvpn_client.hpp` | Protected default constructor + `parse_line` exposed to test subclass |
+| `app/openvpn/test/openvpn_test.cpp` | `TestableClient` subclass drives `parse_line` without forking |
 
 ---
 
