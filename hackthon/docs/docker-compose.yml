@@ -1,5 +1,3 @@
-version: "3.9"
-
 # Shared TUN capability required by both services.
 # TUNSETIFF requires CAP_NET_ADMIN in the effective capability set.
 # Docker grants it to the container but non-root processes do not inherit it
