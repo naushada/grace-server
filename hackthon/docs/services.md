@@ -558,6 +558,120 @@ docker compose -f docs/docker-compose.yml \
 
 ---
 
+## Running with Podman
+
+On hosts where Docker is not installed but **Podman** is, images built inside a
+dev container are stored in Podman's image store (the dev container talks to the
+host Podman daemon via its socket, which is bind-mounted as
+`/var/run/docker.sock` inside the container).
+
+Verify the image is present on the host:
+
+```bash
+podman images
+```
+
+### Single-service `podman run` commands
+
+**gNMI server (simplest — no TUN device needed)**
+
+```bash
+podman run --rm -p 58989:58989 marvel:release \
+  /app/app --mode=gnmi-server --gnmi-port=58989
+```
+
+**VPN server (requires `NET_ADMIN` + TUN device)**
+
+```bash
+podman run --rm \
+  --user root \
+  --cap-add NET_ADMIN \
+  --cap-add NET_RAW \
+  --device /dev/net/tun \
+  -p 1194:1194 \
+  -p 58989:58989 \
+  marvel:release \
+  /app/vpn_server \
+    --server-ip=10.8.0.1 \
+    --pool-start=10.8.0.2 \
+    --pool-end=10.8.0.254 \
+    --netmask=255.255.255.0
+```
+
+**OpenVPN server**
+
+```bash
+podman run --rm \
+  --user root \
+  --cap-add NET_ADMIN \
+  --cap-add NET_RAW \
+  --device /dev/net/tun \
+  -p 11194:1194 \
+  marvel:release \
+  /app/openvpn_server \
+    --port=1194 \
+    --mgmt-port=7505
+```
+
+**OpenVPN client**
+
+```bash
+podman run --rm \
+  --user root \
+  --cap-add NET_ADMIN \
+  --cap-add NET_RAW \
+  --device /dev/net/tun \
+  marvel:release \
+  /app/openvpn_client \
+    --server=<server-host> \
+    --port=1194 \
+    --fwd-host=<gnmi-server-ip> \
+    --fwd-ports=80,443,58989
+```
+
+### Full stack with `podman-compose`
+
+`podman-compose` is a drop-in replacement for `docker compose`.  Check if it is
+available:
+
+```bash
+podman-compose --version
+# or (built into newer Podman releases):
+podman compose version
+```
+
+The compose files work unchanged — substitute `podman-compose` for
+`docker compose` in any recipe above:
+
+```bash
+cd hackthon/docs
+
+# Full OpenVPN + MQTT + gNMI stack
+podman-compose -f docker-compose.yml --profile openvpn up
+
+# Full MQTT gNMI stack
+podman-compose -f docker-compose.yml \
+               -f docker-compose.mqtt.yml \
+               --profile mqtt up
+
+# gNMI only
+podman-compose -f docker-compose.yml --profile gnmi up
+
+# Minimal VPN pair
+podman-compose -f docker-compose.yml --profile vpn up
+```
+
+### Attaching to the interactive CLI container
+
+```bash
+podman attach <container-id-or-name>
+
+# Detach without stopping:
+Ctrl-P  Ctrl-Q
+```
+
+---
+
 ## Unit Tests
 
 Tests live under `app/openvpn/test/` and `app/test/` and are built as part of

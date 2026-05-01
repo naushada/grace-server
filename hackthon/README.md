@@ -86,15 +86,27 @@ app/
 ## Build
 
 ```bash
-docker build -t hackthon .
+docker build -t marvel:release hackthon/
 ```
 
 The Dockerfile compiles everything, runs all gtests (`ctest --output-on-failure`),
 and produces a minimal runtime image.  To skip tests:
 
 ```bash
-docker build --build-arg RUN_TESTS=OFF -t hackthon .
+docker build --build-arg RUN_TESTS=OFF -t marvel:release hackthon/
 ```
+
+On hosts where **Podman** is installed instead of Docker, use `podman build`
+(same flags):
+
+```bash
+podman build -t marvel:release hackthon/
+```
+
+Images built inside a dev container via `docker build` are stored in Podman's
+local image store on the host and can be listed with `podman images`.  See
+[docs/services.md](docs/services.md#running-with-podman) for `podman run` and
+`podman-compose` equivalents of every startup recipe.
 
 ### Dependencies (all resolved inside the container)
 
