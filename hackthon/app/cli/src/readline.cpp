@@ -2,6 +2,7 @@
 #define __readline_cpp__
 
 #include "readline.hpp"
+#include "help.hpp"
 #include "vpn_tunnel_client.hpp"
 
 #include <algorithm>
@@ -754,6 +755,11 @@ void process_command(const std::string &line) {
     return;
   }
 
+  if (cmd_name == "help") {
+    print_help(std::cout, fs_mon.lua_engine()->commands());
+    return;
+  }
+
   // Accept either a filename key OR a first-level command key inside any
   // loaded file.
   bool found =
@@ -879,6 +885,8 @@ void serialise_to_binary(const google::protobuf::Message &msg) {
 void run_cli() {
   char *input;
   const char *prompt = "Marvel> ";
+
+  std::cout << kCliBanner << '\n';
 
   while ((input = readline(prompt)) != nullptr) {
     if (*input) {

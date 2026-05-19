@@ -11,6 +11,7 @@
 #include <string>
 #include <unordered_map>
 #include <unordered_set>
+#include <vector>
 
 // openvpn_server — wraps the standard `openvpn --server` binary.
 //
@@ -39,6 +40,13 @@ public:
                  uint16_t            mgmt_port = 7505,
                  const mqtt_sub_cfg &mqtt      = {});
   ~openvpn_server();
+
+  // Returns the argv passed to the spawned `openvpn` process.  Exposed for
+  // gtest so the TLS / non-TLS branches and the CN-pinning flag can be
+  // asserted without actually forking openvpn.
+  static std::vector<std::string> build_args(uint16_t vpn_port,
+                                             const tls_config &tls,
+                                             uint16_t mgmt_port);
 
 private:
   class proc_io;

@@ -137,7 +137,10 @@ services:
     restart: unless-stopped
 
   # ─────────────────────────────────────────────────────────────────────────
-  # TLS client — certs baked into image; connects to vpn-server-tls.
+  # TLS client — connects to vpn-server-tls.  Client cert + key are NOT in
+  # the image (each device has its own identity); they are bind-mounted from
+  # the project certs/ directory.  Swap the host path to use a different
+  # device cert.
   # ─────────────────────────────────────────────────────────────────────────
   vpn-client-tls:
     image: marvel:release
@@ -151,6 +154,9 @@ services:
       - --cert=/app/certs/client.pem
       - --key=/app/certs/client.key
       - --ca=/app/certs/ca.pem
+    volumes:
+      - ../certs/client.pem:/app/certs/client.pem:ro
+      - ../certs/client.key:/app/certs/client.key:ro
     networks:
       vpn-net:
         ipv4_address: 172.20.0.6
@@ -319,6 +325,9 @@ services:
       - --gnmi-cert=/app/certs/client.pem
       - --gnmi-key=/app/certs/client.key
       - --gnmi-ca=/app/certs/ca.pem
+    volumes:
+      - ../certs/client.pem:/app/certs/client.pem:ro
+      - ../certs/client.key:/app/certs/client.key:ro
     networks:
       vpn-net:
         ipv4_address: 172.20.0.10

@@ -1,0 +1,57 @@
+# Override for the `openvpn` profile that enables mTLS on the OpenVPN
+# data channel.  The CA cert and the server identity (server.pem/.key) are
+# baked into the image; the client identity is NOT — it is bind-mounted at
+# runtime so each device can carry its own per-device cert.
+#
+# To onboard a new device, place that device's cert + key on the host and
+# point the openvpn-client `volumes:` at those paths.  The server pin
+#   --verify-x509-name vpn-client name
+# (compiled into openvpn_server) requires the subject CN to be exactly
+# "vpn-client" — change the pin or use --tls-verify if you need per-device
+# CNs.
+#
+# Usage:
+#   cd hackthon
+#   podman-compose -f docs/docker-compose.yml \
+#                  -f docs/docker-compose.openvpn-mtls.yml \
+#                  --profile openvpn up -d
+#
+#   # Attach to the interactive CLI:
+#   podman attach <project>_cli_1
+#
+#   # Inside the CLI:
+#   Marvel> clients
+#     10.8.0.6
+#   Marvel> gnmi_update target=10.8.0.6 path=/system/config/hostname value=foo role=ADMIN
+
+services:
+
+  openvpn-server:
+    command:
+      - /app/openvpn_server
+      - --port=1194
+      - --mgmt-port=7505
+      - --mqtt-host=mosquitto
+      - --mqtt-port=1883
+      - --gnmi-port=58989
+      - --tls=true
+      - --cert=/app/certs/server.pem
+      - --key=/app/certs/server.key
+      - --ca=/app/certs/ca.pem
+
+  openvpn-client:
+    command:
+      - /app/openvpn_client
+      - --server=openvpn-server
+      - --port=1194
+      - --fwd-host=172.21.0.5
+      - --fwd-ports=80,443,58989
+      - --tls=true
+      - --cert=/app/certs/client.pem
+      - --key=/app/certs/client.key
+      - --ca=/app/certs/ca.pem
+    # Per-device cert: change these host paths to a different device folder
+    # to onboard a different device with this same image.
+    volumes:
+      - ../certs/client.pem:/app/certs/client.pem:ro
+      - ../certs/client.key:/app/certs/client.key:ro

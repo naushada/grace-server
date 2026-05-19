@@ -157,18 +157,10 @@ private:
 // Construction / destruction
 // ---------------------------------------------------------------------------
 
-openvpn_server::openvpn_server(uint16_t vpn_port,
-                                 const tls_config &tls,
-                                 uint16_t mgmt_port,
-                                 const mqtt_sub_cfg &mqtt)
-    : m_mgmt_port(mgmt_port), m_mqtt(mqtt) {
-#ifdef __linux__
-  int pipefd[2];
-  if (::pipe(pipefd) < 0) {
-    std::cerr << "[openvpn_server] pipe: " << strerror(errno) << '\n';
-    return;
-  }
-
+std::vector<std::string>
+openvpn_server::build_args(uint16_t vpn_port,
+                            const tls_config &tls,
+                            uint16_t mgmt_port) {
   std::vector<std::string> args_s = {
     "openvpn",
     "--mode", "server",
@@ -187,8 +179,10 @@ openvpn_server::openvpn_server(uint16_t vpn_port,
     if (!tls.ca_file.empty())   { args_s.push_back("--ca");   args_s.push_back(tls.ca_file); }
     if (!tls.cert_file.empty()) { args_s.push_back("--cert"); args_s.push_back(tls.cert_file); }
     if (!tls.key_file.empty())  { args_s.push_back("--key");  args_s.push_back(tls.key_file); }
+    // Modern OpenVPN (>=2.4) uses ECDH when --dh is "none", so a static
+    // DH parameter file is unnecessary.
     args_s.push_back("--dh");
-    args_s.push_back("/app/certs/dh.pem");
+    args_s.push_back("none");
   } else {
     // Control channel TLS still requires cert/key/ca — use baked-in test certs.
     // Data channel: --data-ciphers none + --auth none → completely unencrypted.
@@ -202,6 +196,30 @@ openvpn_server::openvpn_server(uint16_t vpn_port,
       "--auth",         "none",
     });
   }
+
+  // Pin the client identity: only accept a peer whose certificate subject CN
+  // is exactly "vpn-client". Without this any cert signed by the CA would be
+  // accepted.
+  args_s.push_back("--verify-x509-name");
+  args_s.push_back("vpn-client");
+  args_s.push_back("name");
+
+  return args_s;
+}
+
+openvpn_server::openvpn_server(uint16_t vpn_port,
+                                 const tls_config &tls,
+                                 uint16_t mgmt_port,
+                                 const mqtt_sub_cfg &mqtt)
+    : m_mgmt_port(mgmt_port), m_mqtt(mqtt) {
+#ifdef __linux__
+  int pipefd[2];
+  if (::pipe(pipefd) < 0) {
+    std::cerr << "[openvpn_server] pipe: " << strerror(errno) << '\n';
+    return;
+  }
+
+  std::vector<std::string> args_s = build_args(vpn_port, tls, mgmt_port);
 
   std::vector<const char *> argv;
   for (const auto &s : args_s) argv.push_back(s.c_str());

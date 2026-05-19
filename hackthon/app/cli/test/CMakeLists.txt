@@ -20,6 +20,7 @@ set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -std=c++20 -g -Wall -Wextra")
 # Production sources the tests exercise.
 set(CLI_SOURCES_UNDER_TEST
   ${CMAKE_CURRENT_SOURCE_DIR}/../src/completion_helpers.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/../src/help.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/../../src/lua_engine.cpp
 )
 

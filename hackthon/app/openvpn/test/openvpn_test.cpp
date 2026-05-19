@@ -5,9 +5,12 @@
 // OpenvpnClientVipTest — VIP extraction across all log-line formats (client)
 // OpenvpnClientTunnelTest — tunnel-up detection and full sequence
 // MqttSubCfgTest      — mqtt_sub_cfg struct defaults and assignment
+// OpenvpnServerArgsTest — argv composed for the spawned openvpn binary
 
 #include "openvpn_client.hpp"
 #include "openvpn_parse.hpp"
+#include "openvpn_server.hpp"
+#include "tls_config.hpp"
 #include "vpn_types.hpp"
 
 #include <gtest/gtest.h>
@@ -333,4 +336,87 @@ TEST_F(MqttSubCfgTest, EnabledDisabledToggle) {
   EXPECT_TRUE(cfg.enabled);
   cfg.enabled = false;
   EXPECT_FALSE(cfg.enabled);
+}
+
+// ==========================================================================
+// OpenvpnServerArgsTest — verifies the argv we hand to the openvpn binary
+// includes the client-CN pin and the right cert/DH wiring per TLS mode.
+// ==========================================================================
+
+namespace {
+// Returns the value that follows `flag` in args, or empty string if absent.
+std::string value_after(const std::vector<std::string> &args,
+                         const std::string &flag) {
+  for (size_t i = 0; i + 1 < args.size(); ++i)
+    if (args[i] == flag) return args[i + 1];
+  return {};
+}
+// True iff the three-token sequence appears consecutively in args.
+bool contains_triple(const std::vector<std::string> &args,
+                      const std::string &a,
+                      const std::string &b,
+                      const std::string &c) {
+  for (size_t i = 0; i + 2 < args.size(); ++i)
+    if (args[i] == a && args[i + 1] == b && args[i + 2] == c) return true;
+  return false;
+}
+} // namespace
+
+class OpenvpnServerArgsTest : public ::testing::Test {};
+
+TEST_F(OpenvpnServerArgsTest, CnPinPresentWhenTlsOff) {
+  tls_config tls; // disabled
+  auto args = openvpn_server::build_args(1194, tls, 7505);
+  EXPECT_TRUE(contains_triple(args, "--verify-x509-name", "vpn-client", "name"))
+      << "client CN pin must apply even in non-TLS branch";
+}
+
+TEST_F(OpenvpnServerArgsTest, CnPinPresentWhenTlsOn) {
+  tls_config tls;
+  tls.enabled   = true;
+  tls.ca_file   = "/app/certs/ca.pem";
+  tls.cert_file = "/app/certs/server.pem";
+  tls.key_file  = "/app/certs/server.key";
+  auto args = openvpn_server::build_args(1194, tls, 7505);
+  EXPECT_TRUE(contains_triple(args, "--verify-x509-name", "vpn-client", "name"));
+}
+
+TEST_F(OpenvpnServerArgsTest, TlsBranchUsesDhNone) {
+  tls_config tls;
+  tls.enabled   = true;
+  tls.ca_file   = "/app/certs/ca.pem";
+  tls.cert_file = "/app/certs/server.pem";
+  tls.key_file  = "/app/certs/server.key";
+  auto args = openvpn_server::build_args(1194, tls, 7505);
+  EXPECT_EQ(value_after(args, "--dh"), "none")
+      << "TLS branch must use ECDH (--dh none), not a static dh.pem path";
+  EXPECT_EQ(value_after(args, "--ca"),   "/app/certs/ca.pem");
+  EXPECT_EQ(value_after(args, "--cert"), "/app/certs/server.pem");
+  EXPECT_EQ(value_after(args, "--key"),  "/app/certs/server.key");
+}
+
+TEST_F(OpenvpnServerArgsTest, NonTlsBranchFallsBackToBakedCertsAndNullCipher) {
+  tls_config tls; // disabled
+  auto args = openvpn_server::build_args(1194, tls, 7505);
+  EXPECT_EQ(value_after(args, "--ca"),           "/app/certs/ca.pem");
+  EXPECT_EQ(value_after(args, "--cert"),         "/app/certs/server.pem");
+  EXPECT_EQ(value_after(args, "--key"),          "/app/certs/server.key");
+  EXPECT_EQ(value_after(args, "--dh"),           "none");
+  EXPECT_EQ(value_after(args, "--data-ciphers"), "none");
+  EXPECT_EQ(value_after(args, "--auth"),         "none");
+}
+
+TEST_F(OpenvpnServerArgsTest, VpnAndMgmtPortsAreThreadedThrough) {
+  tls_config tls;
+  auto args = openvpn_server::build_args(2194, tls, 9505);
+  EXPECT_EQ(value_after(args, "--port"), "2194");
+  // --management uses two args: "127.0.0.1" then the port string.
+  for (size_t i = 0; i + 2 < args.size(); ++i) {
+    if (args[i] == "--management") {
+      EXPECT_EQ(args[i + 1], "127.0.0.1");
+      EXPECT_EQ(args[i + 2], "9505");
+      return;
+    }
+  }
+  FAIL() << "--management flag not found in argv";
 }

@@ -99,15 +99,20 @@ COPY --from=build --chown=edge:cordoba /src/build/app/openvpn/openvpn_client /ap
 COPY --from=build --chown=edge:cordoba /src/app/command/ /app/command/
 COPY --from=build --chown=edge:cordoba /src/app/openvpn/command/ /app/command/
 
-# Self-signed TLS certificates for openvpn_server / openvpn_client testing.
-#   /app/certs/ca.pem     — CA certificate  (used by both sides for peer verification)
+# Baked-in credentials (image-wide, NOT per-device):
+#   /app/certs/ca.pem     — CA certificate  (public; used by both sides for peer verification)
 #   /app/certs/server.pem — server certificate (CN=vpn-server, signed by CA)
 #   /app/certs/server.key — server private key
-#   /app/certs/client.pem — client certificate (CN=vpn-client, signed by CA)
-#   /app/certs/client.key — client private key
 #
-# These are intentionally self-signed test credentials — do NOT use in production.
-COPY --chown=edge:cordoba certs/ /app/certs/
+# Client certificate + key are deliberately NOT baked in — they identify a
+# specific device and must be mounted at runtime so each device can carry its
+# own unique credentials.  Compose services that act as openvpn / gnmi clients
+# bind-mount their cert and key into /app/certs/client.pem and /app/certs/client.key.
+#
+# These bundled creds are self-signed test material — do NOT use in production.
+COPY --chown=edge:cordoba certs/ca.pem     /app/certs/ca.pem
+COPY --chown=edge:cordoba certs/server.pem /app/certs/server.pem
+COPY --chown=edge:cordoba certs/server.key /app/certs/server.key
 
 # Custom-protocol VPN binaries (vpn_server / vpn_client):
 #
