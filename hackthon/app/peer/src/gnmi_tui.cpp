@@ -1,8 +1,10 @@
 #include "gnmi_tui.hpp"
 
 #include <ncurses.h>
-#include <unistd.h> // STDIN_FILENO
+#include <sys/ioctl.h> // ioctl, TIOCGWINSZ, struct winsize
+#include <unistd.h>    // STDIN_FILENO
 
+#include <csignal> // SIGWINCH
 #include <sstream>
 #include <string>
 
@@ -120,9 +122,18 @@ gnmi_tui::gnmi_tui(const endpoint &local, const endpoint &remote,
   println("Ready. Local server is up; commands go to " + remote.host + ":" +
           std::to_string(remote.port) + ".");
   draw_box();
+
+  // Watch for terminal resizes. Input is libevent-driven on stdin, and a
+  // SIGWINCH is not stdin data, so without this the resize would only be
+  // noticed on the next keystroke. Handle it as a libevent signal event.
+  m_winch_ev = evsignal_new(evt_base::instance().get(), SIGWINCH, on_winch,
+                            this);
+  if (m_winch_ev)
+    event_add(m_winch_ev, nullptr);
 }
 
 gnmi_tui::~gnmi_tui() {
+  if (m_winch_ev) event_free(m_winch_ev);
   if (m_head) delwin(m_head);
   if (m_out) delwin(m_out);
   if (m_box) delwin(m_box);
@@ -209,24 +220,87 @@ int gnmi_tui::attr_for(const std::string &s) const {
   return 0; // terminal default
 }
 
+// Draw one already-split transcript line into m_out (no buffering, no refresh).
+void gnmi_tui::render_line(const std::string &part) {
+  const int attr = attr_for(part);
+  if (attr)
+    wattron(m_out, attr);
+  waddstr(m_out, part.c_str());
+  if (attr)
+    wattroff(m_out, attr);
+  waddch(m_out, '\n');
+}
+
+// Buffer a transcript line so it can be replayed after a resize. Capped so a
+// long-running session (constant telemetry) does not grow without bound.
+void gnmi_tui::push_history(const std::string &part) {
+  m_lines.push_back(part);
+  if (m_lines.size() > 1000)
+    m_lines.pop_front();
+}
+
 void gnmi_tui::println(const std::string &line) {
   std::istringstream ss(line);
   std::string part;
   bool any = false;
   while (std::getline(ss, part, '\n')) {
-    const int attr = attr_for(part);
-    if (attr)
-      wattron(m_out, attr);
-    waddstr(m_out, part.c_str());
-    if (attr)
-      wattroff(m_out, attr);
-    waddch(m_out, '\n');
+    push_history(part);
+    render_line(part);
     any = true;
   }
-  if (!any)
-    waddch(m_out, '\n');
+  if (!any) {
+    push_history("");
+    render_line("");
+  }
   wrefresh(m_out);
   draw_box(); // keep the cursor in the input box
+}
+
+// Rebuild the window layout for the current terminal size (SIGWINCH). Windows
+// are recreated (simpler and always correct versus wresize/mvwin ordering) and
+// the buffered transcript is replayed so scrollback survives the resize.
+void gnmi_tui::relayout() {
+  int H = 0, W = 0;
+  getmaxyx(stdscr, H, W);
+  if (H < 5 || W < 4)
+    return; // too small to lay out; keep the current windows
+
+  const int out_h = (H - 5 < 1) ? 1 : H - 5;
+
+  if (m_head) { delwin(m_head); m_head = nullptr; }
+  if (m_out)  { delwin(m_out);  m_out = nullptr; }
+  if (m_box)  { delwin(m_box);  m_box = nullptr; }
+  if (m_hint) { delwin(m_hint); m_hint = nullptr; }
+
+  m_head = newwin(1, W, 0, 0);
+  m_out = newwin(out_h, W, 1, 0);
+  m_box = newwin(3, W, H - 4, 0);
+  m_hint = newwin(1, W, H - 1, 0);
+
+  scrollok(m_out, TRUE);
+  idlok(m_out, TRUE);
+  keypad(m_box, TRUE);
+  nodelay(m_box, TRUE);
+
+  clear();
+  refresh();
+  draw_chrome();
+  for (const auto &l : m_lines)
+    render_line(l);
+  wrefresh(m_out);
+  draw_box();
+}
+
+// libevent SIGWINCH callback: sync ncurses to the new terminal size, then
+// re-lay-out. Doing it here (rather than relying on ncurses' own KEY_RESIZE)
+// means resizes are handled immediately, not just on the next keystroke.
+void gnmi_tui::on_winch(int, short, void *arg) {
+  auto *self = static_cast<gnmi_tui *>(arg);
+  struct winsize ws;
+  if (ioctl(STDIN_FILENO, TIOCGWINSZ, &ws) == 0 && ws.ws_row > 0 &&
+      ws.ws_col > 0)
+    resize_term(ws.ws_row, ws.ws_col);
+  self->relayout();
 }
 
 // ---------------------------------------------------------------------------
@@ -254,6 +328,8 @@ std::int32_t gnmi_tui::handle_read(const std::int32_t & /*channel*/,
     } else if (ch == 4) { // Ctrl-D → quit
       event_base_loopbreak(evt_base::instance().get());
       return 0;
+    } else if (ch == KEY_RESIZE) { // resize delivered via input path
+      relayout();
     } else if (ch >= 32 && ch < 127) {
       m_line.push_back(static_cast<char>(ch));
       draw_box();

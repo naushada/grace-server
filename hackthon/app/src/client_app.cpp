@@ -218,9 +218,30 @@ void connected_client::register_gnmi_handlers() {
                     << msg_pb.size() << " bytes)\n";
           return;
         }
-        const std::string json = gnmi_util::subscribe_response_to_json(resp);
-        std::cout << "[PushSub] stream=" << sid << " " << json << "\n";
-        update_sink::instance().emit(json);
+
+        // sync_response marks the end of the initial state dump.
+        if (resp.response_case() == gnmi::SubscribeResponse::kSyncResponse) {
+          update_sink::instance().emit("── sync ──");
+          return;
+        }
+        if (resp.response_case() != gnmi::SubscribeResponse::kUpdate)
+          return;
+
+        // Emit one readable "path = value" per leaf (full path = prefix + path)
+        // instead of a single minified-JSON blob. Far easier to read/scroll/grep.
+        const gnmi::Notification &n = resp.update();
+        const std::string prefix = gnmi_util::path_to_string(n.prefix());
+        std::cout << "[PushSub] stream=" << sid << " " << prefix << " ("
+                  << n.update_size() << " updates, " << n.delete__size()
+                  << " deletes)\n";
+        for (const auto &u : n.update())
+          update_sink::instance().emit(prefix +
+                                       gnmi_util::path_to_string(u.path()) +
+                                       " = " +
+                                       gnmi_util::typed_value_to_json(u.val()));
+        for (int i = 0; i < n.delete__size(); ++i)
+          update_sink::instance().emit(
+              prefix + gnmi_util::path_to_string(n.delete_(i)) + " = (deleted)");
       });
 }
 
