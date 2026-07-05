@@ -101,6 +101,11 @@ grpc_session::grpc_session(raw_tx_t tx)
               on_request(sid, req);
             }),
       m_tx(std::move(tx)) {
+  // Deliver client-streaming request messages as they arrive (before
+  // END_STREAM), consuming them from the stream's buffer.
+  m_h2.set_request_stream_handler(
+      [this](int32_t sid, const std::string &path, std::string &body,
+             bool /*end_stream*/) { on_request_stream(sid, path, body); });
   // Send the server's initial SETTINGS frame.
   flush();
 }
@@ -117,6 +122,31 @@ void grpc_session::register_unary(const std::string &path,
 void grpc_session::register_server_stream(const std::string &path,
                                           stream_handler_t handler) {
   m_stream_handlers[path] = std::move(handler);
+}
+
+void grpc_session::register_client_stream(const std::string &path,
+                                          client_stream_handler_t handler) {
+  m_client_stream_handlers[path] = std::move(handler);
+}
+
+void grpc_session::on_request_stream(int32_t stream_id,
+                                     const std::string &path,
+                                     std::string &body) {
+  auto it = m_client_stream_handlers.find(path);
+  if (it == m_client_stream_handlers.end())
+    return; // not a client-streaming method — leave for END_STREAM dispatch
+
+  // Extract and dispatch every complete gRPC message currently buffered.
+  // decode_frame() removes each consumed frame from `body` (and gzip-inflates
+  // it), so the buffer stays bounded and any partial trailing frame is kept
+  // until the rest arrives.
+  while (body.size() >= 5) {
+    const size_t before = body.size();
+    std::string msg = decode_frame(body);
+    if (body.size() == before)
+      break; // incomplete frame — wait for more DATA
+    it->second(stream_id, msg);
+  }
 }
 
 void grpc_session::stream_send(int32_t stream_id,
@@ -161,6 +191,18 @@ void grpc_session::on_request(int32_t stream_id,
     // Not a gRPC request — return HTTP 415
     m_h2.submit_response(stream_id, 415, {}, "");
     flush();
+    return;
+  }
+
+  // Client-streaming methods: messages were already decoded and dispatched
+  // incrementally by on_request_stream() as DATA arrived. Reaching here means
+  // the client half-closed (END_STREAM); drain any final buffered messages,
+  // then close the call OK rather than falling through to UNIMPLEMENTED.
+  auto cit = m_client_stream_handlers.find(req.path);
+  if (cit != m_client_stream_handlers.end()) {
+    std::string leftover = req.body;
+    on_request_stream(stream_id, req.path, leftover);
+    send_unary_response(stream_id, 0, "");
     return;
   }
 

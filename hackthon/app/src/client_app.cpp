@@ -199,6 +199,25 @@ void connected_client::register_gnmi_handlers() {
                   << " req bytes) -> OK\n";
         return {0, ""};
       });
+
+  // ----- Tarana DialTcc / PushSubscriptionUpdates (client-streaming) --------
+  // After IsAlive the device opens this stream and pushes subscription
+  // telemetry messages continuously without ever sending END_STREAM. Each
+  // decoded (gzip-inflated) message is delivered here as it arrives. We surface
+  // it through update_sink so it shows up as a [remote] line (headless) or in
+  // the TUI's bottom pane.
+  //
+  // NOTE: without the tnmi.DialTcc .proto we cannot field-decode the payload,
+  // so we report the message size. Drop the proto into app/idl/, parse it here,
+  // and emit real telemetry paths/values via update_sink instead.
+  m_grpc->register_client_stream(
+      "/tnmi.DialTcc/PushSubscriptionUpdates",
+      [](std::int32_t sid, const std::string &msg_pb) {
+        std::cout << "[PushSub] stream=" << sid << " msg=" << msg_pb.size()
+                  << " bytes\n";
+        update_sink::instance().emit("PushSubscriptionUpdates: " +
+                                     std::to_string(msg_pb.size()) + " bytes");
+      });
 }
 
 // ---------------------------------------------------------------------------

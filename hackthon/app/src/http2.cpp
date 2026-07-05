@@ -290,19 +290,18 @@ int http2_session::on_frame_recv(nghttp2_session *, const nghttp2_frame *frame,
                                  void *user_data) {
   auto *self = static_cast<http2_session *>(user_data);
 
-  // Diagnostic: a DATA frame arrived without END_STREAM on a server-received
-  // request stream (req.path is set from the :path header). This is a
-  // client-streaming push (e.g. Tarana telemetry): the END_STREAM-gated
-  // dispatch below never fires for it, so the messages would otherwise be
-  // invisible. Log the method + buffered size so the RPC can be identified and
-  // a streaming handler added.
-  if (frame->hd.type == NGHTTP2_DATA &&
-      !(frame->hd.flags & NGHTTP2_FLAG_END_STREAM)) {
+  // Server-received request DATA: hand each frame to the request-stream handler
+  // so the gRPC layer can decode/dispatch client-streaming messages
+  // incrementally. A long-lived push stream (e.g. Tarana
+  // PushSubscriptionUpdates) never sends END_STREAM, so the END_STREAM-gated
+  // dispatch below would never fire and req.body would grow without bound.
+  if (frame->hd.type == NGHTTP2_DATA && self->m_on_request_stream) {
     auto sit = self->m_streams.find(frame->hd.stream_id);
-    if (sit != self->m_streams.end() && !sit->second.req.path.empty())
-      std::cerr << "[grpc] stream data on " << sit->second.req.path << " ("
-                << sit->second.req.body.size()
-                << " bytes buffered, no END_STREAM yet)\n";
+    if (sit != self->m_streams.end() && !sit->second.req.path.empty()) {
+      const bool end = frame->hd.flags & NGHTTP2_FLAG_END_STREAM;
+      self->m_on_request_stream(frame->hd.stream_id, sit->second.req.path,
+                                sit->second.req.body, end);
+    }
   }
 
   if (!(frame->hd.flags & NGHTTP2_FLAG_END_STREAM))
