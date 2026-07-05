@@ -45,6 +45,7 @@ private:
 
   gnmi_cmd m_cmd;
   std::string m_line;
+  bool m_color{false}; // true when the terminal supports colour
   struct _win_st *m_input_win{nullptr};
   struct _win_st *m_output_win{nullptr};
 };

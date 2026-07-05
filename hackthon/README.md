@@ -335,8 +335,10 @@ podman run --rm -it -p 58989:58989 \
 ```
 
 Type `gnmi set /a/b:5,/c/d:up`, `gnmi get /a/b`, `help`, or `quit` in the top
-pane; remote pushes appear in the bottom pane. Exit with `quit`/`exit`/Ctrl-D
-(these restore the terminal via `endwin()`).
+pane; remote pushes appear in the bottom pane. Lines are colour-coded on your
+terminal's own background (cyan = remote pushes, green = OK, amber = errors,
+dim = echoed commands). Exit with `quit`/`exit`/Ctrl-D (these restore the
+terminal via `endwin()`).
 
 ### Run — two peers (peer-to-peer)
 
