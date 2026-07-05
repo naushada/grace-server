@@ -18,6 +18,27 @@ static std::string trim(const std::string &s) {
   return s.substr(b, e - b + 1);
 }
 
+// Colour-pair ids (foreground on the default background). Cool palette:
+//   remote pushes = cyan, results = green, errors = amber, echoes = dim grey.
+enum { PAIR_REMOTE = 1, PAIR_OK = 2, PAIR_WARN = 3 };
+
+// Pick a display attribute for an output line from its leading tag.
+static int line_attr(const std::string &s) {
+  auto starts = [&](const char *p) { return s.rfind(p, 0) == 0; };
+  if (starts("[remote]"))
+    return COLOR_PAIR(PAIR_REMOTE);
+  if (starts("[set] OK") || starts("[get] OK"))
+    return COLOR_PAIR(PAIR_OK);
+  if (starts("Marvel> "))
+    return A_DIM;
+  if (s.find("error") != std::string::npos ||
+      s.find("denied") != std::string::npos ||
+      s.find("FAIL") != std::string::npos || starts("unknown command") ||
+      starts("usage") || starts("no valid") || starts("  skip"))
+    return COLOR_PAIR(PAIR_WARN);
+  return 0; // default terminal colour
+}
+
 // ---------------------------------------------------------------------------
 // Construction / teardown
 // ---------------------------------------------------------------------------
@@ -29,6 +50,17 @@ gnmi_tui::gnmi_tui(const endpoint &remote, const tls_config &tls)
   initscr();
   cbreak();
   noecho();
+
+  // Foreground colours on the terminal's own background (bg = -1), so lines are
+  // tinted without any background fill.
+  if (has_colors()) {
+    start_color();
+    use_default_colors();
+    init_pair(PAIR_REMOTE, COLOR_CYAN, -1);
+    init_pair(PAIR_OK, COLOR_GREEN, -1);
+    init_pair(PAIR_WARN, COLOR_YELLOW, -1);
+    m_color = true;
+  }
 
   int rows = 0, cols = 0;
   getmaxyx(stdscr, rows, cols);
@@ -76,7 +108,12 @@ void gnmi_tui::println(const std::string &line) {
   std::string part;
   bool any = false;
   while (std::getline(ss, part, '\n')) {
+    const int attr = m_color ? line_attr(part) : 0;
+    if (attr)
+      wattron(m_output_win, attr);
     waddstr(m_output_win, part.c_str());
+    if (attr)
+      wattroff(m_output_win, attr);
     waddch(m_output_win, '\n');
     any = true;
   }
