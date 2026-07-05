@@ -200,6 +200,78 @@ readline REPL
 
 ---
 
+## gnmi_peer — two-pane peer-to-peer gNMI shell
+
+The `gnmi_peer` binary is a config-driven, ncurses two-window terminal:
+
+```
++-----------------------------------------------+
+| Marvel> gnmi set /a/b:5,/c/d:up               |  <- top: command input
++-----------------------------------------------+
+| Marvel> gnmi set /a/b:5,/c/d:up               |
+| [set] OK, 2 result(s)                         |
+| [remote] UPDATE /x/y = 7                       |  <- bottom: live remote pushes
+| ...                                           |
++-----------------------------------------------+
+```
+
+* **Top window** issues `gnmi set` / `gnmi get` to the remote endpoint over
+  direct gRPC-over-HTTP/2 (`gnmi_client::push_async`).
+* **Bottom window** shows results plus every operation the remote peer pushes
+  into *our* local gNMI server (rendered via `update_sink` from the Set handler).
+
+It is peer-to-peer: run one `gnmi_peer` on each side. Each runs a local gNMI
+server (so the other side can push updates to it) and sends set/get to the
+other's server.
+
+### Configuration (`--config`, default `/app/command/endpoint.lua`)
+
+```lua
+return {
+  ["local"]  = { endpoint = { ip = "0.0.0.0",   port = 58989 } },
+  ["remote"] = { endpoint = { ip = "127.0.0.1", port = 58990 } },
+  -- FQDN form is also accepted for either endpoint:
+  --   ["remote"] = { endpoint = "peer.example.com:58990" },
+  tls = { enabled = false, cert = "", key = "", ca = "" },
+}
+```
+
+* `local.endpoint`  — where this process runs its own gNMI server.
+* `remote.endpoint` — where `gnmi set/get` are sent.
+* Each `endpoint` is either `{ ip = <string>, port = <number> }` **or** a single
+  `"host:port"` string. `local`/`remote` are Lua keywords, so they must be
+  written as the quoted keys `["local"]` / `["remote"]`.
+
+### Commands
+
+| Command | Effect |
+|---------|--------|
+| `gnmi set <xpath>:<value>[,<xpath>:<value>...]` | One `SetRequest` with one `update[]` per pair (role `ADMIN`) |
+| `gnmi get <xpath>[,<xpath>...]`                 | One `GetRequest` for the listed paths (role `VIEWER`) |
+| `help`                                          | Command help |
+| `quit` / `exit` (or Ctrl-D)                     | Leave |
+
+`xpath` uses `/`-separated YANG form, e.g.
+`/interfaces/interface[name=eth0]/config/mtu`. In each `xpath:value` pair the
+value is everything after the **first** `:` (so module-qualified segments like
+`module:container` are not supported in this shorthand).
+
+Component logs are redirected to a logfile (`--log`, default
+`/tmp/gnmi_peer.log`) so they don't corrupt the ncurses display.
+
+### Run
+
+```bash
+# Terminal A (also acts as remote for B):
+/app/gnmi_peer --config=/app/command/endpoint.lua
+
+# Two peers on one host — swap the ports in each config:
+#   A: local 58989 / remote 58990
+#   B: local 58990 / remote 58989
+```
+
+---
+
 ## Adding a New gRPC Handler
 
 Register a unary handler in `connected_client::register_gnmi_handlers()`
