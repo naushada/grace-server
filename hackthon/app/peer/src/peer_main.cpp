@@ -159,6 +159,10 @@ int main(int argc, const char *argv[]) {
   if (log_file) {
     std::cout.rdbuf(log_file.rdbuf());
     std::cerr.rdbuf(log_file.rdbuf());
+    // Flush after every insertion so the logfile is tail-able live (the file
+    // is otherwise block-buffered and lags while the TUI process runs).
+    std::cout << std::unitbuf;
+    std::cerr << std::unitbuf;
     std::freopen(log_path.c_str(), "a", stderr);
   }
 
