@@ -282,6 +282,46 @@ The MQTT relay.  Subscribes to `cli/#` and `resp/#` and re-publishes:
 
 ---
 
+### `gnmi_peer`
+
+| | |
+|-|-|
+| **Binary** | `/app/gnmi_peer` |
+| **Config** | `--config=<lua>` (default `/app/command/endpoint.lua`) |
+| **Ports** | listens on `local.endpoint`; connects to `remote.endpoint` |
+| **Transport** | direct gRPC-over-HTTP/2 (no MQTT/VPN) |
+
+Standalone, config-driven, **peer-to-peer** gNMI shell — not a Compose service by
+default, run it directly with `podman run` (see the recipe below). It is both a
+client and a server:
+
+* Runs a local gNMI server at `local.endpoint` so a remote peer can push `Set`
+  operations to it.
+* Sends `gnmi set <xpath>:<value>[,…]` / `gnmi get <xpath>[,…]` to
+  `remote.endpoint`.
+
+Two front-ends, chosen automatically (override with `--headless=true|false`):
+
+| Front-end | When | I/O |
+|-----------|------|-----|
+| ncurses two-pane TUI | interactive TTY (`-it`) | top pane input, bottom pane remote pushes |
+| headless line-mode | non-TTY (pipe / `-d`) | one command per stdin line; results + `[remote] …` to stdout |
+
+Config (`endpoint.lua`) — each endpoint is `{ ip=, port= }` **or** `"host:port"`;
+`local`/`remote` are Lua keywords so use the quoted keys:
+
+```lua
+return {
+  ["local"]  = { endpoint = { ip = "0.0.0.0",   port = 58989 } },
+  ["remote"] = { endpoint = "peerB:58990" },
+  tls = { enabled = false, cert = "", key = "", ca = "" },
+}
+```
+
+Smoke test: `app/peer/test/smoke_two_peer.sh` (see README → *gnmi_peer*).
+
+---
+
 ## Standard OpenVPN Wrapper Services
 
 These services wrap the **system `openvpn` binary** (installed via the `openvpn`
@@ -579,6 +619,20 @@ podman images
 podman run --rm -p 58989:58989 marvel:release \
   /app/app --mode=gnmi-server --gnmi-port=58989
 ```
+
+**gnmi_peer — interactive two-pane shell (needs a TTY)**
+
+```bash
+podman run --rm -it -p 58989:58989 \
+  -v "$PWD/hackthon/app/command/endpoint.lua:/app/command/endpoint.lua:ro" \
+  marvel:release \
+  /app/gnmi_peer --config=/app/command/endpoint.lua
+```
+
+Two peers on one host (each with its own `local`/`remote`-swapped config) share a
+user network so they resolve each other by name — see README → *gnmi_peer* for
+the full recipe, or run `hackthon/app/peer/test/smoke_two_peer.sh` for an
+automated end-to-end check.
 
 **VPN server (requires `NET_ADMIN` + TUN device)**
 
