@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 #
 # run-gnmi-peer.sh — deploy the grace-server gNMI peer to receive dial-out
-#                    telemetry from a Tarana device (radio/BN) on the LAN.
+#                    streaming telemetry from a device on the LAN.
 #
 # It generates an endpoint.lua and starts the gnmi_peer container DETACHED,
 # publishing the local gNMI port so the device can dial in and push updates.
@@ -25,7 +25,7 @@
 #   IMAGE        container image                 (default: gnmiserver:dev)
 #   CONTAINER    container name                  (default: gnmi_peer)
 #   LOCAL_PORT   port the peer listens on        (default: 58989)
-#   REMOTE_IP    the Tarana device's LAN IP      (REQUIRED)
+#   REMOTE_IP    the device's LAN IP             (REQUIRED)
 #   REMOTE_PORT  the device's gNMI/dial port     (default: 55555)
 #   CONFIG       generated endpoint.lua path     (default: ./endpoint.lua)
 #   TLS          true|false                      (default: false)
@@ -98,7 +98,7 @@ docker ps --filter "name=${CONTAINER}" \
   --format 'table {{.Names}}\t{{.Status}}\t{{.Ports}}'
 host_ip="$(hostname -I 2>/dev/null | awk '{print $1}')"
 echo "[run-gnmi-peer] device should dial:  ${host_ip:-<this-host-LAN-ip>}:${LOCAL_PORT}"
-echo "[run-gnmi-peer] watch for '[IsAlive] ... -> OK' then '[remote]' update lines."
+echo "[run-gnmi-peer] watch for '[remote]' update lines (telemetry arriving)."
 [ -n "$OUT" ] && echo "[run-gnmi-peer] saving updates to: $out_abs  (tail -f to watch)"
 
 if [ "$FOLLOW" = 1 ]; then
