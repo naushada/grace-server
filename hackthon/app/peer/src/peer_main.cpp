@@ -22,6 +22,7 @@
 #include "server_app.hpp"
 #include "update_sink.hpp"
 
+#include <clocale>
 #include <cstdio>
 #include <fstream>
 #include <iostream>
@@ -110,6 +111,10 @@ private:
 };
 
 int main(int argc, const char *argv[]) {
+  // Use the environment's locale so ncurses renders UTF-8 (box-drawing chars,
+  // arrows) correctly rather than mangling multibyte sequences.
+  std::setlocale(LC_ALL, "");
+
   const std::string config_path =
       get_flag(argc, argv, "config", "/app/command/endpoint.lua");
   const std::string log_path =
@@ -172,7 +177,7 @@ int main(int argc, const char *argv[]) {
             << " tls=" << (cfg.tls.enabled ? "ON" : "OFF") << "\n";
 
   server local_srv(cfg.local.host, cfg.local.port, cfg.tls);
-  gnmi_tui tui(cfg.remote, cfg.tls, cfg.colors);
+  gnmi_tui tui(cfg.local, cfg.remote, cfg.tls, cfg.colors);
   update_sink::instance().set(
       [&tui](const std::string &line) { tui.println("[remote] " + line); });
 

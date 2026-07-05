@@ -235,23 +235,27 @@ readline REPL
 
 ## gnmi_peer — two-pane peer-to-peer gNMI shell
 
-The `gnmi_peer` binary is a config-driven, ncurses two-window terminal:
+The `gnmi_peer` binary is a config-driven, Claude-style ncurses terminal:
 
 ```
-+-----------------------------------------------+
-| Marvel> gnmi set /a/b:5,/c/d:up               |  <- top: command input
-+-----------------------------------------------+
-| Marvel> gnmi set /a/b:5,/c/d:up               |
-| [set] OK, 2 result(s)                         |
-| [remote] UPDATE /x/y = 7                       |  <- bottom: live remote pushes
-| ...                                           |
-+-----------------------------------------------+
+ Marvel gNMI · local :58989 → 127.0.0.1:58990        <- dim header
+
+ ❯ gnmi set /a/b:5,/c/d:up                            <- scrolling transcript
+ [set] OK, 2 result(s)
+ [remote] UPDATE /x/y = 7                             (remote pushes, in cyan)
+ ...
+
+ ╭────────────────────────────────────────────╮      <- bordered input box
+ │ ❯ gnmi get /a/b                             │
+ ╰────────────────────────────────────────────╯
+   set · get · help · quit                            <- dim hint
 ```
 
-* **Top window** issues `gnmi set` / `gnmi get` to the remote endpoint over
-  direct gRPC-over-HTTP/2 (`gnmi_client::push_async`).
-* **Bottom window** shows results plus every operation the remote peer pushes
-  into *our* local gNMI server (rendered via `update_sink` from the Set handler).
+* The **input box** (bottom) issues `gnmi set` / `gnmi get` to the remote
+  endpoint over direct gRPC-over-HTTP/2 (`gnmi_client::push_async`).
+* The **transcript** shows results plus every operation the remote peer pushes
+  into *our* local gNMI server (via `update_sink` from the Set handler),
+  colour-coded on your terminal's own background (configurable — see below).
 
 It is peer-to-peer: run one `gnmi_peer` on each side. Each runs a local gNMI
 server (so the other side can push updates to it) and sends set/get to the

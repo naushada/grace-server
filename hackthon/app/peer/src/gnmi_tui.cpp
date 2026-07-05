@@ -62,16 +62,27 @@ static int resolve_attr(std::string name, bool have_color, short *next_pair) {
 
 // ---------------------------------------------------------------------------
 // Construction / teardown
+//
+// Layout (H rows, W cols):
+//   row 0            header      (m_head)
+//   rows 1..H-5      transcript  (m_out, scrolling)
+//   rows H-4..H-2    input box   (m_box, 3 rows, rounded border)
+//   row H-1          hint        (m_hint)
 // ---------------------------------------------------------------------------
 
-gnmi_tui::gnmi_tui(const endpoint &remote, const tls_config &tls,
-                   const palette_config &colors)
+gnmi_tui::gnmi_tui(const endpoint &local, const endpoint &remote,
+                   const tls_config &tls, const palette_config &colors)
     : evt_io(STDIN_FILENO, rawfd_tag{}),
       m_cmd(remote, tls,
             [this](const std::string &line) { println(line); }) {
+  m_header = " Marvel gNMI · local :" + std::to_string(local.port) + " → " +
+             remote.host + ":" + std::to_string(remote.port) +
+             (tls.enabled ? "  (TLS)" : "");
+
   initscr();
   cbreak();
   noecho();
+  curs_set(1);
 
   // Foreground colours on the terminal's own background (bg = -1), so lines are
   // tinted without any background fill. Palette names come from the Lua config.
@@ -87,34 +98,36 @@ gnmi_tui::gnmi_tui(const endpoint &remote, const tls_config &tls,
   m_attr_warn = resolve_attr(colors.error, have_color, &next_pair);
   m_attr_echo = resolve_attr(colors.echo, have_color, &next_pair);
 
-  int rows = 0, cols = 0;
-  getmaxyx(stdscr, rows, cols);
-  if (rows < 3)
-    rows = 3;
+  int H = 0, W = 0;
+  getmaxyx(stdscr, H, W);
+  int out_h = H - 5; // header(1) + box(3) + hint(1)
+  if (out_h < 1)
+    out_h = 1;
 
-  // Row 0: input line. Row 1: divider. Rows 2..end: scrolling output.
-  m_input_win = newwin(1, cols, 0, 0);
-  m_output_win = newwin(rows - 2, cols, 2, 0);
-  keypad(m_input_win, TRUE);
-  nodelay(m_input_win, TRUE);
-  scrollok(m_output_win, TRUE);
-  idlok(m_output_win, TRUE);
+  m_head = newwin(1, W, 0, 0);
+  m_out = newwin(out_h, W, 1, 0);
+  m_box = newwin(3, W, H - 4, 0);
+  m_hint = newwin(1, W, H - 1, 0);
 
-  mvhline(1, 0, ACS_HLINE, cols);
-  refresh();
+  scrollok(m_out, TRUE);
+  idlok(m_out, TRUE);
+  keypad(m_box, TRUE);
+  nodelay(m_box, TRUE);
 
-  println("gnmi_peer ready — remote " + remote.host + ":" +
-          std::to_string(remote.port));
-  println("commands: gnmi set <xpath>:<val>[,<xpath>:<val>]  |  "
-          "gnmi get <xpath>[,<xpath>]  |  help  |  quit");
-  draw_input();
+  refresh(); // paint the (blank) stdscr once so the sub-windows show through
+  draw_chrome();
+
+  println("Ready. Local server is up; commands go to " + remote.host + ":" +
+          std::to_string(remote.port) + ".");
+  draw_box();
 }
 
 gnmi_tui::~gnmi_tui() {
-  if (m_input_win)
-    delwin(m_input_win);
-  if (m_output_win)
-    delwin(m_output_win);
+  if (m_head) delwin(m_head);
+  if (m_out) delwin(m_out);
+  if (m_box) delwin(m_box);
+  if (m_hint) delwin(m_hint);
+  curs_set(1);
   endwin();
 }
 
@@ -122,10 +135,61 @@ gnmi_tui::~gnmi_tui() {
 // Rendering
 // ---------------------------------------------------------------------------
 
-void gnmi_tui::draw_input() {
-  werase(m_input_win);
-  mvwprintw(m_input_win, 0, 0, "Marvel> %s", m_line.c_str());
-  wrefresh(m_input_win);
+void gnmi_tui::draw_chrome() {
+  werase(m_head);
+  wattron(m_head, A_DIM);
+  mvwaddstr(m_head, 0, 1, m_header.c_str());
+  wattroff(m_head, A_DIM);
+  wnoutrefresh(m_head);
+
+  werase(m_hint);
+  wattron(m_hint, A_DIM);
+  mvwaddstr(m_hint, 0, 3, "set · get · help · quit");
+  wattroff(m_hint, A_DIM);
+  wnoutrefresh(m_hint);
+  doupdate();
+}
+
+void gnmi_tui::draw_box() {
+  int bh = 0, bw = 0;
+  getmaxyx(m_box, bh, bw);
+  (void)bh;
+  werase(m_box);
+
+  // Rounded border, softly dimmed.
+  wattron(m_box, A_DIM);
+  mvwaddstr(m_box, 0, 0, "╭");
+  mvwaddstr(m_box, 0, bw - 1, "╮");
+  mvwaddstr(m_box, 2, 0, "╰");
+  mvwaddstr(m_box, 2, bw - 1, "╯");
+  for (int x = 1; x < bw - 1; ++x) {
+    mvwaddstr(m_box, 0, x, "─");
+    mvwaddstr(m_box, 2, x, "─");
+  }
+  mvwaddstr(m_box, 1, 0, "│");
+  mvwaddstr(m_box, 1, bw - 1, "│");
+  wattroff(m_box, A_DIM);
+
+  // Prompt + the visible tail of the current line.
+  const int text_col = 2;    // where "❯ " starts
+  const int prompt_cols = 2; // "❯ " occupies two columns
+  int avail = bw - text_col - prompt_cols - 2; // keep a right margin
+  std::string shown = m_line;
+  if (avail < 0)
+    avail = 0;
+  if (static_cast<int>(shown.size()) > avail)
+    shown = shown.substr(shown.size() - avail);
+
+  if (m_attr_ok) wattron(m_box, m_attr_ok);
+  mvwaddstr(m_box, 1, text_col, "❯ ");
+  if (m_attr_ok) wattroff(m_box, m_attr_ok);
+  mvwaddstr(m_box, 1, text_col + prompt_cols, shown.c_str());
+
+  int cursx = text_col + prompt_cols + static_cast<int>(shown.size());
+  if (cursx > bw - 2)
+    cursx = bw - 2;
+  wmove(m_box, 1, cursx);
+  wrefresh(m_box);
 }
 
 // Classify an output line by its leading tag and return its resolved attribute.
@@ -135,7 +199,7 @@ int gnmi_tui::attr_for(const std::string &s) const {
     return m_attr_remote;
   if (starts("[set] OK") || starts("[get] OK"))
     return m_attr_ok;
-  if (starts("Marvel> "))
+  if (starts("❯"))
     return m_attr_echo;
   if (s.find("error") != std::string::npos ||
       s.find("denied") != std::string::npos ||
@@ -152,18 +216,17 @@ void gnmi_tui::println(const std::string &line) {
   while (std::getline(ss, part, '\n')) {
     const int attr = attr_for(part);
     if (attr)
-      wattron(m_output_win, attr);
-    waddstr(m_output_win, part.c_str());
+      wattron(m_out, attr);
+    waddstr(m_out, part.c_str());
     if (attr)
-      wattroff(m_output_win, attr);
-    waddch(m_output_win, '\n');
+      wattroff(m_out, attr);
+    waddch(m_out, '\n');
     any = true;
   }
   if (!any)
-    waddch(m_output_win, '\n');
-  wrefresh(m_output_win);
-  // Return the cursor to the input line so typing stays visible.
-  draw_input();
+    waddch(m_out, '\n');
+  wrefresh(m_out);
+  draw_box(); // keep the cursor in the input box
 }
 
 // ---------------------------------------------------------------------------
@@ -177,23 +240,23 @@ std::int32_t gnmi_tui::handle_read(const std::int32_t & /*channel*/,
     return 0;
 
   int ch = 0;
-  while ((ch = wgetch(m_input_win)) != ERR) {
+  while ((ch = wgetch(m_box)) != ERR) {
     if (ch == '\n' || ch == '\r' || ch == KEY_ENTER) {
       const std::string cmd = m_line;
       m_line.clear();
-      draw_input();
+      draw_box();
       if (!trim(cmd).empty())
         dispatch(cmd);
     } else if (ch == KEY_BACKSPACE || ch == 127 || ch == 8) {
       if (!m_line.empty())
         m_line.pop_back();
-      draw_input();
+      draw_box();
     } else if (ch == 4) { // Ctrl-D → quit
       event_base_loopbreak(evt_base::instance().get());
       return 0;
     } else if (ch >= 32 && ch < 127) {
       m_line.push_back(static_cast<char>(ch));
-      draw_input();
+      draw_box();
     }
     // Other keys (arrows, function keys) are ignored in this first cut.
   }
@@ -201,11 +264,11 @@ std::int32_t gnmi_tui::handle_read(const std::int32_t & /*channel*/,
 }
 
 // ---------------------------------------------------------------------------
-// Command dispatch — echo into the pane, then delegate to the shared core.
+// Command dispatch — echo into the transcript, then delegate to the core.
 // ---------------------------------------------------------------------------
 
 void gnmi_tui::dispatch(const std::string &line) {
-  println("Marvel> " + trim(line));
+  println("❯ " + trim(line));
   if (!m_cmd.dispatch(line))
     event_base_loopbreak(evt_base::instance().get());
 }
