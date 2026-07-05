@@ -4,6 +4,9 @@ Reference for every service defined in `docs/docker-compose.yml` and the
 `docs/docker-compose.mqtt.yml` overlay.  All services share the single image
 `marvel:release` built from this repository.
 
+> For a flag-by-flag reference of every binary and the `build.sh` / `run.sh`
+> wrappers, see [commands.md](commands.md).
+
 ---
 
 ## Network Layout
