@@ -25,10 +25,23 @@ struct endpoint {
   std::uint16_t port{0};
 };
 
+// TUI colour names for each line category (see gnmi_tui for how they are
+// mapped to terminal attributes). Accepts base colours (black/red/green/
+// yellow/blue/magenta/cyan/white), the aliases amber(=yellow)/grey/gray, the
+// attributes dim/bold, bright-<colour>, and default/none. Defaults below match
+// the built-in cool palette.
+struct palette_config {
+  std::string remote = "cyan";  // [remote] pushes (the "diff")
+  std::string ok = "green";     // [set]/[get] OK
+  std::string error = "amber";  // errors / usage
+  std::string echo = "dim";     // echoed commands
+};
+
 struct peer_config {
   endpoint local;
   endpoint remote;
-  tls_config tls; // enabled=false unless a tls table is present
+  tls_config tls;       // enabled=false unless a tls table is present
+  palette_config colors; // defaults unless a `colors` table is present
 };
 
 // Parse `path` into `out`. Returns true on success; on failure returns false

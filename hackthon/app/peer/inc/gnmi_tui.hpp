@@ -29,7 +29,8 @@ struct _win_st;
 
 class gnmi_tui : public evt_io {
 public:
-  gnmi_tui(const endpoint &remote, const tls_config &tls);
+  gnmi_tui(const endpoint &remote, const tls_config &tls,
+           const palette_config &colors = {});
   ~gnmi_tui() override;
 
   // libevent raw-fd read hook — drains queued keystrokes from stdin.
@@ -42,10 +43,15 @@ public:
 private:
   void draw_input();
   void dispatch(const std::string &line);
+  int attr_for(const std::string &line) const; // display attr for an output line
 
   gnmi_cmd m_cmd;
   std::string m_line;
-  bool m_color{false}; // true when the terminal supports colour
+  // Resolved terminal attributes per line category (0 = terminal default).
+  int m_attr_remote{0};
+  int m_attr_ok{0};
+  int m_attr_warn{0};
+  int m_attr_echo{0};
   struct _win_st *m_input_win{nullptr};
   struct _win_st *m_output_win{nullptr};
 };

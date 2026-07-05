@@ -18,32 +18,54 @@ static std::string trim(const std::string &s) {
   return s.substr(b, e - b + 1);
 }
 
-// Colour-pair ids (foreground on the default background). Cool palette:
-//   remote pushes = cyan, results = green, errors = amber, echoes = dim grey.
-enum { PAIR_REMOTE = 1, PAIR_OK = 2, PAIR_WARN = 3 };
+// Map a base colour name to its ncurses COLOR_* id, or -1 if unknown.
+static short color_id(const std::string &n) {
+  if (n == "black") return COLOR_BLACK;
+  if (n == "red") return COLOR_RED;
+  if (n == "green") return COLOR_GREEN;
+  if (n == "yellow" || n == "amber") return COLOR_YELLOW;
+  if (n == "blue") return COLOR_BLUE;
+  if (n == "magenta" || n == "purple") return COLOR_MAGENTA;
+  if (n == "cyan") return COLOR_CYAN;
+  if (n == "white") return COLOR_WHITE;
+  if (n == "grey" || n == "gray") return COLOR_WHITE; // dimmed below
+  return -1;
+}
 
-// Pick a display attribute for an output line from its leading tag.
-static int line_attr(const std::string &s) {
-  auto starts = [&](const char *p) { return s.rfind(p, 0) == 0; };
-  if (starts("[remote]"))
-    return COLOR_PAIR(PAIR_REMOTE);
-  if (starts("[set] OK") || starts("[get] OK"))
-    return COLOR_PAIR(PAIR_OK);
-  if (starts("Marvel> "))
-    return A_DIM;
-  if (s.find("error") != std::string::npos ||
-      s.find("denied") != std::string::npos ||
-      s.find("FAIL") != std::string::npos || starts("unknown command") ||
-      starts("usage") || starts("no valid") || starts("  skip"))
-    return COLOR_PAIR(PAIR_WARN);
-  return 0; // default terminal colour
+// Resolve a palette name to a terminal attribute, allocating a colour pair
+// (foreground on the default background) from *next_pair when a colour is used.
+//   dim / bold           -> attribute only, no colour
+//   default / none / ""  -> terminal default (0)
+//   bright-<colour>      -> colour + A_BOLD
+//   grey / gray          -> white + A_DIM
+//   <base colour>        -> that colour
+// Falls back to 0 for unknown names, or when the terminal has no colour.
+static int resolve_attr(std::string name, bool have_color, short *next_pair) {
+  if (name == "dim") return A_DIM;
+  if (name == "bold") return A_BOLD;
+  if (name.empty() || name == "default" || name == "none") return 0;
+
+  int extra = 0;
+  if (name.rfind("bright-", 0) == 0) {
+    extra = A_BOLD;
+    name = name.substr(7);
+  }
+  if (name == "grey" || name == "gray") extra |= A_DIM;
+
+  if (!have_color) return extra; // colour unavailable: keep any dim/bold
+  const short fg = color_id(name);
+  if (fg < 0) return extra; // unknown colour name
+  const short pair = (*next_pair)++;
+  init_pair(pair, fg, -1);
+  return COLOR_PAIR(pair) | extra;
 }
 
 // ---------------------------------------------------------------------------
 // Construction / teardown
 // ---------------------------------------------------------------------------
 
-gnmi_tui::gnmi_tui(const endpoint &remote, const tls_config &tls)
+gnmi_tui::gnmi_tui(const endpoint &remote, const tls_config &tls,
+                   const palette_config &colors)
     : evt_io(STDIN_FILENO, rawfd_tag{}),
       m_cmd(remote, tls,
             [this](const std::string &line) { println(line); }) {
@@ -52,15 +74,18 @@ gnmi_tui::gnmi_tui(const endpoint &remote, const tls_config &tls)
   noecho();
 
   // Foreground colours on the terminal's own background (bg = -1), so lines are
-  // tinted without any background fill.
+  // tinted without any background fill. Palette names come from the Lua config.
+  bool have_color = false;
   if (has_colors()) {
     start_color();
     use_default_colors();
-    init_pair(PAIR_REMOTE, COLOR_CYAN, -1);
-    init_pair(PAIR_OK, COLOR_GREEN, -1);
-    init_pair(PAIR_WARN, COLOR_YELLOW, -1);
-    m_color = true;
+    have_color = true;
   }
+  short next_pair = 1;
+  m_attr_remote = resolve_attr(colors.remote, have_color, &next_pair);
+  m_attr_ok = resolve_attr(colors.ok, have_color, &next_pair);
+  m_attr_warn = resolve_attr(colors.error, have_color, &next_pair);
+  m_attr_echo = resolve_attr(colors.echo, have_color, &next_pair);
 
   int rows = 0, cols = 0;
   getmaxyx(stdscr, rows, cols);
@@ -103,12 +128,29 @@ void gnmi_tui::draw_input() {
   wrefresh(m_input_win);
 }
 
+// Classify an output line by its leading tag and return its resolved attribute.
+int gnmi_tui::attr_for(const std::string &s) const {
+  auto starts = [&](const char *p) { return s.rfind(p, 0) == 0; };
+  if (starts("[remote]"))
+    return m_attr_remote;
+  if (starts("[set] OK") || starts("[get] OK"))
+    return m_attr_ok;
+  if (starts("Marvel> "))
+    return m_attr_echo;
+  if (s.find("error") != std::string::npos ||
+      s.find("denied") != std::string::npos ||
+      s.find("FAIL") != std::string::npos || starts("unknown command") ||
+      starts("usage") || starts("no valid") || starts("  skip"))
+    return m_attr_warn;
+  return 0; // terminal default
+}
+
 void gnmi_tui::println(const std::string &line) {
   std::istringstream ss(line);
   std::string part;
   bool any = false;
   while (std::getline(ss, part, '\n')) {
-    const int attr = m_color ? line_attr(part) : 0;
+    const int attr = attr_for(part);
     if (attr)
       wattron(m_output_win, attr);
     waddstr(m_output_win, part.c_str());
