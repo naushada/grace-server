@@ -88,6 +88,7 @@ target_link_libraries(app PUBLIC
   pthread
   ssl
   crypto
+  z
   ${LIBEVENT_LIBRARIES}
   ${LIBEVENT_OPENSSL_LIBRARIES}
   ${NGHTTP2_LIBRARIES}
