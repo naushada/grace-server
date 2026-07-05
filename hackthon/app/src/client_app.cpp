@@ -5,13 +5,13 @@
 #include "framework.hpp"
 #include "gnmi_util.hpp"
 #include "server_app.hpp"
+#include "sub_hub.hpp"
 #include "update_sink.hpp"
 
 // Generated protobuf headers (produced by protoc at build time under
 // ${CMAKE_BINARY_DIR}/app/proto_gen/).
 #include "gnmi/gnmi.pb.h"
 
-#include <chrono>
 #include <iostream>
 
 // ---------------------------------------------------------------------------
@@ -160,6 +160,10 @@ void connected_client::register_gnmi_handlers() {
               gnmi_util::op_to_json("DELETE", req.delete_(i), nullptr));
         }
 
+        // On-change telemetry: fan this Set out to any matching Subscribe
+        // streams (possibly on other connections) via the server-wide hub.
+        sub_hub::instance().publish(req);
+
         std::string out;
         resp.SerializeToString(&out);
         return {0, out};
@@ -190,59 +194,29 @@ void connected_client::start_subscription(std::int32_t stream_id,
   }
 
   const gnmi::SubscriptionList &sl = req.subscribe();
-  m_sub_stream = stream_id;
-  m_sub_seq = 0;
-  m_sub_paths.clear();
+  std::vector<std::string> paths;
   for (const auto &s : sl.subscription())
-    m_sub_paths.push_back(gnmi_util::path_to_string(s.path()));
-  m_sub_streaming = (sl.mode() == gnmi::SubscriptionList::STREAM);
+    paths.push_back(gnmi_util::path_to_string(s.path()));
+  const bool streaming = (sl.mode() == gnmi::SubscriptionList::STREAM);
 
-  std::cout << "[Subscribe] stream=" << stream_id
-            << " paths=" << m_sub_paths.size()
-            << " mode=" << (m_sub_streaming ? "STREAM" : "ONCE/POLL") << "\n";
+  std::cout << "[Subscribe] stream=" << stream_id << " paths=" << paths.size()
+            << " mode=" << (streaming ? "STREAM" : "ONCE/POLL") << "\n";
 
-  // Initial sample, then sync_response to mark the end of the initial dump.
-  send_sub_notification();
+  // No datastore here, so there are no current values to dump — send
+  // sync_response immediately to mark the end of the (empty) initial state.
   gnmi::SubscribeResponse sync;
   sync.set_sync_response(true);
   std::string out;
   sync.SerializeToString(&out);
   m_grpc->stream_send(stream_id, out);
 
-  if (m_sub_streaming) {
-    const struct timeval tv{1, 0}; // sample every second
-    arm_timer(/*timer_id=*/1, tv, /*repeat=*/true);
+  if (streaming) {
+    // Register for on-change telemetry: real Set pushes (from this or any
+    // other connection) are fanned out to this stream by sub_hub.
+    sub_hub::instance().add(this, m_grpc.get(), stream_id, std::move(paths));
   } else {
-    m_grpc->stream_finish(stream_id, 0); // ONCE: close after the first batch
-    m_sub_stream = -1;
+    m_grpc->stream_finish(stream_id, 0); // ONCE: nothing to stream
   }
-}
-
-void connected_client::send_sub_notification() {
-  if (m_sub_stream < 0)
-    return;
-
-  gnmi::SubscribeResponse resp;
-  auto *notif = resp.mutable_update();
-  const auto now = std::chrono::system_clock::now().time_since_epoch();
-  notif->set_timestamp(
-      std::chrono::duration_cast<std::chrono::nanoseconds>(now).count());
-  for (const auto &p : m_sub_paths) {
-    auto *u = notif->add_update();
-    *u->mutable_path() = gnmi_util::parse_yang_path(p);
-    u->mutable_val()->set_int_val(m_sub_seq);
-  }
-  std::string out;
-  resp.SerializeToString(&out);
-  m_grpc->stream_send(m_sub_stream, out);
-}
-
-std::int32_t connected_client::handle_timeout(int timer_id) {
-  if (timer_id == 1 && m_sub_stream >= 0) {
-    ++m_sub_seq;
-    send_sub_notification();
-  }
-  return 0;
 }
 
 // ---------------------------------------------------------------------------
@@ -260,6 +234,9 @@ std::int32_t connected_client::handle_write(
 }
 
 std::int32_t connected_client::handle_close(const std::int32_t &channel) {
+  // Drop any Subscribe streams this connection owns before it is destroyed, so
+  // the hub never holds a dangling grpc_session pointer.
+  sub_hub::instance().remove(this);
   // Tell the server to remove this connection from its client map.
   // server::handle_close erases the unique_ptr<connected_client>, destroying
   // this object — no member access is safe after this call returns.

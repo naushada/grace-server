@@ -290,10 +290,12 @@ return {
 | `quit` / `exit` (or Ctrl-D)                     | Leave |
 
 Incoming data (remote `[remote]` Set pushes, Get updates, and `[sub]`
-subscribe notifications) is rendered as **JSON**. Subscribe is server-streaming:
-the target emits an initial notification, then `{"syncResponse":true}`, then a
-live sample every second (this stub target streams a synthetic incrementing
-value since it has no real datastore).
+subscribe notifications) is rendered as **JSON**. Subscribe is server-streaming
+and **on-change**: the target sends `{"syncResponse":true}` (no initial dump —
+this stub target has no datastore), then streams a `SubscribeResponse`
+notification whenever a **real `Set`** touches a subscribed path (from any
+connection). So: subscribe on one peer, `gnmi set` on another (or the same),
+and the change streams to the subscriber. The stream stays open while idle.
 
 `xpath` uses `/`-separated YANG form, e.g.
 `/interfaces/interface[name=eth0]/config/mtu`. In each `xpath:value` pair the

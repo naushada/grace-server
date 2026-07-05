@@ -127,7 +127,7 @@ for the full walkthrough.
 |---------|---------|-------|
 | `gnmi set <xpath>:<value>[,<xpath>:<value>…]` | `SetRequest.update[]` | Role `ADMIN`. One update per comma-pair; value is everything after the **first** `:`. |
 | `gnmi get <xpath>[,<xpath>…]` | `GetRequest` | Role `VIEWER`. Updates shown as JSON. |
-| `gnmi subscribe <xpath>[,<xpath>…]` | `Subscribe` (STREAM) | Server-streams `SubscribeResponse` notifications; each rendered as JSON (`[sub] {…}`), ending with `{"syncResponse":true}` then live samples. `sub` is an alias. |
+| `gnmi subscribe <xpath>[,<xpath>…]` | `Subscribe` (STREAM) | On-change: sends `{"syncResponse":true}`, then streams a `SubscribeResponse` (JSON, `[sub] {…}`) whenever a real `Set` touches a subscribed subtree — from any connection. `sub` is an alias. |
 | `help` | — | Show in-shell help. |
 | `quit` / `exit` (or Ctrl-D) | — | Leave (restores the terminal). |
 

@@ -193,7 +193,11 @@ gnmi_client::response gnmi_client::call(const std::string &host, uint16_t port,
 // the new connection's events without any re-entrancy.
 // ---------------------------------------------------------------------------
 
-static std::vector<std::shared_ptr<gnmi_connection>> s_active;
+// Intentionally leaked (reference to a heap vector): these connections own
+// libevent bufferevents, and the event base is itself a static singleton.
+// Never destroying them avoids a static-destruction-order crash where a
+// bufferevent is freed after the base at process exit.
+static auto &s_active = *new std::vector<std::shared_ptr<gnmi_connection>>();
 
 void gnmi_client::push_async(const std::string &host, uint16_t port,
                                const std::string &rpc_path,
@@ -251,6 +255,12 @@ public:
         {{"content-type", "application/grpc+proto"}, {"te", "trailers"}},
         framed);
     flush();
+    // Now that the connection is established, disable the inherited 5s
+    // bufferevent read/write timeout so an idle subscription is not torn down
+    // between updates. (Doing this in the ctor, mid-connect, breaks the
+    // connect; here it is safe.)
+    if (auto *bev = get_bufferevt())
+      bufferevent_set_timeouts(bev, nullptr, nullptr);
     return 0;
   }
 
@@ -270,7 +280,11 @@ public:
 
   std::int32_t handle_event(const std::int32_t &,
                             const std::uint16_t &) override {
-    finish({-1, "timeout", ""});
+    // A subscription idles between updates; the inherited 5s bufferevent read
+    // timeout is not an error here. Re-enable reads and keep the stream open
+    // (an actual EOF/error arrives via handle_close instead).
+    if (auto *bev = get_bufferevt())
+      bufferevent_enable(bev, EV_READ | EV_WRITE);
     return 0;
   }
 
@@ -334,7 +348,9 @@ private:
   bool m_done{false};
 };
 
-static std::vector<std::shared_ptr<gnmi_sub_connection>> s_active_sub;
+// Leaked for the same reason as s_active (see above).
+static auto &s_active_sub =
+    *new std::vector<std::shared_ptr<gnmi_sub_connection>>();
 
 void gnmi_client::subscribe_async(const std::string &host, uint16_t port,
                                   const std::string &request_pb,
