@@ -290,6 +290,21 @@ int http2_session::on_frame_recv(nghttp2_session *, const nghttp2_frame *frame,
                                  void *user_data) {
   auto *self = static_cast<http2_session *>(user_data);
 
+  // Diagnostic: a DATA frame arrived without END_STREAM on a server-received
+  // request stream (req.path is set from the :path header). This is a
+  // client-streaming push (e.g. Tarana telemetry): the END_STREAM-gated
+  // dispatch below never fires for it, so the messages would otherwise be
+  // invisible. Log the method + buffered size so the RPC can be identified and
+  // a streaming handler added.
+  if (frame->hd.type == NGHTTP2_DATA &&
+      !(frame->hd.flags & NGHTTP2_FLAG_END_STREAM)) {
+    auto sit = self->m_streams.find(frame->hd.stream_id);
+    if (sit != self->m_streams.end() && !sit->second.req.path.empty())
+      std::cerr << "[grpc] stream data on " << sit->second.req.path << " ("
+                << sit->second.req.body.size()
+                << " bytes buffered, no END_STREAM yet)\n";
+  }
+
   if (!(frame->hd.flags & NGHTTP2_FLAG_END_STREAM))
     return 0;
 
