@@ -51,8 +51,9 @@ private:
   void draw_box();                              // input box + cursor
   void dispatch(const std::string &line);
   int attr_for(const std::string &line) const;  // display attr for an output line
-  void render_line(const std::string &part);    // draw one transcript line into m_out
+  void redraw_out();                            // render the transcript viewport + scrollbar
   void push_history(const std::string &part);   // buffer a transcript line (capped)
+  void scroll_by(int lines);                    // move the viewport (+ up / - down); 0-clamps
   void relayout();                              // rebuild windows on terminal resize
   static void on_winch(int, short, void *arg);  // libevent SIGWINCH callback
 
@@ -69,7 +70,8 @@ private:
   struct _win_st *m_box{nullptr};  // bordered input box (3 rows)
   struct _win_st *m_hint{nullptr}; // hint row
   struct event *m_winch_ev{nullptr};    // SIGWINCH (terminal resize) watcher
-  std::deque<std::string> m_lines;      // transcript history, replayed on resize
+  std::deque<std::string> m_lines;      // transcript history (scrollback buffer)
+  int m_scroll{0};                      // viewport offset from bottom (0 = follow newest)
 };
 
 #endif // __gnmi_tui_hpp__

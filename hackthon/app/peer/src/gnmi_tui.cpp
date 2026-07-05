@@ -20,6 +20,27 @@ static std::string trim(const std::string &s) {
   return s.substr(b, e - b + 1);
 }
 
+// Number of bytes of `s` that fit within `cols` display columns, counting each
+// UTF-8 code point as one column (fine for our content: ASCII paths/values plus
+// a few 1-column box-drawing glyphs) and never splitting a multibyte sequence.
+// Used to clip transcript lines to the window width without wrapping.
+static int utf8_clip(const std::string &s, int cols) {
+  int bytes = 0, shown = 0;
+  const int n = static_cast<int>(s.size());
+  while (bytes < n && shown < cols) {
+    const unsigned char c = static_cast<unsigned char>(s[bytes]);
+    int len = 1;
+    if ((c & 0x80) == 0) len = 1;
+    else if ((c & 0xE0) == 0xC0) len = 2;
+    else if ((c & 0xF0) == 0xE0) len = 3;
+    else if ((c & 0xF8) == 0xF0) len = 4;
+    if (bytes + len > n) break;
+    bytes += len;
+    ++shown;
+  }
+  return bytes;
+}
+
 // Map a base colour name to its ncurses COLOR_* id, or -1 if unknown.
 static short color_id(const std::string &n) {
   if (n == "black") return COLOR_BLACK;
@@ -111,8 +132,7 @@ gnmi_tui::gnmi_tui(const endpoint &local, const endpoint &remote,
   m_box = newwin(3, W, H - 4, 0);
   m_hint = newwin(1, W, H - 1, 0);
 
-  scrollok(m_out, TRUE);
-  idlok(m_out, TRUE);
+  scrollok(m_out, FALSE); // full-window viewport render; no auto-scroll
   keypad(m_box, TRUE);
   nodelay(m_box, TRUE);
 
@@ -155,7 +175,7 @@ void gnmi_tui::draw_chrome() {
 
   werase(m_hint);
   wattron(m_hint, A_DIM);
-  mvwaddstr(m_hint, 0, 3, "set · get · help · quit");
+  mvwaddstr(m_hint, 0, 3, "set · get · help · quit  ·  PgUp/PgDn·End scroll");
   wattroff(m_hint, A_DIM);
   wnoutrefresh(m_hint);
   doupdate();
@@ -220,39 +240,106 @@ int gnmi_tui::attr_for(const std::string &s) const {
   return 0; // terminal default
 }
 
-// Draw one already-split transcript line into m_out (no buffering, no refresh).
-void gnmi_tui::render_line(const std::string &part) {
-  const int attr = attr_for(part);
-  if (attr)
-    wattron(m_out, attr);
-  waddstr(m_out, part.c_str());
-  if (attr)
-    wattroff(m_out, attr);
-  waddch(m_out, '\n');
-}
-
-// Buffer a transcript line so it can be replayed after a resize. Capped so a
-// long-running session (constant telemetry) does not grow without bound.
+// Buffer a transcript line for the scrollback view. Capped so a long-running
+// session (constant telemetry) does not grow without bound.
 void gnmi_tui::push_history(const std::string &part) {
   m_lines.push_back(part);
-  if (m_lines.size() > 1000)
+  if (m_lines.size() > 5000)
     m_lines.pop_front();
+}
+
+// Render the visible slice of the scrollback buffer into m_out, with a
+// scrollbar in the last column. m_scroll is the offset from the bottom
+// (0 = pinned to the newest line).
+void gnmi_tui::redraw_out() {
+  if (!m_out)
+    return;
+  int H = 0, W = 0;
+  getmaxyx(m_out, H, W);
+  werase(m_out);
+
+  const int total = static_cast<int>(m_lines.size());
+  const int view_h = H;
+
+  int maxscroll = total - view_h;
+  if (maxscroll < 0)
+    maxscroll = 0;
+  if (m_scroll > maxscroll)
+    m_scroll = maxscroll;
+  if (m_scroll < 0)
+    m_scroll = 0;
+
+  int first = total - view_h - m_scroll; // index of the top visible line
+  if (first < 0)
+    first = 0;
+
+  const bool bar = (W > 2 && total > view_h);
+  const int text_w = bar ? W - 1 : W; // reserve the last column for the scrollbar
+
+  for (int row = 0; row < view_h; ++row) {
+    const int idx = first + row;
+    if (idx < 0 || idx >= total)
+      break;
+    const std::string &l = m_lines[idx];
+    const int attr = attr_for(l);
+    if (attr)
+      wattron(m_out, attr);
+    mvwaddnstr(m_out, row, 0, l.c_str(), utf8_clip(l, text_w));
+    if (attr)
+      wattroff(m_out, attr);
+  }
+
+  if (bar) {
+    int thumb = view_h * view_h / total; // thumb height ∝ visible fraction
+    if (thumb < 1)
+      thumb = 1;
+    if (thumb > view_h)
+      thumb = view_h;
+    const int track = view_h - thumb;
+    const int denom = (total - view_h > 0) ? total - view_h : 1;
+    int thumb_top = track * first / denom;
+    if (thumb_top < 0)
+      thumb_top = 0;
+    if (thumb_top > track)
+      thumb_top = track;
+    wattron(m_out, A_DIM);
+    for (int row = 0; row < view_h; ++row) {
+      const bool on = (row >= thumb_top && row < thumb_top + thumb);
+      mvwaddstr(m_out, row, W - 1, on ? "█" : "░");
+    }
+    wattroff(m_out, A_DIM);
+  }
+
+  wnoutrefresh(m_out);
+  doupdate();
+}
+
+// Move the viewport by `lines` (positive = scroll up into history, negative =
+// toward newest). Clamped in redraw_out().
+void gnmi_tui::scroll_by(int lines) {
+  m_scroll += lines;
+  if (m_scroll < 0)
+    m_scroll = 0;
+  redraw_out();
 }
 
 void gnmi_tui::println(const std::string &line) {
   std::istringstream ss(line);
   std::string part;
-  bool any = false;
+  int added = 0;
   while (std::getline(ss, part, '\n')) {
     push_history(part);
-    render_line(part);
-    any = true;
+    ++added;
   }
-  if (!any) {
+  if (added == 0) {
     push_history("");
-    render_line("");
+    added = 1;
   }
-  wrefresh(m_out);
+  // If the user has scrolled up, keep their view anchored to the same lines as
+  // new output arrives; otherwise stay pinned to the newest line.
+  if (m_scroll > 0)
+    m_scroll += added;
+  redraw_out();
   draw_box(); // keep the cursor in the input box
 }
 
@@ -277,17 +364,14 @@ void gnmi_tui::relayout() {
   m_box = newwin(3, W, H - 4, 0);
   m_hint = newwin(1, W, H - 1, 0);
 
-  scrollok(m_out, TRUE);
-  idlok(m_out, TRUE);
+  scrollok(m_out, FALSE);
   keypad(m_box, TRUE);
   nodelay(m_box, TRUE);
 
   clear();
   refresh();
   draw_chrome();
-  for (const auto &l : m_lines)
-    render_line(l);
-  wrefresh(m_out);
+  redraw_out();
   draw_box();
 }
 
@@ -330,6 +414,26 @@ std::int32_t gnmi_tui::handle_read(const std::int32_t & /*channel*/,
       return 0;
     } else if (ch == KEY_RESIZE) { // resize delivered via input path
       relayout();
+    } else if (ch == KEY_PPAGE) { // Page Up — scroll into history
+      int h = 0, w = 0;
+      getmaxyx(m_out, h, w);
+      (void)w;
+      scroll_by(h > 1 ? h - 1 : 1);
+    } else if (ch == KEY_NPAGE) { // Page Down — toward newest
+      int h = 0, w = 0;
+      getmaxyx(m_out, h, w);
+      (void)w;
+      scroll_by(-(h > 1 ? h - 1 : 1));
+    } else if (ch == KEY_UP) {
+      scroll_by(1);
+    } else if (ch == KEY_DOWN) {
+      scroll_by(-1);
+    } else if (ch == KEY_HOME) { // jump to the oldest buffered line
+      m_scroll = static_cast<int>(m_lines.size());
+      redraw_out();
+    } else if (ch == KEY_END) { // jump to newest and resume follow
+      m_scroll = 0;
+      redraw_out();
     } else if (ch >= 32 && ch < 127) {
       m_line.push_back(static_cast<char>(ch));
       draw_box();
