@@ -91,6 +91,20 @@ public:
     m_on_data = std::move(on_data);
   }
 
+  // Server-side: fired for each DATA frame on a received request stream,
+  // including the END_STREAM one. Lets the gRPC layer decode and dispatch
+  // client-streaming request messages incrementally instead of waiting for
+  // END_STREAM (which a long-lived push stream — e.g. Tarana
+  // PushSubscriptionUpdates — never sends). `body` is the stream's accumulated,
+  // not-yet-consumed request bytes; the handler may consume from it (erase
+  // complete frames) to bound memory. `end_stream` is true on the final frame.
+  using request_stream_handler_t = std::function<void(
+      int32_t stream_id, const std::string &path, std::string &body,
+      bool end_stream)>;
+  void set_request_stream_handler(request_stream_handler_t on_req_stream) {
+    m_on_request_stream = std::move(on_req_stream);
+  }
+
   // Client-side: submit an HTTP/2 request.
   // Returns the new stream id (> 0) or a negative nghttp2 error code.
   int32_t submit_request(
@@ -148,6 +162,7 @@ private:
   nghttp2_session *m_session{nullptr};
   handler_t m_handler;
   data_handler_t m_on_data;
+  request_stream_handler_t m_on_request_stream;
   std::unordered_map<int32_t, stream_ctx> m_streams;
 };
 

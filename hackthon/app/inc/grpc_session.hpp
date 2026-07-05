@@ -46,6 +46,16 @@ public:
   // Register a server-streaming handler for path "/package.Service/Method".
   void register_server_stream(const std::string &path, stream_handler_t handler);
 
+  // A client-streaming RPC handler: invoked once per request message as it
+  // arrives on the stream (the client keeps the stream open and pushes many
+  // messages). Used for methods like tnmi.DialTcc/PushSubscriptionUpdates.
+  using client_stream_handler_t =
+      std::function<void(int32_t stream_id, const std::string &message_pb)>;
+
+  // Register a client-streaming handler for path "/package.Service/Method".
+  void register_client_stream(const std::string &path,
+                              client_stream_handler_t handler);
+
   // Send one framed message on an open streaming response.
   void stream_send(int32_t stream_id, const std::string &message_pb);
 
@@ -71,6 +81,10 @@ public:
 
 private:
   void on_request(int32_t stream_id, const http2_session::request &req);
+  // Decode and dispatch complete gRPC messages buffered on a client-streaming
+  // request, consuming them from `body` so it stays bounded.
+  void on_request_stream(int32_t stream_id, const std::string &path,
+                         std::string &body);
   void send_unary_response(int32_t stream_id, int grpc_status,
                             const std::string &body_pb);
 
@@ -78,6 +92,8 @@ private:
   raw_tx_t m_tx;
   std::unordered_map<std::string, unary_handler_t> m_handlers;
   std::unordered_map<std::string, stream_handler_t> m_stream_handlers;
+  std::unordered_map<std::string, client_stream_handler_t>
+      m_client_stream_handlers;
 };
 
 #endif // __grpc_session_hpp__
