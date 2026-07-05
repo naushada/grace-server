@@ -1,0 +1,74 @@
+# Two-peer gnmi_peer setup.
+#
+# Two symmetric instances of the config-driven, two-pane gNMI shell. Each runs
+# its own local gNMI server and points `remote` at the other (resolved by the
+# compose service name over gnmi-peer-net):
+#
+#   peerA  local :58989  ── gnmi set/get ──▶  peerB :58990
+#   peerB  local :58990  ── gnmi set/get ──▶  peerA :58989
+#
+# A `gnmi set` typed in one peer's top pane is pushed to the other peer's local
+# server and shown in that peer's bottom pane as `[remote] UPDATE …`.
+#
+# ── Interactive (ncurses two-pane TUI) ──────────────────────────────────────
+#   docker compose -f docs/docker-compose.gnmi-peer.yml up -d
+#   # terminal 1:
+#   docker compose -f docs/docker-compose.gnmi-peer.yml attach peerA
+#   # terminal 2:
+#   docker compose -f docs/docker-compose.gnmi-peer.yml attach peerB
+#   # in peerA:  gnmi set /demo/leaf:5      -> appears in peerB's bottom pane
+#   # detach without stopping: Ctrl-P Ctrl-Q ;  leave the shell: quit / exit
+#
+# ── Headless (observe pushes in the logs, no attach) ────────────────────────
+#   Add `--headless=true` to a service's command, then:
+#     echo 'gnmi set /demo/leaf:5' | \
+#       docker compose -f docs/docker-compose.gnmi-peer.yml run --rm -T peerA
+#     docker compose -f docs/docker-compose.gnmi-peer.yml logs peerB   # [remote] UPDATE …
+#
+# Podman: replace `docker compose` with `podman-compose` (or `podman compose`).
+#
+# Requires the image: `./build.sh` (or `docker build -t marvel:release hackthon/`).
+
+networks:
+  gnmi-peer-net:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.30.0.0/24
+
+services:
+
+  peerA:
+    image: marvel:release
+    command:
+      - /app/gnmi_peer
+      - --config=/app/command/endpoint.lua
+    volumes:
+      - ./gnmi-peer/peerA.lua:/app/command/endpoint.lua:ro
+    stdin_open: true       # keep STDIN open so the TUI can read keystrokes
+    tty: true              # allocate a PTY so gnmi_peer starts the ncurses UI
+    networks:
+      gnmi-peer-net:
+        ipv4_address: 172.30.0.2
+    # Uncomment to reach peerA's gNMI server from the host:
+    # ports:
+    #   - "58989:58989"
+    depends_on:
+      - peerB
+    restart: "no"
+
+  peerB:
+    image: marvel:release
+    command:
+      - /app/gnmi_peer
+      - --config=/app/command/endpoint.lua
+    volumes:
+      - ./gnmi-peer/peerB.lua:/app/command/endpoint.lua:ro
+    stdin_open: true
+    tty: true
+    networks:
+      gnmi-peer-net:
+        ipv4_address: 172.30.0.3
+    # ports:
+    #   - "58990:58990"
+    restart: "no"
