@@ -49,7 +49,6 @@ target_link_libraries(gnmi_peer PRIVATE
   pthread
   ssl
   crypto
-  z
   ${CURSES_LIBRARIES}
   ${LIBEVENT_LIBRARIES}
   ${LIBEVENT_OPENSSL_LIBRARIES}
