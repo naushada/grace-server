@@ -201,22 +201,26 @@ void connected_client::register_gnmi_handlers() {
       });
 
   // ----- Tarana DialTcc / PushSubscriptionUpdates (client-streaming) --------
-  // After IsAlive the device opens this stream and pushes subscription
-  // telemetry messages continuously without ever sending END_STREAM. Each
-  // decoded (gzip-inflated) message is delivered here as it arrives. We surface
-  // it through update_sink so it shows up as a [remote] line (headless) or in
-  // the TUI's bottom pane.
-  //
-  // NOTE: without the tnmi.DialTcc .proto we cannot field-decode the payload,
-  // so we report the message size. Drop the proto into app/idl/, parse it here,
-  // and emit real telemetry paths/values via update_sink instead.
+  // After IsAlive the device opens this stream and pushes telemetry messages
+  // continuously without ever sending END_STREAM. Per tnmi_dialout.proto the
+  // RPC is:
+  //   rpc PushSubscriptionUpdates(stream gnmi.SubscribeResponse) returns (UpdateAck)
+  // so each streamed message is a standard gnmi.SubscribeResponse — the type we
+  // already compile. Decode it and render with the shared JSON helper, emitting
+  // through update_sink so it surfaces as a [remote] line (headless) or in the
+  // TUI's bottom pane.
   m_grpc->register_client_stream(
       "/tnmi.DialTcc/PushSubscriptionUpdates",
       [](std::int32_t sid, const std::string &msg_pb) {
-        std::cout << "[PushSub] stream=" << sid << " msg=" << msg_pb.size()
-                  << " bytes\n";
-        update_sink::instance().emit("PushSubscriptionUpdates: " +
-                                     std::to_string(msg_pb.size()) + " bytes");
+        gnmi::SubscribeResponse resp;
+        if (!resp.ParseFromString(msg_pb)) {
+          std::cerr << "[PushSub] stream=" << sid << " parse failed ("
+                    << msg_pb.size() << " bytes)\n";
+          return;
+        }
+        const std::string json = gnmi_util::subscribe_response_to_json(resp);
+        std::cout << "[PushSub] stream=" << sid << " " << json << "\n";
+        update_sink::instance().emit(json);
       });
 }
 
