@@ -256,18 +256,90 @@ return {
 value is everything after the **first** `:` (so module-qualified segments like
 `module:container` are not supported in this shorthand).
 
-Component logs are redirected to a logfile (`--log`, default
-`/tmp/gnmi_peer.log`) so they don't corrupt the ncurses display.
+### Flags
 
-### Run
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--config=<path>`   | `/app/command/endpoint.lua` | Lua endpoint config |
+| `--headless=<bool>` | auto | `true`/`false` force the front-end; auto = ncurses on a TTY, line-mode otherwise |
+| `--log=<path>`      | `/tmp/gnmi_peer.log` | Where component logs go in TUI mode (keeps the display clean) |
+
+The **headless line-mode** (no ncurses) is auto-selected when stdin/stdout is
+not a TTY — it reads one command per line from stdin and prints results and
+`[remote] …` pushes to stdout, so it is pipe- and CI-friendly. Interactive use
+picks the ncurses TUI.
+
+### Build
+
+`gnmi_peer` is built as part of the normal image build (it links ncurses, added
+to the build/runtime stages of the Dockerfile) and is copied to
+`/app/gnmi_peer`:
 
 ```bash
-# Terminal A (also acts as remote for B):
-/app/gnmi_peer --config=/app/command/endpoint.lua
+podman build -t marvel:release hackthon/        # or: docker build …
+# skip the gtest suite:
+podman build --build-arg RUN_TESTS=OFF -t marvel:release hackthon/
+```
 
-# Two peers on one host — swap the ports in each config:
-#   A: local 58989 / remote 58990
-#   B: local 58990 / remote 58989
+Native build (needs `libevent`, `libnghttp2`, `libprotobuf`+`protoc`, `liblua5.4`,
+`libncurses`, `libssl` dev packages):
+
+```bash
+cmake -S hackthon -B build -DBUILD_TESTING=ON
+cmake --build build -j"$(nproc)" --target gnmi_peer
+./build/app/peer/gnmi_peer --config=hackthon/app/command/endpoint.lua
+```
+
+### Run — interactive (ncurses TUI)
+
+Attach a TTY (`-it`) so the two-pane UI renders:
+
+```bash
+podman run --rm -it -p 58989:58989 \
+  -v "$PWD/hackthon/app/command/endpoint.lua:/app/command/endpoint.lua:ro" \
+  marvel:release \
+  /app/gnmi_peer --config=/app/command/endpoint.lua
+```
+
+Type `gnmi set /a/b:5,/c/d:up`, `gnmi get /a/b`, `help`, or `quit` in the top
+pane; remote pushes appear in the bottom pane. Exit with `quit`/`exit`/Ctrl-D
+(these restore the terminal via `endwin()`).
+
+### Run — two peers (peer-to-peer)
+
+Each side runs its own local server and points `remote` at the other. On one
+host, put both on a user network so they resolve each other by name:
+
+```bash
+podman network create peer-net
+
+# Peer B (receiver): local 58990, remote peerA:58989
+podman run -d --name peerB --network peer-net \
+  -v "$PWD/hackthon/app/command/endpoint.lua:/app/command/endpoint.lua:ro" \
+  marvel:release \
+  /app/gnmi_peer --headless=true \
+    --config=/app/command/endpoint.lua   # edit this config so local=58990, remote=peerA:58989
+
+# Peer A (sender/interactive): local 58989, remote peerB:58990
+podman run --rm -it --name peerA --network peer-net \
+  -v "$PWD/hackthon/app/command/endpoint.lua:/app/command/endpoint.lua:ro" \
+  marvel:release \
+  /app/gnmi_peer --config=/app/command/endpoint.lua
+```
+
+Give each peer its own config (`local`/`remote` swapped). A `gnmi set` in A's
+top pane appears as `[remote] UPDATE …` in B's output.
+
+### Automated smoke test
+
+`app/peer/test/smoke_two_peer.sh` bakes two configs into a throwaway image, runs
+B (receiver) + A (sender) on a network, and asserts B received the pushed
+updates:
+
+```bash
+podman build --build-arg RUN_TESTS=OFF -t marvel:release hackthon/
+IMAGE=marvel:release hackthon/app/peer/test/smoke_two_peer.sh
+#   → SMOKE TEST: PASS
 ```
 
 ---
