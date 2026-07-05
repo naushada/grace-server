@@ -69,6 +69,7 @@ Runs any binary in a container, or opens a shell in one.
 | `shell` | `/bin/bash` | Interactive bash in a fresh container. |
 | `exec <name>` | `<engine> exec` | bash (or `-- <cmd>`) inside a running container. |
 | `raw -- <cmd…>` | `<cmd…>` | Arbitrary command in a fresh container. |
+| `smoke` | — | Healthcheck-gated two-peer smoke test: start peerB, gate on its health, send a `gnmi set` from peerA, assert peerB received it. Exits 0 (PASS) / 1 (FAIL). |
 
 **Global options**
 

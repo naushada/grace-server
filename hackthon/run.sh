@@ -24,6 +24,9 @@
 #   shell            Interactive bash shell in a fresh container.
 #   exec <name>      bash (or `-- <cmd>`) inside an already-running container.
 #   raw -- <cmd...>  Run an arbitrary command in a fresh container.
+#   smoke            Healthcheck-gated two-peer smoke test: start peerB, wait
+#                    until it reports healthy, send a `gnmi set` from peerA, and
+#                    assert peerB received it. Exits 0 (PASS) / 1 (FAIL).
 #
 # Global options:
 #   -e, --engine <docker|podman>   Force the engine        (default: auto)
@@ -53,6 +56,7 @@
 #   ./run.sh --name peerB -d --network peer-net gnmi-peer --headless
 #   ./run.sh shell                             # poke around inside the image
 #   ./run.sh exec peerB                        # bash into a running container
+#   ./run.sh smoke                             # healthcheck-gated two-peer test
 set -eo pipefail
 
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -172,6 +176,81 @@ case "$cmd" in
     etty="-it"; [ "$NOTTY" = 1 ] && etty="-i"
     set -x
     exec "$engine" exec $etty "$target" "${ecmd[@]}"
+    ;;
+  smoke)
+    # Healthcheck-gated two-peer smoke test. Builds a throwaway image with two
+    # baked configs (no host mounts), starts peerB with a container healthcheck,
+    # GATES on the engine's reported health status (not sleeps/log-greps), then
+    # sends a `gnmi set` from a one-off headless peerA and asserts peerB received
+    # it. Engine-uniform (docker or podman). Exits 0 on PASS, 1 on FAIL.
+    smoke_img="gnmi-peer-smoke:local"
+    net="gnmi-peer-smoke-net"
+    cb="gnmi-peer-smoke-b"; ca="gnmi-peer-smoke-a"
+    "$engine" image inspect "$IMAGE" >/dev/null 2>&1 \
+      || die "image '$IMAGE' not found — run ./build.sh first"
+    tmp="$(mktemp -d)"
+    smoke_cleanup() {
+      "$engine" rm -f "$ca" "$cb" >/dev/null 2>&1 || true
+      "$engine" network rm "$net" >/dev/null 2>&1 || true
+      "$engine" rmi -f "$smoke_img" >/dev/null 2>&1 || true
+      rm -rf "$tmp"
+    }
+    trap smoke_cleanup EXIT
+    cat > "$tmp/peerA.lua" <<'LUA'
+return { ["local"] = { endpoint = { ip = "0.0.0.0", port = 58989 } },
+         ["remote"] = { endpoint = "peerB:58990" } }
+LUA
+    cat > "$tmp/peerB.lua" <<'LUA'
+return { ["local"] = { endpoint = { ip = "0.0.0.0", port = 58990 } },
+         ["remote"] = { endpoint = "peerA:58989" } }
+LUA
+    cat > "$tmp/Containerfile" <<EOF
+FROM $IMAGE
+COPY --chown=edge:cordoba peerA.lua /app/peerA.lua
+COPY --chown=edge:cordoba peerB.lua /app/peerB.lua
+EOF
+    echo "[smoke] building test image with $engine …"
+    "$engine" build -t "$smoke_img" "$tmp" >/dev/null
+    "$engine" rm -f "$ca" "$cb" >/dev/null 2>&1 || true
+    "$engine" network create "$net" >/dev/null 2>&1 || true
+    echo "[smoke] starting peerB (receiver) with a healthcheck …"
+    "$engine" run -d --name "$cb" --network "$net" --network-alias peerB \
+      --health-cmd "ss -ltnH 'sport = :58990' | grep -q ." \
+      --health-interval 3s --health-timeout 3s --health-retries 5 \
+      --health-start-period 2s \
+      "$smoke_img" /app/gnmi_peer --config=/app/peerB.lua --headless=true >/dev/null
+    echo "[smoke] gating on peerB health …"
+    status=""
+    for _ in $(seq 1 25); do
+      status="$("$engine" inspect "$cb" --format '{{.State.Health.Status}}' 2>/dev/null || echo)"
+      if [ "$status" = healthy ] || [ "$status" = unhealthy ]; then break; fi
+      read -t 2 </dev/null || true
+    done
+    if [ "$status" != healthy ]; then
+      echo "[smoke] FAIL: peerB never became healthy (status='${status:-none}')"
+      "$engine" logs "$cb" 2>&1 | tail -5
+      exit 1
+    fi
+    echo "[smoke] peerB healthy — sending 'gnmi set' from peerA …"
+    # Pipe the command INSIDE the container so EOF is a real in-container pipe;
+    # gnmi_peer sends the set then self-exits (relying on `run -i` stdin EOF
+    # forwarding across the podman/docker boundary is unreliable).
+    "$engine" run -d --name "$ca" --network "$net" "$smoke_img" \
+      sh -c "echo 'gnmi set /smoke/leaf:5,/smoke/x:up' | /app/gnmi_peer --config=/app/peerA.lua --headless=true" >/dev/null
+    # Wait (bounded) for peerB to log the pushed updates.
+    for _ in $(seq 1 15); do
+      if "$engine" logs "$cb" 2>&1 | grep -qF '[remote] UPDATE /smoke/x = up'; then break; fi
+      read -t 1 </dev/null || true
+    done
+    logs="$("$engine" logs "$cb" 2>&1 || true)"
+    aout="$("$engine" logs "$ca" 2>&1 || true)"
+    echo "$aout" | grep -E '^\[set\]' || true
+    fail=0
+    echo "$aout" | grep -qE '\[set\] OK, 2 result' || { echo "[smoke] FAIL: peerA did not get 2 results"; fail=1; }
+    echo "$logs" | grep -qF '[remote] UPDATE /smoke/leaf = 5' || { echo "[smoke] FAIL: peerB missing /smoke/leaf"; fail=1; }
+    echo "$logs" | grep -qF '[remote] UPDATE /smoke/x = up'   || { echo "[smoke] FAIL: peerB missing /smoke/x"; fail=1; }
+    [ "$fail" = 0 ] && echo "[smoke] PASS" || echo "[smoke] FAIL"
+    exit "$fail"
     ;;
   raw)
     [ ${#PASSTHRU[@]} -gt 0 ] || die "raw needs a command after --"
