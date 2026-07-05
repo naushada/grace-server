@@ -179,6 +179,26 @@ void connected_client::register_gnmi_handlers() {
       [this](std::int32_t sid, const std::string &req_pb) {
         start_subscription(sid, req_pb);
       });
+
+  // ----- Tarana DialTcc / IsAlive -------------------------------------------
+  // Tarana radios/BNs dial out to their controller and probe liveness with a
+  // unary /tnmi.DialTcc/IsAlive before they begin pushing telemetry. This is
+  // NOT a gNMI method: grace-server otherwise only speaks gnmi.gNMI, so an
+  // unregistered path returns UNIMPLEMENTED (12), the device concludes the peer
+  // is dead, and it never streams updates.
+  //
+  // We answer OK (grpc-status 0) with an empty response body, which satisfies a
+  // liveness check. We deliberately do not parse the request: the tnmi.DialTcc
+  // .proto is not part of this tree, and an empty message is a valid response
+  // for any proto3 message type. If the device requires populated response
+  // fields, add the real DialTcc proto to app/idl and build the response here.
+  m_grpc->register_unary(
+      "/tnmi.DialTcc/IsAlive",
+      [](const std::string &req_pb) -> std::pair<int, std::string> {
+        std::cout << "[IsAlive] DialTcc liveness probe (" << req_pb.size()
+                  << " req bytes) -> OK\n";
+        return {0, ""};
+      });
 }
 
 // ---------------------------------------------------------------------------
