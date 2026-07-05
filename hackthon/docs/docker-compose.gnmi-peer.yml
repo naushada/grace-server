@@ -53,8 +53,16 @@ services:
     # Uncomment to reach peerA's gNMI server from the host:
     # ports:
     #   - "58989:58989"
+    # Healthy once the local gNMI server is listening on 58989 (ss needs no root).
+    healthcheck:
+      test: ["CMD-SHELL", "ss -ltnH 'sport = :58989' | grep -q ."]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+      start_period: 5s
     depends_on:
-      - peerB
+      peerB:
+        condition: service_healthy
     restart: "no"
 
   peerB:
@@ -71,4 +79,11 @@ services:
         ipv4_address: 172.30.0.3
     # ports:
     #   - "58990:58990"
+    # Healthy once the local gNMI server is listening on 58990.
+    healthcheck:
+      test: ["CMD-SHELL", "ss -ltnH 'sport = :58990' | grep -q ."]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+      start_period: 5s
     restart: "no"
