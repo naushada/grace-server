@@ -85,6 +85,35 @@ app/
 
 ## Build
 
+### Convenience scripts (`build.sh` / `run.sh`)
+
+`hackthon/build.sh` and `hackthon/run.sh` wrap the container workflow and pick
+**docker or podman** automatically (whichever is installed; override with
+`--engine` or `ENGINE=`):
+
+```bash
+cd hackthon
+
+./build.sh                       # build marvel:release (no tests, fast)
+./build.sh --tests on            # build and run the gtest suite
+./build.sh -t marvel:dev --no-cache
+
+./run.sh gnmi-peer               # interactive two-pane gNMI shell (port 58989)
+./run.sh --config ./my.lua gnmi-peer
+echo 'gnmi get /a/b' | ./run.sh --headless gnmi-peer
+./run.sh --build gnmi-server -- --gnmi-port=9339   # build, then run
+./run.sh shell                   # open a bash shell inside the image
+./run.sh exec <name>             # bash into an already-running container
+./run.sh --help                  # every command + option
+```
+
+`run.sh` covers every binary: `gnmi-peer`, `gnmi-server`, `cli`, `app`,
+`vpn-server`, `vpn-client`, `openvpn-server`, `openvpn-client`, plus `shell`,
+`exec`, and `raw`. The manual `docker`/`podman` commands below still work if you
+prefer them.
+
+### Manual build
+
 ```bash
 docker build -t marvel:release hackthon/
 ```
