@@ -256,3 +256,27 @@ docker run --rm -it -p <host-lan-ip>:58989:58989 \
   TUI.
 - **Resize-aware**: the layout reflows on terminal resize (SIGWINCH), handled as
   a libevent signal event since input is stdin-driven.
+
+## Saving updates to a file
+
+`--out=<file>` appends every received update (the `[remote]` telemetry) to a
+file, in addition to displaying it — flushed per line so it is tail-able live.
+Especially useful in TUI mode, where stdout is the ncurses display and cannot be
+redirected.
+
+```bash
+# via the helper (mounts the host file, chmods it for the container user):
+OUT=./updates.log REMOTE_IP=<device-ip> docs/run-gnmi-peer.sh
+tail -f ./updates.log
+
+# or plain docker (mount a host file, pass --out to the container path):
+touch ./updates.log && chmod 666 ./updates.log
+docker run -d --name gnmi_peer -p 58989:58989 \
+  -v "$PWD/endpoint.lua:/app/command/endpoint.lua:ro" \
+  -v "$PWD/updates.log:/app/updates.log" \
+  gnmiserver:dev /app/gnmi_peer --config=/app/command/endpoint.lua \
+    --headless=true --out=/app/updates.log
+```
+
+The file receives the same one-line-per-leaf format (with `── timestamp ──`
+headers), minus the `[remote]` prefix — clean for grep/analysis.

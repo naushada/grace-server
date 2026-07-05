@@ -30,6 +30,7 @@
 #   CONFIG       generated endpoint.lua path     (default: ./endpoint.lua)
 #   TLS          true|false                      (default: false)
 #   FOLLOW       tail logs after start (1|0)     (default: 1)
+#   OUT          host file to append updates to  (optional; mounted + --out)
 set -euo pipefail
 
 IMAGE="${IMAGE:-gnmiserver:dev}"
@@ -40,12 +41,28 @@ REMOTE_PORT="${REMOTE_PORT:-55555}"
 CONFIG="${CONFIG:-$(pwd)/endpoint.lua}"
 TLS="${TLS:-false}"
 FOLLOW="${FOLLOW:-1}"
+OUT="${OUT:-}"           # host file to append received updates to (optional)
 
 die() { echo "run-gnmi-peer.sh: $*" >&2; exit 1; }
 
 [ -n "$REMOTE_IP" ] || die "set REMOTE_IP=<device LAN ip>  (see --help / header)"
 case "$TLS" in true|false) ;; *) die "TLS must be true or false" ;; esac
 command -v docker >/dev/null 2>&1 || die "docker not found on this host"
+
+# Optional --out: mount a host file into the container and tee updates to it.
+# touch (append across runs, don't truncate) + chmod so the container's non-root
+# 'edge' user can write regardless of host/container uid mismatch.
+out_mount=()
+out_flag=()
+if [ -n "$OUT" ]; then
+  out_dir="$(cd "$(dirname "$OUT")" 2>/dev/null && pwd)" \
+    || die "OUT directory not found: $(dirname "$OUT")"
+  out_abs="$out_dir/$(basename "$OUT")"
+  touch "$out_abs" || die "cannot create OUT file: $out_abs"
+  chmod 666 "$out_abs" 2>/dev/null || true
+  out_mount=(-v "$out_abs:/app/updates.log")
+  out_flag=(--out=/app/updates.log)
+fi
 
 # TLS paths point at certs baked into the image at /app/certs/ (see Dockerfile).
 if [ "$TLS" = true ]; then
@@ -72,14 +89,17 @@ echo "[run-gnmi-peer] starting '$CONTAINER' from '$IMAGE' …"
 docker run -d --name "$CONTAINER" \
   -p "${LOCAL_PORT}:${LOCAL_PORT}" \
   -v "${CONFIG}:/app/command/endpoint.lua:ro" \
-  "$IMAGE" /app/gnmi_peer --config=/app/command/endpoint.lua --headless=true >/dev/null
+  "${out_mount[@]}" \
+  "$IMAGE" /app/gnmi_peer --config=/app/command/endpoint.lua --headless=true \
+  "${out_flag[@]}" >/dev/null
 
 # 3. Show what got published and where the device should aim.
 docker ps --filter "name=${CONTAINER}" \
   --format 'table {{.Names}}\t{{.Status}}\t{{.Ports}}'
 host_ip="$(hostname -I 2>/dev/null | awk '{print $1}')"
 echo "[run-gnmi-peer] device should dial:  ${host_ip:-<this-host-LAN-ip>}:${LOCAL_PORT}"
-echo "[run-gnmi-peer] watch for '[IsAlive] ... -> OK' then '[Set]' / '[remote]' lines."
+echo "[run-gnmi-peer] watch for '[IsAlive] ... -> OK' then '[remote]' update lines."
+[ -n "$OUT" ] && echo "[run-gnmi-peer] saving updates to: $out_abs  (tail -f to watch)"
 
 if [ "$FOLLOW" = 1 ]; then
   echo "[run-gnmi-peer] tailing logs (Ctrl-C to stop; container keeps running) …"

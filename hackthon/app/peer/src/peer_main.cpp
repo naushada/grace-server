@@ -13,7 +13,13 @@
 //
 // Usage:
 //   gnmi_peer [--config=/app/command/endpoint.lua] [--log=/tmp/gnmi_peer.log]
-//             [--headless=true|false]
+//             [--headless=true|false] [--out=<file>]
+//
+//   --out=<file>  Append remote updates (the telemetry the peer receives) to a
+//                 file, in addition to displaying them. Works in both
+//                 front-ends; flushed per line so the file is tail-able live.
+//                 Useful in TUI mode, where stdout is the ncurses display and
+//                 cannot be redirected.
 
 #include "endpoint_config.hpp"
 #include "framework.hpp"
@@ -131,6 +137,7 @@ int main(int argc, const char *argv[]) {
       get_flag(argc, argv, "config", "/app/command/endpoint.lua");
   const std::string log_path =
       get_flag(argc, argv, "log", "/tmp/gnmi_peer.log");
+  const std::string out_path = get_flag(argc, argv, "out", "");
 
   // Front-end selection: honour --headless if given, else auto-detect a TTY.
   const std::string headless_flag = get_flag(argc, argv, "headless", "");
@@ -151,6 +158,23 @@ int main(int argc, const char *argv[]) {
     return 1;
   }
 
+  // Optional: tee remote updates to a file (both front-ends). Appended and
+  // flushed per line so it is tail-able live. Opened here — before the TUI
+  // redirects std::cerr to its logfile — so an open error is visible.
+  std::ofstream out_file;
+  if (!out_path.empty()) {
+    out_file.open(out_path, std::ios::app);
+    if (!out_file) {
+      std::cerr << "[gnmi_peer] warning: cannot open --out file: " << out_path
+                << "\n";
+    } else {
+      out_file << std::unitbuf;
+      out_file << "# gnmi_peer updates — local " << cfg.local.host << ":"
+               << cfg.local.port << " remote " << cfg.remote.host << ":"
+               << cfg.remote.port << "\n";
+    }
+  }
+
   if (headless) {
     // Keep logs on stdout (greppable); flush each line for pipes.
     std::cout << std::unitbuf;
@@ -161,8 +185,11 @@ int main(int argc, const char *argv[]) {
 
     server local_srv(cfg.local.host, cfg.local.port, cfg.tls);
     headless_shell shell(cfg.remote, cfg.tls);
-    update_sink::instance().set(
-        [](const std::string &line) { std::cout << "[remote] " << line << "\n"; });
+    update_sink::instance().set([&out_file](const std::string &line) {
+      std::cout << "[remote] " << line << "\n";
+      if (out_file)
+        out_file << line << "\n";
+    });
 
     run_evt_loop{}();
     update_sink::instance().clear();
@@ -190,8 +217,11 @@ int main(int argc, const char *argv[]) {
 
   server local_srv(cfg.local.host, cfg.local.port, cfg.tls);
   gnmi_tui tui(cfg.local, cfg.remote, cfg.tls, cfg.colors);
-  update_sink::instance().set(
-      [&tui](const std::string &line) { tui.println("[remote] " + line); });
+  update_sink::instance().set([&tui, &out_file](const std::string &line) {
+    tui.println("[remote] " + line);
+    if (out_file)
+      out_file << line << "\n";
+  });
 
   run_evt_loop{}();
 
