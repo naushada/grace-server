@@ -172,7 +172,7 @@ int main(int argc, const char *argv[]) {
             << " tls=" << (cfg.tls.enabled ? "ON" : "OFF") << "\n";
 
   server local_srv(cfg.local.host, cfg.local.port, cfg.tls);
-  gnmi_tui tui(cfg.remote, cfg.tls);
+  gnmi_tui tui(cfg.remote, cfg.tls, cfg.colors);
   update_sink::instance().set(
       [&tui](const std::string &line) { tui.println("[remote] " + line); });
 

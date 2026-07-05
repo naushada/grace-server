@@ -27,4 +27,16 @@ return {
     key     = "",
     ca      = "",
   },
+
+  -- Optional TUI palette (interactive mode only). Foreground colours on the
+  -- terminal's own background. Each entry accepts a base colour
+  -- (black/red/green/yellow/blue/magenta/cyan/white), the aliases
+  -- amber(=yellow)/grey, the attributes dim/bold, bright-<colour>, or
+  -- default/none. Omit `colors` (or any key) to keep the defaults below.
+  colors = {
+    remote = "cyan",   -- [remote] pushes (the "diff")
+    ok     = "green",  -- [set]/[get] OK
+    error  = "amber",  -- errors / usage
+    echo   = "dim",    -- echoed commands
+  },
 }

@@ -176,6 +176,16 @@ bool load_peer_config(const std::string &path, peer_config &out,
   if (!resolve_endpoint(*remoteT, out.remote, err, "remote"))
     return false;
 
+  // Optional colors table (TUI palette). Missing keys keep their defaults.
+  if (const entry_type *colE = find_member(root, "colors")) {
+    if (const table_type *colT = as_table(*colE)) {
+      read_opt_string(*colT, "remote", out.colors.remote);
+      read_opt_string(*colT, "ok", out.colors.ok);
+      read_opt_string(*colT, "error", out.colors.error);
+      read_opt_string(*colT, "echo", out.colors.echo);
+    }
+  }
+
   // Optional tls table.
   if (const entry_type *tlsE = find_member(root, "tls")) {
     if (const table_type *tlsT = as_table(*tlsE)) {
