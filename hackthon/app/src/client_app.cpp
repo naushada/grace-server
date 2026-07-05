@@ -3,7 +3,9 @@
 
 #include "client_app.hpp"
 #include "framework.hpp"
+#include "gnmi_util.hpp"
 #include "server_app.hpp"
+#include "update_sink.hpp"
 
 // Generated protobuf headers (produced by protoc at build time under
 // ${CMAKE_BINARY_DIR}/app/proto_gen/).
@@ -132,21 +134,31 @@ void connected_client::register_gnmi_handlers() {
                   << " delete_count=" << req.delete__size() << "\n";
 
         gnmi::SetResponse resp;
-        // Reflect back each operation as OK.
+        // Reflect back each operation as OK, and forward it to any registered
+        // update_sink so a UI (gnmi_peer TUI) can render what the remote peer
+        // pushed. The sink is a no-op when nothing is registered.
         for (int i = 0; i < req.update_size(); ++i) {
           auto *r = resp.add_response();
           *r->mutable_path() = req.update(i).path();
           r->set_op(gnmi::UpdateResult::UPDATE);
+          update_sink::instance().emit(
+              "UPDATE " + gnmi_util::path_to_string(req.update(i).path()) +
+              " = " + gnmi_util::typed_value_to_string(req.update(i).val()));
         }
         for (int i = 0; i < req.replace_size(); ++i) {
           auto *r = resp.add_response();
           *r->mutable_path() = req.replace(i).path();
           r->set_op(gnmi::UpdateResult::REPLACE);
+          update_sink::instance().emit(
+              "REPLACE " + gnmi_util::path_to_string(req.replace(i).path()) +
+              " = " + gnmi_util::typed_value_to_string(req.replace(i).val()));
         }
         for (int i = 0; i < req.delete__size(); ++i) {
           auto *r = resp.add_response();
           *r->mutable_path() = req.delete_(i);
           r->set_op(gnmi::UpdateResult::DELETE);
+          update_sink::instance().emit(
+              "DELETE " + gnmi_util::path_to_string(req.delete_(i)));
         }
 
         std::string out;

@@ -18,6 +18,7 @@ RUN printf 'Acquire::Check-Valid-Until "false";\nAcquire::Check-Date "false";\n'
     libgtest-dev \
     liblua5.4-dev \
     libreadline-dev \
+    libncurses-dev \
     libmosquitto-dev \
   && rm -rf /var/lib/apt/lists/*
 # Note: grpc_session is implemented directly over nghttp2 (no libgrpc++ needed).
@@ -59,6 +60,7 @@ RUN printf 'Acquire::Check-Valid-Until "false";\nAcquire::Check-Date "false";\n'
     libnghttp2-14 \
     libprotobuf23 \
     libreadline8 \
+    libncurses6 \
     libssl3 \
     zlib1g \
     liblua5.4-0 \
@@ -87,6 +89,7 @@ USER edge
 
 COPY --from=build --chown=edge:cordoba /src/build/app/app /app/app
 COPY --from=build --chown=edge:cordoba /src/build/app/cli/cli_app /app/cli_app
+COPY --from=build --chown=edge:cordoba /src/build/app/peer/gnmi_peer /app/gnmi_peer
 COPY --from=build --chown=edge:cordoba /src/build/app/openvpn/vpn_server /app/vpn_server
 COPY --from=build --chown=edge:cordoba /src/build/app/openvpn/vpn_client /app/vpn_client
 COPY --from=build --chown=edge:cordoba /src/build/app/openvpn/openvpn_server /app/openvpn_server
