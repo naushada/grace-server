@@ -67,7 +67,10 @@ target_include_directories(gnmi_proto PUBLIC
     ${PROTO_GEN_DIR}
     ${Protobuf_INCLUDE_DIRS}
 )
-target_link_libraries(gnmi_proto PUBLIC ${Protobuf_LIBRARIES})
+# zlib (z) is PUBLIC so it propagates to every target that links gnmi_proto —
+# grpc_session.cpp (compiled into app, cli_app, gnmi_peer, the vpn_*/openvpn_*
+# binaries and the test exes) needs it to inflate gzip-compressed gRPC frames.
+target_link_libraries(gnmi_proto PUBLIC ${Protobuf_LIBRARIES} z)
 
 # ---------------------------------------------------------------------------
 # Main application
@@ -88,7 +91,6 @@ target_link_libraries(app PUBLIC
   pthread
   ssl
   crypto
-  z
   ${LIBEVENT_LIBRARIES}
   ${LIBEVENT_OPENSSL_LIBRARIES}
   ${NGHTTP2_LIBRARIES}
