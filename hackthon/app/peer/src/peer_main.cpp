@@ -24,7 +24,9 @@
 
 #include <clocale>
 #include <cstdio>
+#include <cstring>
 #include <fstream>
+#include <langinfo.h>
 #include <iostream>
 #include <string>
 #include <string_view>
@@ -112,8 +114,16 @@ private:
 
 int main(int argc, const char *argv[]) {
   // Use the environment's locale so ncurses renders UTF-8 (box-drawing chars,
-  // arrows) correctly rather than mangling multibyte sequences.
+  // arrows) correctly rather than mangling multibyte sequences. If the env
+  // locale isn't UTF-8 (e.g. a bare container defaults to C), fall back to
+  // C.UTF-8 so the TUI still renders regardless of how it was launched.
   std::setlocale(LC_ALL, "");
+  const char *cs = nl_langinfo(CODESET);
+  if (!cs || (!std::strstr(cs, "UTF-8") && !std::strstr(cs, "utf8") &&
+              !std::strstr(cs, "UTF8"))) {
+    if (!std::setlocale(LC_ALL, "C.UTF-8"))
+      std::setlocale(LC_ALL, "C.utf8");
+  }
 
   const std::string config_path =
       get_flag(argc, argv, "config", "/app/command/endpoint.lua");

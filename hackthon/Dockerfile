@@ -47,6 +47,9 @@ RUN cmake -S . -B build \
 FROM ubuntu:22.04 AS runtime
 
 ENV DEBIAN_FRONTEND=noninteractive
+# UTF-8 locale so the gnmi_peer TUI renders box-drawing / arrows correctly
+# (C.UTF-8 ships with the base image; no locale-gen needed).
+ENV LANG=C.UTF-8
 # Runtime dependencies for the built binaries.
 #   - libevent/libnghttp2/libssl/zlib/libprotobuf: used by `app`
 #   - libreadline8:                               used by `cli_app`
