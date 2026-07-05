@@ -30,6 +30,10 @@ public:
   // Called exactly once when the exchange completes (success or error).
   using response_cb = std::function<void(const response &)>;
 
+  // Called for each streamed SubscribeResponse (serialised protobuf bytes) as
+  // it arrives on a Subscribe stream.
+  using notification_cb = std::function<void(const std::string &response_pb)>;
+
   // Non-blocking push — safe to call from INSIDE a running event loop.
   // Creates a gnmi_connection registered with the shared event base and lets
   // event_base_dispatch drive it.  Completed connections are lazily freed on
@@ -40,6 +44,15 @@ public:
                          const std::string &request_pb,
                          const tls_config &tls = {},
                          response_cb on_done = {});
+
+  // Open a gNMI Subscribe stream. on_notif fires for each SubscribeResponse as
+  // it streams in; on_done fires once when the stream ends (or errors). Safe to
+  // call from inside the running event loop; the connection lives until the
+  // stream closes. Returns immediately.
+  static void subscribe_async(const std::string &host, uint16_t port,
+                              const std::string &request_pb,
+                              const tls_config &tls, notification_cb on_notif,
+                              response_cb on_done = {});
 };
 
 #endif // __gnmi_client_hpp__

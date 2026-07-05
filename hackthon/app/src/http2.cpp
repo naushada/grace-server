@@ -141,6 +141,50 @@ int http2_session::submit_trailer(
   return nghttp2_submit_trailer(m_session, stream_id, nva.data(), nva.size());
 }
 
+// ---- Server-side streaming ------------------------------------------------
+
+int http2_session::submit_response_stream(
+    int32_t stream_id, int status,
+    const std::vector<std::pair<std::string, std::string>> &extra_headers) {
+  auto &ctx = m_streams[stream_id];
+  ctx.resp_body.clear();
+  ctx.streaming = true;
+  ctx.finished = false;
+  ctx.trailer_mode = true; // gRPC closes via a grpc-status trailer
+
+  const std::string status_str = std::to_string(status);
+  std::vector<nghttp2_nv> nva;
+  nva.push_back(make_nv(":status", status_str));
+  for (const auto &[k, v] : extra_headers)
+    nva.push_back(make_nv(k, v));
+
+  nghttp2_data_provider prd{};
+  prd.source.ptr = &ctx;
+  prd.read_callback = response_body_read;
+  return nghttp2_submit_response(m_session, stream_id, nva.data(), nva.size(),
+                                 &prd);
+}
+
+int http2_session::push_stream_data(int32_t stream_id,
+                                    const std::string &chunk) {
+  auto it = m_streams.find(stream_id);
+  if (it == m_streams.end())
+    return -1;
+  it->second.resp_body.append(chunk);
+  // The data provider may have deferred; wake it so it reads the new bytes.
+  nghttp2_session_resume_data(m_session, stream_id);
+  return 0;
+}
+
+int http2_session::finish_stream(int32_t stream_id) {
+  auto it = m_streams.find(stream_id);
+  if (it == m_streams.end())
+    return -1;
+  it->second.finished = true;
+  nghttp2_session_resume_data(m_session, stream_id);
+  return 0;
+}
+
 int32_t http2_session::submit_request(
     const std::string &method, const std::string &path,
     const std::string &authority, const std::string &scheme,
@@ -236,6 +280,9 @@ int http2_session::on_data_chunk_recv(nghttp2_session *, uint8_t /* flags */,
   auto it = self->m_streams.find(stream_id);
   if (it != self->m_streams.end())
     it->second.req.body.append(reinterpret_cast<const char *>(data), len);
+  // Streaming clients decode messages incrementally from each chunk.
+  if (self->m_on_data)
+    self->m_on_data(stream_id, data, len);
   return 0;
 }
 
@@ -276,13 +323,28 @@ ssize_t http2_session::response_body_read(nghttp2_session *, int32_t,
                                           void *) {
   auto *ctx = static_cast<stream_ctx *>(source->ptr);
   auto &body = ctx->resp_body;
+
+  if (body.empty()) {
+    // Streaming and not yet closed: pause the provider until the app pushes
+    // more data (push_stream_data → nghttp2_session_resume_data).
+    if (ctx->streaming && !ctx->finished)
+      return NGHTTP2_ERR_DEFERRED;
+    // Unary with empty body, or a finished stream: signal EOF.
+    *data_flags |= NGHTTP2_DATA_FLAG_EOF;
+    if (ctx->trailer_mode)
+      *data_flags |= NGHTTP2_DATA_FLAG_NO_END_STREAM;
+    return 0;
+  }
+
   const size_t n = std::min(length, body.size());
   std::memcpy(buf, body.data(), n);
   body.erase(0, n);
-  if (body.empty()) {
+
+  // For a streaming response, never set EOF here — more chunks may follow, and
+  // an empty buffer on the next call decides EOF vs DEFERRED. For a unary
+  // response, EOF once the whole body has been drained.
+  if (!ctx->streaming && body.empty()) {
     *data_flags |= NGHTTP2_DATA_FLAG_EOF;
-    // When trailer_mode is set, tell nghttp2 NOT to add END_STREAM on the
-    // DATA frame — we will close the stream via submit_trailer() instead.
     if (ctx->trailer_mode)
       *data_flags |= NGHTTP2_DATA_FLAG_NO_END_STREAM;
   }

@@ -66,7 +66,7 @@ echo "----- peerB logs -----"; echo "$LOGS"; echo "----------------------"
 fail=0
 check() { echo "$LOGS" | grep -qF "$1" && echo "PASS: $1" || { echo "FAIL: $1"; fail=1; }; }
 check "[Set] role=ADMIN update_count=2"
-check "[remote] UPDATE /smoke/leaf = 5"
-check "[remote] UPDATE /smoke/other = up"
+check '"op":"UPDATE","path":"/smoke/leaf","val":"5"'
+check '"op":"UPDATE","path":"/smoke/other","val":"up"'
 
 [ "$fail" -eq 0 ] && echo "SMOKE TEST: PASS" || { echo "SMOKE TEST: FAIL"; exit 1; }

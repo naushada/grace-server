@@ -215,6 +215,11 @@ protected:
   // spinning on a writable fd.
   void raw_watch_write(bool enable);
 
+  // Enable or disable the EV_READ watcher for a raw-fd connection. Disable it
+  // after seeing EOF on the fd — a fd at EOF stays readable, so leaving the
+  // watcher armed busy-loops handle_read().
+  void raw_watch_read(bool enable);
+
   // For inbound peers constructed from a pre-built bufferevent (plain or TLS).
   // vpn_peer uses this after vpn_server calls wrap_accepted().
   evt_io(struct bufferevent *bev, const std::string &peer_host)

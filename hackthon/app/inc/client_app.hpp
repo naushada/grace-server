@@ -4,7 +4,10 @@
 #include "framework.hpp"
 #include "grpc_session.hpp"
 
+#include <cstdint>
 #include <memory>
+#include <string>
+#include <vector>
 
 class server;
 
@@ -49,12 +52,28 @@ public:
   // After that call this object is destroyed — no member access must follow.
   virtual std::int32_t handle_close(const std::int32_t &channel) override;
 
+  // Repeating timer that drives an active gNMI Subscribe STREAM.
+  virtual std::int32_t handle_timeout(int timer_id) override;
+
 private:
-  // Register unary gNMI RPC handlers on m_grpc.
+  // Register unary + streaming gNMI RPC handlers on m_grpc.
   void register_gnmi_handlers();
+
+  // gNMI Subscribe (server-streaming): set up the subscription and push the
+  // first notification + sync_response; STREAM mode then samples on a timer.
+  void start_subscription(std::int32_t stream_id, const std::string &request_pb);
+  // Build and stream one SubscribeResponse notification for the subscribed
+  // paths, carrying the current sample sequence as the value.
+  void send_sub_notification();
 
   server *m_parent;
   std::unique_ptr<grpc_session> m_grpc;
+
+  // Active subscription state (one Subscribe stream per connection).
+  std::int32_t m_sub_stream{-1};
+  std::vector<std::string> m_sub_paths; // subscribed xpaths
+  long long m_sub_seq{0};               // sample counter / synthetic value
+  bool m_sub_streaming{false};          // STREAM (true) vs ONCE (false)
 };
 
 #endif // !__client_app_hpp__

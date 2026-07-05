@@ -284,9 +284,16 @@ return {
 | Command | Effect |
 |---------|--------|
 | `gnmi set <xpath>:<value>[,<xpath>:<value>...]` | One `SetRequest` with one `update[]` per pair (role `ADMIN`) |
-| `gnmi get <xpath>[,<xpath>...]`                 | One `GetRequest` for the listed paths (role `VIEWER`) |
+| `gnmi get <xpath>[,<xpath>...]`                 | One `GetRequest` for the listed paths (role `VIEWER`); updates shown as JSON |
+| `gnmi subscribe <xpath>[,<xpath>...]`           | Open a `Subscribe` STREAM; streamed `SubscribeResponse` notifications render as JSON (`[sub] {…}`) |
 | `help`                                          | Command help |
 | `quit` / `exit` (or Ctrl-D)                     | Leave |
+
+Incoming data (remote `[remote]` Set pushes, Get updates, and `[sub]`
+subscribe notifications) is rendered as **JSON**. Subscribe is server-streaming:
+the target emits an initial notification, then `{"syncResponse":true}`, then a
+live sample every second (this stub target streams a synthetic incrementing
+value since it has no real datastore).
 
 `xpath` uses `/`-separated YANG form, e.g.
 `/interfaces/interface[name=eth0]/config/mtu`. In each `xpath:value` pair the

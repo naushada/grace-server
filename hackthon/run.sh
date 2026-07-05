@@ -239,7 +239,7 @@ EOF
       sh -c "echo 'gnmi set /smoke/leaf:5,/smoke/x:up' | /app/gnmi_peer --config=/app/peerA.lua --headless=true" >/dev/null
     # Wait (bounded) for peerB to log the pushed updates.
     for _ in $(seq 1 15); do
-      if "$engine" logs "$cb" 2>&1 | grep -qF '[remote] UPDATE /smoke/x = up'; then break; fi
+      if "$engine" logs "$cb" 2>&1 | grep -qF '"path":"/smoke/x","val":"up"'; then break; fi
       read -t 1 </dev/null || true
     done
     logs="$("$engine" logs "$cb" 2>&1 || true)"
@@ -247,8 +247,8 @@ EOF
     echo "$aout" | grep -E '^\[set\]' || true
     fail=0
     echo "$aout" | grep -qE '\[set\] OK, 2 result' || { echo "[smoke] FAIL: peerA did not get 2 results"; fail=1; }
-    echo "$logs" | grep -qF '[remote] UPDATE /smoke/leaf = 5' || { echo "[smoke] FAIL: peerB missing /smoke/leaf"; fail=1; }
-    echo "$logs" | grep -qF '[remote] UPDATE /smoke/x = up'   || { echo "[smoke] FAIL: peerB missing /smoke/x"; fail=1; }
+    echo "$logs" | grep -qF '"op":"UPDATE","path":"/smoke/leaf","val":"5"' || { echo "[smoke] FAIL: peerB missing /smoke/leaf"; fail=1; }
+    echo "$logs" | grep -qF '"op":"UPDATE","path":"/smoke/x","val":"up"'    || { echo "[smoke] FAIL: peerB missing /smoke/x"; fail=1; }
     [ "$fail" = 0 ] && echo "[smoke] PASS" || echo "[smoke] FAIL"
     exit "$fail"
     ;;

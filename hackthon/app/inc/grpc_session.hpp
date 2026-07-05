@@ -33,8 +33,24 @@ public:
   using raw_tx_t = std::function<void(const char *data, size_t len)>;
   explicit grpc_session(raw_tx_t tx);
 
+  // A server-streaming RPC handler: receives the request protobuf bytes and the
+  // stream id, and initiates streaming. It returns immediately; the application
+  // pushes response messages later via stream_send() and closes the stream with
+  // stream_finish(). Used for gNMI Subscribe.
+  using stream_handler_t =
+      std::function<void(int32_t stream_id, const std::string &request_pb)>;
+
   // Register a unary RPC handler for path "/package.Service/Method".
   void register_unary(const std::string &path, unary_handler_t handler);
+
+  // Register a server-streaming handler for path "/package.Service/Method".
+  void register_server_stream(const std::string &path, stream_handler_t handler);
+
+  // Send one framed message on an open streaming response.
+  void stream_send(int32_t stream_id, const std::string &message_pb);
+
+  // Close a streaming response with the given grpc-status trailer.
+  void stream_finish(int32_t stream_id, int grpc_status);
 
   // Feed raw bytes from the network.  Returns bytes consumed or <0 on error.
   ssize_t recv(const uint8_t *data, size_t len);
@@ -61,6 +77,7 @@ private:
   http2_session m_h2;
   raw_tx_t m_tx;
   std::unordered_map<std::string, unary_handler_t> m_handlers;
+  std::unordered_map<std::string, stream_handler_t> m_stream_handlers;
 };
 
 #endif // __grpc_session_hpp__

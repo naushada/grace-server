@@ -13,6 +13,7 @@
 
 #include "gnmi/gnmi.pb.h"
 
+#include <cstdio>
 #include <sstream>
 #include <string>
 
@@ -117,6 +118,121 @@ inline std::string typed_value_to_string(const gnmi::TypedValue &v) {
     return v.ascii_val();
   default:
     return "<value>";
+  }
+}
+
+// ---------------------------------------------------------------------------
+// JSON rendering (used to display Set-pushed ops and Subscribe notifications)
+// ---------------------------------------------------------------------------
+
+// Escape a string for embedding inside a JSON string literal.
+inline std::string json_escape(const std::string &s) {
+  std::string o;
+  o.reserve(s.size() + 8);
+  for (char c : s) {
+    switch (c) {
+    case '"': o += "\\\""; break;
+    case '\\': o += "\\\\"; break;
+    case '\n': o += "\\n"; break;
+    case '\r': o += "\\r"; break;
+    case '\t': o += "\\t"; break;
+    default:
+      if (static_cast<unsigned char>(c) < 0x20) {
+        char buf[8];
+        std::snprintf(buf, sizeof(buf), "\\u%04x",
+                      static_cast<unsigned>(static_cast<unsigned char>(c)));
+        o += buf;
+      } else {
+        o += c;
+      }
+    }
+  }
+  return o;
+}
+
+// Render a TypedValue as a JSON value. json_val / json_ietf_val are already
+// JSON text and emitted verbatim; scalars become JSON numbers/booleans;
+// strings are quoted and escaped.
+inline std::string typed_value_to_json(const gnmi::TypedValue &v) {
+  switch (v.value_case()) {
+  case gnmi::TypedValue::kStringVal:
+    return "\"" + json_escape(v.string_val()) + "\"";
+  case gnmi::TypedValue::kIntVal:
+    return std::to_string(v.int_val());
+  case gnmi::TypedValue::kUintVal:
+    return std::to_string(v.uint_val());
+  case gnmi::TypedValue::kBoolVal:
+    return v.bool_val() ? "true" : "false";
+  case gnmi::TypedValue::kDoubleVal:
+    return std::to_string(v.double_val());
+  case gnmi::TypedValue::kJsonVal:
+    return v.json_val().empty() ? "null" : v.json_val();
+  case gnmi::TypedValue::kJsonIetfVal:
+    return v.json_ietf_val().empty() ? "null" : v.json_ietf_val();
+  case gnmi::TypedValue::kAsciiVal:
+    return "\"" + json_escape(v.ascii_val()) + "\"";
+  default:
+    return "null";
+  }
+}
+
+// {"path":"/a/b","val":<json>}
+inline std::string update_to_json(const gnmi::Update &u) {
+  return "{\"path\":\"" + json_escape(path_to_string(u.path())) +
+         "\",\"val\":" + typed_value_to_json(u.val()) + "}";
+}
+
+// One Set-pushed operation: {"op":"UPDATE","path":"/a/b","val":<json>}.
+// val==nullptr (DELETE) omits the "val" field.
+inline std::string op_to_json(const std::string &op, const gnmi::Path &path,
+                              const gnmi::TypedValue *val) {
+  std::string s = "{\"op\":\"" + op + "\",\"path\":\"" +
+                  json_escape(path_to_string(path)) + "\"";
+  if (val)
+    s += ",\"val\":" + typed_value_to_json(*val);
+  s += "}";
+  return s;
+}
+
+// Notification -> {"timestamp":..,"prefix":"..","update":[..],"delete":[..]}
+inline std::string notification_to_json(const gnmi::Notification &n) {
+  std::string s = "{\"timestamp\":" + std::to_string(n.timestamp());
+  const std::string pfx = path_to_string(n.prefix());
+  if (pfx != "/")
+    s += ",\"prefix\":\"" + json_escape(pfx) + "\"";
+  s += ",\"update\":[";
+  for (int i = 0; i < n.update_size(); ++i) {
+    if (i)
+      s += ",";
+    s += update_to_json(n.update(i));
+  }
+  s += "]";
+  if (n.delete__size() > 0) {
+    s += ",\"delete\":[";
+    for (int i = 0; i < n.delete__size(); ++i) {
+      if (i)
+        s += ",";
+      s += "\"" + json_escape(path_to_string(n.delete_(i))) + "\"";
+    }
+    s += "]";
+  }
+  s += "}";
+  return s;
+}
+
+// SubscribeResponse -> JSON: {"update":<notif>} | {"syncResponse":true} | {"error":..}
+inline std::string
+subscribe_response_to_json(const gnmi::SubscribeResponse &r) {
+  switch (r.response_case()) {
+  case gnmi::SubscribeResponse::kUpdate:
+    return "{\"update\":" + notification_to_json(r.update()) + "}";
+  case gnmi::SubscribeResponse::kSyncResponse:
+    return std::string("{\"syncResponse\":") +
+           (r.sync_response() ? "true" : "false") + "}";
+  case gnmi::SubscribeResponse::kError:
+    return "{\"error\":\"" + json_escape(r.error().message()) + "\"}";
+  default:
+    return "{}";
   }
 }
 

@@ -27,6 +27,7 @@ public:
 private:
   void do_set(const std::string &spec);
   void do_get(const std::string &spec);
+  void do_subscribe(const std::string &spec);
   void render_set_resp(const gnmi_client::response &r);
   void render_get_resp(const gnmi_client::response &r);
   void help();

@@ -126,9 +126,14 @@ for the full walkthrough.
 | Command | gNMI op | Notes |
 |---------|---------|-------|
 | `gnmi set <xpath>:<value>[,<xpath>:<value>…]` | `SetRequest.update[]` | Role `ADMIN`. One update per comma-pair; value is everything after the **first** `:`. |
-| `gnmi get <xpath>[,<xpath>…]` | `GetRequest` | Role `VIEWER`. |
+| `gnmi get <xpath>[,<xpath>…]` | `GetRequest` | Role `VIEWER`. Updates shown as JSON. |
+| `gnmi subscribe <xpath>[,<xpath>…]` | `Subscribe` (STREAM) | Server-streams `SubscribeResponse` notifications; each rendered as JSON (`[sub] {…}`), ending with `{"syncResponse":true}` then live samples. `sub` is an alias. |
 | `help` | — | Show in-shell help. |
 | `quit` / `exit` (or Ctrl-D) | — | Leave (restores the terminal). |
+
+Incoming data — remote Set pushes (`[remote] …`), Get updates, and Subscribe
+notifications (`[sub] …`) — is rendered as **JSON**, e.g.
+`[sub] {"update":{"timestamp":…,"update":[{"path":"/demo/leaf","val":3}]}}`.
 
 `xpath` is `/`-separated YANG, e.g.
 `/interfaces/interface[name=eth0]/config/mtu`. The `gnmi set` / `gnmi get`

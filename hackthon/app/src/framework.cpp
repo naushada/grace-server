@@ -120,6 +120,12 @@ void evt_io::raw_watch_write(bool enable) {
   else        event_del(m_raw_write_ev.get());
 }
 
+void evt_io::raw_watch_read(bool enable) {
+  if (!m_raw_read_ev) return;
+  if (enable) event_add(m_raw_read_ev.get(), nullptr);
+  else        event_del(m_raw_read_ev.get());
+}
+
 // ---------------------------------------------------------------------------
 // Default evt_io virtual implementations
 // ---------------------------------------------------------------------------

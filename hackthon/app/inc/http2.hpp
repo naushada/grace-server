@@ -34,6 +34,12 @@ public:
   // has been received. The int32_t is the stream id.
   using handler_t = std::function<void(int32_t, const request &)>;
 
+  // Fired for every DATA chunk as it arrives (before END_STREAM). Used by
+  // streaming clients (e.g. gNMI Subscribe) to decode messages incrementally
+  // rather than waiting for the stream to close.
+  using data_handler_t =
+      std::function<void(int32_t stream_id, const uint8_t *data, size_t len)>;
+
   explicit http2_session(bool server_side, handler_t handler = {});
   ~http2_session();
 
@@ -64,6 +70,27 @@ public:
       int32_t stream_id,
       const std::vector<std::pair<std::string, std::string>> &trailers);
 
+  // ---- Server-side streaming (e.g. gNMI Subscribe) ------------------------
+  // Open a response whose body is produced incrementally. Sends the response
+  // HEADERS immediately and keeps the stream open (no END_STREAM); subsequent
+  // data is delivered with push_stream_data() and the stream is closed with
+  // finish_stream() + submit_trailer().
+  int submit_response_stream(
+      int32_t stream_id, int status,
+      const std::vector<std::pair<std::string, std::string>> &extra_headers);
+
+  // Queue another chunk of body on a streaming response and resume delivery.
+  int push_stream_data(int32_t stream_id, const std::string &chunk);
+
+  // Mark a streaming response finished: the data provider flushes any pending
+  // bytes then signals EOF (with NO_END_STREAM so a trailer can follow).
+  int finish_stream(int32_t stream_id);
+
+  // Client-side: observe each DATA chunk as it arrives (for streaming RPCs).
+  void set_data_handler(data_handler_t on_data) {
+    m_on_data = std::move(on_data);
+  }
+
   // Client-side: submit an HTTP/2 request.
   // Returns the new stream id (> 0) or a negative nghttp2 error code.
   int32_t submit_request(
@@ -81,6 +108,8 @@ private:
     request req;
     std::string resp_body; // staging buffer for submit_response data provider
     bool trailer_mode{false}; // when true, data EOF uses NO_END_STREAM (for gRPC trailers)
+    bool streaming{false};    // response body is produced incrementally
+    bool finished{false};     // streaming response has been closed by the app
   };
 
   // Overload for string-literal names (static duration — no temporary created).
@@ -118,6 +147,7 @@ private:
 
   nghttp2_session *m_session{nullptr};
   handler_t m_handler;
+  data_handler_t m_on_data;
   std::unordered_map<int32_t, stream_ctx> m_streams;
 };
 

@@ -7,6 +7,9 @@
 #include "http2.hpp"
 #include "tls_config.hpp"
 
+#include <algorithm>
+#include <arpa/inet.h> // ntohl
+#include <cstring>
 #include <iostream>
 #include <memory>
 #include <vector>
@@ -208,6 +211,146 @@ void gnmi_client::push_async(const std::string &host, uint16_t port,
 
   std::cout << "[gnmi_client] push_async → " << host << ":" << port
             << " rpc=" << rpc_path << " active=" << s_active.size() << '\n';
+}
+
+// ---------------------------------------------------------------------------
+// gnmi_sub_connection — a streaming gNMI Subscribe client.
+//
+// Mirrors gnmi_connection, but decodes SubscribeResponse messages incrementally
+// from each DATA chunk (via http2_session::set_data_handler) instead of waiting
+// for the stream to close. on_notif fires per message; on_done fires once when
+// the stream's trailing HEADERS (grpc-status) arrive or the connection drops.
+// ---------------------------------------------------------------------------
+
+class gnmi_sub_connection : public evt_io {
+public:
+  gnmi_sub_connection(const std::string &host, uint16_t port,
+                      const std::string &request_pb, const tls_config &tls,
+                      gnmi_client::notification_cb on_notif,
+                      gnmi_client::response_cb on_done)
+      : evt_io(host, port, tls.build_client_ctx()), m_host(host),
+        m_request_pb(request_pb), m_on_notif(std::move(on_notif)),
+        m_on_done(std::move(on_done)),
+        m_h2(/*server_side=*/false,
+             [this](int32_t, const http2_session::request &resp) {
+               capture_response(resp);
+             }) {
+    m_h2.set_data_handler(
+        [this](int32_t, const uint8_t *d, size_t n) { on_data(d, n); });
+  }
+
+  ~gnmi_sub_connection() override = default;
+  bool done() const { return m_done; }
+
+  std::int32_t handle_connect(const std::int32_t &,
+                              const std::string &) override {
+    flush();
+    const std::string framed = grpc_session::encode_frame(m_request_pb);
+    m_h2.submit_request(
+        "POST", "/gnmi.gNMI/Subscribe", m_host, "http",
+        {{"content-type", "application/grpc+proto"}, {"te", "trailers"}},
+        framed);
+    flush();
+    return 0;
+  }
+
+  std::int32_t handle_read(const std::int32_t &, const std::string &data,
+                           const bool &dry_run) override {
+    if (dry_run)
+      return 0;
+    const ssize_t consumed = m_h2.recv(
+        reinterpret_cast<const uint8_t *>(data.data()), data.size());
+    if (consumed < 0) {
+      finish({-1, "http2 protocol error", ""});
+      return static_cast<std::int32_t>(consumed);
+    }
+    flush();
+    return static_cast<std::int32_t>(consumed);
+  }
+
+  std::int32_t handle_event(const std::int32_t &,
+                            const std::uint16_t &) override {
+    finish({-1, "timeout", ""});
+    return 0;
+  }
+
+  std::int32_t handle_close(const std::int32_t &) override {
+    finish({0, "stream closed", ""});
+    return 0;
+  }
+
+  std::int32_t handle_write(const std::int32_t &) override { return 0; }
+
+private:
+  void flush() {
+    auto out = m_h2.drain_send_buf();
+    if (!out.empty())
+      tx(out.data(), out.size());
+  }
+
+  // Decode as many complete gRPC frames as m_rxbuf holds and deliver each.
+  void on_data(const uint8_t *d, size_t n) {
+    m_rxbuf.append(reinterpret_cast<const char *>(d), n);
+    for (;;) {
+      if (m_rxbuf.size() < 5)
+        break;
+      uint32_t len_be = 0;
+      std::memcpy(&len_be, m_rxbuf.data() + 1, 4);
+      const uint32_t len = ntohl(len_be);
+      if (m_rxbuf.size() < 5u + len)
+        break;
+      std::string payload = m_rxbuf.substr(5, len);
+      m_rxbuf.erase(0, 5u + len);
+      if (m_on_notif)
+        m_on_notif(payload);
+    }
+  }
+
+  void capture_response(const http2_session::request &resp) {
+    gnmi_client::response r{0, "", ""};
+    auto sit = resp.headers.find("grpc-status");
+    if (sit != resp.headers.end())
+      r.grpc_status = std::stoi(sit->second);
+    auto mit = resp.headers.find("grpc-message");
+    if (mit != resp.headers.end())
+      r.grpc_message = mit->second;
+    finish(std::move(r));
+  }
+
+  void finish(gnmi_client::response r) {
+    if (m_done)
+      return;
+    m_done = true;
+    if (m_on_done)
+      m_on_done(r);
+  }
+
+  std::string m_host;
+  std::string m_request_pb;
+  std::string m_rxbuf;
+  gnmi_client::notification_cb m_on_notif;
+  gnmi_client::response_cb m_on_done;
+  http2_session m_h2;
+  bool m_done{false};
+};
+
+static std::vector<std::shared_ptr<gnmi_sub_connection>> s_active_sub;
+
+void gnmi_client::subscribe_async(const std::string &host, uint16_t port,
+                                  const std::string &request_pb,
+                                  const tls_config &tls,
+                                  notification_cb on_notif,
+                                  response_cb on_done) {
+  s_active_sub.erase(
+      std::remove_if(s_active_sub.begin(), s_active_sub.end(),
+                     [](const auto &c) { return c->done(); }),
+      s_active_sub.end());
+
+  s_active_sub.push_back(std::make_shared<gnmi_sub_connection>(
+      host, port, request_pb, tls, std::move(on_notif), std::move(on_done)));
+
+  std::cout << "[gnmi_client] subscribe_async → " << host << ":" << port
+            << " active=" << s_active_sub.size() << '\n';
 }
 
 #endif // __gnmi_client_cpp__

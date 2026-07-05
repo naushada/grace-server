@@ -54,6 +54,8 @@ bool gnmi_cmd::dispatch(const std::string &line) {
     do_set(spec);
   } else if (verb == "get") {
     do_get(spec);
+  } else if (verb == "subscribe" || verb == "sub") {
+    do_subscribe(spec);
   } else if (verb == "help") {
     help();
   } else if (verb == "quit" || verb == "exit") {
@@ -70,6 +72,8 @@ void gnmi_cmd::help() {
         "(role ADMIN)");
   m_out("  gnmi get <xpath>[,<xpath>...]                  send GetRequest "
         "(role VIEWER)");
+  m_out("  gnmi subscribe <xpath>[,<xpath>...]            stream telemetry "
+        "(SubscribeResponse as JSON)");
   m_out("  help                                           show this help");
   m_out("  quit | exit                                    leave gnmi_peer");
   m_out("notes: xpath uses '/'-separated YANG form, e.g. "
@@ -158,6 +162,56 @@ void gnmi_cmd::do_get(const std::string &spec) {
       [this](const gnmi_client::response &r) { render_get_resp(r); });
 }
 
+void gnmi_cmd::do_subscribe(const std::string &spec) {
+  if (spec.empty()) {
+    m_out("usage: gnmi subscribe <xpath>[,<xpath>...]");
+    return;
+  }
+
+  gnmi::SubscribeRequest req;
+  auto *sl = req.mutable_subscribe();
+  sl->set_mode(gnmi::SubscriptionList::STREAM);
+  sl->mutable_prefix()->set_target("VIEWER");
+  sl->set_encoding(gnmi::JSON);
+
+  int n = 0;
+  std::istringstream ss(spec);
+  std::string path;
+  while (std::getline(ss, path, ',')) {
+    path = trim(path);
+    if (path.empty())
+      continue;
+    *sl->add_subscription()->mutable_path() = gnmi_util::parse_yang_path(path);
+    ++n;
+  }
+  if (n == 0) {
+    m_out("no valid xpaths");
+    return;
+  }
+
+  std::string pb;
+  req.SerializeToString(&pb);
+  m_out("[sub] -> " + m_remote.host + ":" + std::to_string(m_remote.port) +
+        " (" + std::to_string(n) + " path(s), STREAM)");
+
+  gnmi_client::subscribe_async(
+      m_remote.host, m_remote.port, pb, m_tls,
+      [this](const std::string &resp_pb) {
+        gnmi::SubscribeResponse r;
+        if (r.ParseFromString(resp_pb))
+          m_out("[sub] " + gnmi_util::subscribe_response_to_json(r));
+        else
+          m_out("[sub] (unparsable response)");
+      },
+      [this](const gnmi_client::response &r) {
+        if (r.grpc_status > 0)
+          m_out("[sub] stream ended, status=" + std::to_string(r.grpc_status) +
+                (r.grpc_message.empty() ? "" : " msg=" + r.grpc_message));
+        else
+          m_out("[sub] stream ended");
+      });
+}
+
 void gnmi_cmd::render_set_resp(const gnmi_client::response &r) {
   if (r.grpc_status < 0) {
     m_out("[set] transport error: " + r.grpc_message);
@@ -198,6 +252,5 @@ void gnmi_cmd::render_get_resp(const gnmi_client::response &r) {
         " notification(s)");
   for (const auto &notif : resp.notification())
     for (const auto &u : notif.update())
-      m_out("  " + gnmi_util::path_to_string(u.path()) + " = " +
-            gnmi_util::typed_value_to_string(u.val()));
+      m_out("  " + gnmi_util::update_to_json(u));
 }

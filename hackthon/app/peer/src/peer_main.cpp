@@ -68,6 +68,8 @@ public:
     char buf[4096];
     const ssize_t n = ::read(STDIN_FILENO, buf, sizeof(buf));
     if (n == 0) {                      // EOF on stdin
+      // A fd at EOF stays readable; stop the watcher so we don't busy-loop.
+      raw_watch_read(false);
       if (m_dispatched > 0) {          // a sender: let responses land, then quit
         struct timeval tv {
           2, 0

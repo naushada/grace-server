@@ -62,6 +62,25 @@ void grpc_session::register_unary(const std::string &path,
   m_handlers[path] = std::move(handler);
 }
 
+void grpc_session::register_server_stream(const std::string &path,
+                                          stream_handler_t handler) {
+  m_stream_handlers[path] = std::move(handler);
+}
+
+void grpc_session::stream_send(int32_t stream_id,
+                               const std::string &message_pb) {
+  m_h2.push_stream_data(stream_id, encode_frame(message_pb));
+  flush();
+}
+
+void grpc_session::stream_finish(int32_t stream_id, int grpc_status) {
+  m_h2.finish_stream(stream_id); // flush pending DATA + EOF (NO_END_STREAM)
+  flush();
+  m_h2.submit_trailer(stream_id,
+                      {{"grpc-status", std::to_string(grpc_status)}});
+  flush();
+}
+
 ssize_t grpc_session::recv(const uint8_t *data, size_t len) {
   const ssize_t consumed = m_h2.recv(data, len);
   flush();
@@ -93,6 +112,21 @@ void grpc_session::on_request(int32_t stream_id,
     return;
   }
 
+  // Decode the length-prefixed request body once (shared by both paths).
+  std::string body_copy = req.body;
+  const std::string request_pb = decode_frame(body_copy);
+
+  // Server-streaming methods (e.g. gNMI Subscribe): open the response, then
+  // hand control to the application which streams messages over time.
+  auto sit = m_stream_handlers.find(req.path);
+  if (sit != m_stream_handlers.end()) {
+    m_h2.submit_response_stream(
+        stream_id, 200, {{"content-type", "application/grpc+proto"}});
+    flush();
+    sit->second(stream_id, request_pb);
+    return;
+  }
+
   auto it = m_handlers.find(req.path);
   if (it == m_handlers.end()) {
     // Unknown method — gRPC status 12 = UNIMPLEMENTED
@@ -100,11 +134,7 @@ void grpc_session::on_request(int32_t stream_id,
     return;
   }
 
-  // Decode the length-prefixed body
-  std::string body_copy = req.body;
-  const std::string request_pb = decode_frame(body_copy);
-
-  // Invoke the handler
+  // Invoke the unary handler
   auto [grpc_status, response_pb] = it->second(request_pb);
   send_unary_response(stream_id, grpc_status, response_pb);
 }
