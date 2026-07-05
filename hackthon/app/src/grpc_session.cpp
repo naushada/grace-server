@@ -6,6 +6,44 @@
 #include <arpa/inet.h> // htonl / ntohl
 #include <cstring>
 #include <iostream>
+#include <zlib.h> // gzip inflate for compressed gRPC frames
+
+// ---------------------------------------------------------------------------
+// gzip / zlib inflate
+// ---------------------------------------------------------------------------
+// gRPC's per-message Compressed-Flag (byte 0 of the 5-byte frame header) marks
+// a body compressed with the encoding from the grpc-encoding header. Tarana
+// devices advertise gzip. Inflate transparently so RPC handlers always receive
+// raw protobuf. Returns "" on failure. windowBits 15+32 auto-detects a gzip or
+// zlib wrapper.
+namespace {
+std::string gzip_inflate(const std::string &in) {
+  if (in.empty())
+    return {};
+
+  z_stream zs{};
+  if (inflateInit2(&zs, 15 + 32) != Z_OK)
+    return {};
+  zs.next_in = reinterpret_cast<Bytef *>(const_cast<char *>(in.data()));
+  zs.avail_in = static_cast<uInt>(in.size());
+
+  std::string out;
+  char buf[16384];
+  int rc;
+  do {
+    zs.next_out = reinterpret_cast<Bytef *>(buf);
+    zs.avail_out = sizeof(buf);
+    rc = inflate(&zs, Z_NO_FLUSH);
+    if (rc != Z_OK && rc != Z_STREAM_END) { // Z_DATA_ERROR, Z_BUF_ERROR, …
+      inflateEnd(&zs);
+      return {};
+    }
+    out.append(buf, sizeof(buf) - zs.avail_out);
+  } while (rc != Z_STREAM_END);
+  inflateEnd(&zs);
+  return out;
+}
+} // namespace
 
 // ---------------------------------------------------------------------------
 // Wire-format helpers
@@ -27,6 +65,7 @@ std::string grpc_session::decode_frame(std::string &buf) {
   if (buf.size() < 5)
     return {};
 
+  const uint8_t compressed_flag = static_cast<uint8_t>(buf[0]);
   uint32_t len_be = 0;
   std::memcpy(&len_be, buf.data() + 1, 4);
   const uint32_t len = ntohl(len_be);
@@ -36,6 +75,19 @@ std::string grpc_session::decode_frame(std::string &buf) {
 
   std::string payload = buf.substr(5, len);
   buf.erase(0, 5 + len);
+
+  // Compressed-Flag set: the body is compressed (gzip). Inflate so callers get
+  // raw protobuf. On failure, log and return "" — the handler then sees an
+  // empty request rather than garbage.
+  if (compressed_flag & 0x01) {
+    std::string inflated = gzip_inflate(payload);
+    if (inflated.empty() && !payload.empty()) {
+      std::cerr << "[grpc] gzip inflate failed (" << payload.size()
+                << " compressed bytes)\n";
+      return {};
+    }
+    return inflated;
+  }
   return payload;
 }
 
@@ -129,7 +181,11 @@ void grpc_session::on_request(int32_t stream_id,
 
   auto it = m_handlers.find(req.path);
   if (it == m_handlers.end()) {
-    // Unknown method — gRPC status 12 = UNIMPLEMENTED
+    // Unknown method — gRPC status 12 = UNIMPLEMENTED. Log the path so an
+    // operator can see exactly which RPC the client wanted but we don't serve
+    // (e.g. a Tarana tnmi.DialTcc telemetry method that still needs a handler).
+    std::cerr << "[grpc] UNIMPLEMENTED " << req.path << " (" << request_pb.size()
+              << " req bytes)\n";
     send_unary_response(stream_id, 12, "");
     return;
   }

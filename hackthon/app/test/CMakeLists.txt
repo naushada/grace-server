@@ -57,6 +57,7 @@ target_link_libraries(app_tests PRIVATE
   ${NGHTTP2_LIBRARIES}
   ssl
   crypto
+  z
   ${LUA_LIBRARIES}
 )
 
