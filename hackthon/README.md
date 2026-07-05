@@ -112,6 +112,10 @@ echo 'gnmi get /a/b' | ./run.sh --headless gnmi-peer
 `exec`, and `raw`. The manual `docker`/`podman` commands below still work if you
 prefer them.
 
+> **Every command and flag** — scripts, `gnmi_peer`, `app` modes, `cli_app`,
+> and the VPN binaries — is catalogued in
+> [docs/commands.md](docs/commands.md).
+
 ### Manual build
 
 ```bash
