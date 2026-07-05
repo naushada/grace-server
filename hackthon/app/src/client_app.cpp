@@ -12,7 +12,26 @@
 // ${CMAKE_BINARY_DIR}/app/proto_gen/).
 #include "gnmi/gnmi.pb.h"
 
+#include <cstdint>
+#include <cstdio>
+#include <ctime>
 #include <iostream>
+
+// Format a gNMI notification timestamp (nanoseconds since the Unix epoch) as a
+// human-readable UTC instant with millisecond precision.
+static std::string format_ns_timestamp(std::int64_t ts_ns) {
+  if (ts_ns <= 0)
+    return "no-timestamp";
+  const std::time_t secs = static_cast<std::time_t>(ts_ns / 1000000000LL);
+  const long ms = static_cast<long>((ts_ns % 1000000000LL) / 1000000LL);
+  std::tm tm_utc{};
+  gmtime_r(&secs, &tm_utc);
+  char date[32];
+  std::strftime(date, sizeof(date), "%Y-%m-%dT%H:%M:%S", &tm_utc);
+  char out[48];
+  std::snprintf(out, sizeof(out), "%s.%03ldZ", date, ms);
+  return out;
+}
 
 // ---------------------------------------------------------------------------
 // libevent → HTTP/2 → gRPC hook
@@ -229,10 +248,16 @@ void connected_client::register_gnmi_handlers() {
 
         // Emit one readable "path = value" per leaf (full path = prefix + path)
         // instead of a single minified-JSON blob. Far easier to read/scroll/grep.
+        // A header line carries the notification's timestamp (the sample time,
+        // shared by every leaf in this notification) and the update count.
         const gnmi::Notification &n = resp.update();
         const std::string prefix = gnmi_util::path_to_string(n.prefix());
-        std::cout << "[PushSub] stream=" << sid << " " << prefix << " ("
-                  << n.update_size() << " updates, " << n.delete__size()
+        const std::string ts = format_ns_timestamp(n.timestamp());
+        update_sink::instance().emit("── " + ts + " · " +
+                                     std::to_string(n.update_size()) +
+                                     " update(s) ──");
+        std::cout << "[PushSub] stream=" << sid << " " << ts << " " << prefix
+                  << " (" << n.update_size() << " updates, " << n.delete__size()
                   << " deletes)\n";
         for (const auto &u : n.update())
           update_sink::instance().emit(prefix +
