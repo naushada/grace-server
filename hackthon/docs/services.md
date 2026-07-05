@@ -294,9 +294,10 @@ The MQTT relay.  Subscribes to `cli/#` and `resp/#` and re-publishes:
 | **Ports** | listens on `local.endpoint`; connects to `remote.endpoint` |
 | **Transport** | direct gRPC-over-HTTP/2 (no MQTT/VPN) |
 
-Standalone, config-driven, **peer-to-peer** gNMI shell — not a Compose service by
-default, run it directly with `podman run` (see the recipe below). It is both a
-client and a server:
+Standalone, config-driven, **peer-to-peer** gNMI shell. Run it directly with
+`podman run` (recipe below), or bring up a ready-made two-peer stack with
+[docker-compose.gnmi-peer.yml](docker-compose.gnmi-peer.yml) (peer configs in
+`gnmi-peer/`). It is both a client and a server:
 
 * Runs a local gNMI server at `local.endpoint` so a remote peer can push `Set`
   operations to it.

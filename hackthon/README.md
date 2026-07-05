@@ -363,6 +363,25 @@ podman run --rm -it --name peerA --network peer-net \
 Give each peer its own config (`local`/`remote` swapped). A `gnmi set` in A's
 top pane appears as `[remote] UPDATE …` in B's output.
 
+### Run — two peers (docker-compose)
+
+A ready-made two-peer stack lives at
+[docs/docker-compose.gnmi-peer.yml](docs/docker-compose.gnmi-peer.yml) (configs
+in `docs/gnmi-peer/`). Both peers run the TUI; attach to each in its own
+terminal:
+
+```bash
+docker compose -f docs/docker-compose.gnmi-peer.yml up -d
+docker compose -f docs/docker-compose.gnmi-peer.yml attach peerA   # terminal 1
+docker compose -f docs/docker-compose.gnmi-peer.yml attach peerB   # terminal 2
+# in peerA:  gnmi set /demo/leaf:5   → shows in peerB's bottom pane
+# detach without stopping: Ctrl-P Ctrl-Q ;  tear down: … down
+```
+
+Use `podman-compose` (or `podman compose`) in place of `docker compose` on
+Podman hosts. To watch pushes in the logs instead of attaching, add
+`--headless=true` to a peer's command (see the file's header comment).
+
 ### Automated smoke test
 
 `app/peer/test/smoke_two_peer.sh` bakes two configs into a throwaway image, runs
