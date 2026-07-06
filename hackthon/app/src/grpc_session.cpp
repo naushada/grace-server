@@ -12,8 +12,8 @@
 // gzip / zlib inflate
 // ---------------------------------------------------------------------------
 // gRPC's per-message Compressed-Flag (byte 0 of the 5-byte frame header) marks
-// a body compressed with the encoding from the grpc-encoding header. Tarana
-// devices advertise gzip. Inflate transparently so RPC handlers always receive
+// a body compressed with the encoding from the grpc-encoding header (dial-out
+// clients advertise gzip). Inflate transparently so RPC handlers always receive
 // raw protobuf. Returns "" on failure. windowBits 15+32 auto-detects a gzip or
 // zlib wrapper.
 namespace {
@@ -287,7 +287,7 @@ void grpc_session::on_request(int32_t stream_id,
   if (it == m_handlers.end()) {
     // Unknown method — gRPC status 12 = UNIMPLEMENTED. Log the path so an
     // operator can see exactly which RPC the client wanted but we don't serve
-    // (e.g. a Tarana tnmi.DialTcc telemetry method that still needs a handler).
+    // (e.g. a dial-out telemetry method that still needs a handler).
     std::cerr << "[grpc] UNIMPLEMENTED " << req.path << " (" << request_pb.size()
               << " req bytes)\n";
     send_unary_response(stream_id, 12, "");
