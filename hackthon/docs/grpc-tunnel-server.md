@@ -236,6 +236,18 @@ The one-shot commands run an ephemeral gnmi_peer against `tunnel:9339` — the
 stack must be `up` first so the device is registered. For several devices, add
 ports to `tunnel.lua` and run a peer per target.
 
+## Troubleshooting
+
+| Symptom | Cause & fix |
+|---|---|
+| peer: `transport error: connection closed before response`; tunnel: `[tun] refused: target '…' not connected` | The listener's target isn't registered. Either the device isn't dialed in (**no `[reg] +target`** in the log — see below), **or** the `tunnel.lua`/`--target` name doesn't match. The name must equal the device's published `[reg] +target '…'` **character-for-character** (it can contain spaces and `|`) — copy it straight from the log. |
+| No `[reg] +target '…'` ever appears | The device isn't reaching `:58989`. Confirm it's dialing this host in **plaintext** (`tls=OFF`). A `-903` / `[tls] handshake error` means the device is doing **mTLS** against a plaintext tunnel — enable TLS in `tunnel.lua` + mount certs, or point the device at plaintext. Re-trigger the device's dial-out if it dropped (e.g. after the server was restarted). |
+| `gnmi subscribe /x` dumps state once then goes quiet | That's `TARGET_DEFINED` (no interval). For periodic updates add a **SAMPLE interval**: `gnmi subscribe /x 10s`. Omit it and the device decides (usually on-change). |
+| `gnmi get /x → error status=3 …` (e.g. "empty after filtering with sensor:…") | This is the **device's own gNMI response**, round-tripped cleanly through the tunnel — not a tunnel fault. Try a narrower leaf, or subscribe instead; some subtrees are only served on-change/sample. |
+| compose: `all predefined address pools have been fully subnetted` | Too many Docker networks on the host. `docker network prune -f`, then `./service.sh up`. Or expand `default-address-pools` in `/etc/docker/daemon.json`. |
+
+The golden rule: **`gnmi get`/`set`/`subscribe` only work once `[reg] +target '…'` is in the tunnel log and the listener target matches it exactly.**
+
 ## Smoke test (no device)
 
 `docs/tunnel-smoke.sh` uses grpcurl to open `Register` and send
