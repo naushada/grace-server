@@ -155,6 +155,41 @@ if the device's *local* gNMI is TLS, give the client TLS args instead — that T
 is end-to-end to the device (the tunnel only relays bytes), independent of the
 tunnel's own control-channel TLS.
 
+### Which IP does the client use?
+
+The client connects to the **tunnel server's** `--local-port`, **not** the
+device. So `<server>` is the host/IP where the server published `:9339` (e.g.
+`10.0.60.110:9339`) — the server relays onward to the device over the tunnel.
+From another container, use the host's LAN IP (`127.0.0.1` inside a container is
+that container itself, not the host).
+
+### Worked example
+
+Terminal 1 — the tunnel server on host `10.0.60.110`; the device has dialed in
+and published a target:
+```
+$ docker run --rm -p 10.0.60.110:58989:58989 -p 10.0.60.110:9339:9339 \
+    marvel:release /app/app --mode=grpc-tunnel-server \
+      --local-port=9339 --target='<published-target>'
+[main] mode=grpc-tunnel-server port=58989 tls=OFF local=:9339 target=<published-target>
+[reg] Register stream opened (stream=1)
+[reg] +target '<published-target>' (GNMI_GNOI) — 1 total
+```
+
+Terminal 2 — a gNMI client pointed at the **server's** `:9339` (not the device):
+```
+$ gnmic -a 10.0.60.110:9339 --insecure get --path /system/state/hostname
+# → the device's gNMI response, byte-proxied back through the tunnel
+```
+
+Back in Terminal 1, the client connect drives the data plane:
+```
+[tun] bridge tag=1 → '<published-target>'     ← client connected → Session{tag} sent to device
+[tun] Tunnel stream opened (stream=5)          ← device opened Tunnel(tag); bytes now relay
+```
+If `[tun] bridge tag=…` is missing, `--target` didn't match the published name
+exactly (it is often long, with spaces and `|` — quote it).
+
 ## Smoke test (no device)
 
 `docs/tunnel-smoke.sh` uses grpcurl to open `Register` and send
