@@ -138,6 +138,13 @@ static void print_usage(const char *prog) {
     << "                             --gnmi-tls-port is set)\n"
     << "    --gnmi-cert/--gnmi-key/--gnmi-ca  PEM files for TLS\n"
     << "\n"
+    << "  " << prog << " --mode=grpc-tunnel-server [options]\n"
+    << "       Accept dial-out tunnel sessions from targets behind NAT; the\n"
+    << "       server pushes requests down each target's held-open stream.\n"
+    << "    --port=<port>            Listen port                 (default: 58989)\n"
+    << "    --tls=true               Enable TLS\n"
+    << "    --cert/--key/--ca        PEM files for TLS\n"
+    << "\n"
     << "  gnmi-mqtt-client options:\n"
     << "    --mqtt-host=<host>       MQTT broker address       (default: localhost)\n"
     << "    --mqtt-port=<port>       MQTT broker port          (default: 1883)\n"
@@ -260,6 +267,27 @@ int main(int argc, const char *argv[]) {
       server gnmi_svc("0.0.0.0", gnmi_port, single_tls);
       run_evt_loop{}();
     }
+    return 0;
+  }
+
+  // ── grpc-tunnel-server ─────────────────────────────────────────────────────
+  // Accepts dial-out tunnel sessions from targets behind NAT. A target opens
+  // /tunnel.Tunnel/Session (bidi), registers its id, and holds the stream open;
+  // the server can then push requests DOWN to it (gNMI Get/Set/Subscribe over
+  // the tunnel is increment 2). The Session endpoint is registered per accepted
+  // connection by connected_client; this mode just stands up the listener.
+  if (mode == "grpc-tunnel-server") {
+    const uint16_t port = get_port_flag(argc, argv, "port", 58989);
+    const tls_config tls_cfg{
+      get_flag(argc, argv, "tls", "false") == "true",
+      get_flag(argc, argv, "cert", ""),
+      get_flag(argc, argv, "key",  ""),
+      get_flag(argc, argv, "ca",   ""),
+    };
+    std::cout << "[main] mode=grpc-tunnel-server port=" << port
+              << " tls=" << (tls_cfg.enabled ? "ON" : "OFF") << '\n';
+    server tunnel_svc("0.0.0.0", port, tls_cfg);
+    run_evt_loop{}();
     return 0;
   }
 

@@ -290,11 +290,21 @@ int http2_session::on_frame_recv(nghttp2_session *, const nghttp2_frame *frame,
                                  void *user_data) {
   auto *self = static_cast<http2_session *>(user_data);
 
+  // Server-received request HEADERS fully in (stream opened): notify so the
+  // gRPC layer can open a bidirectional-streaming response now. A dial-out
+  // client holds the stream open (no END_STREAM), so the END_STREAM-gated
+  // dispatch below would otherwise never fire for it.
+  if (frame->hd.type == NGHTTP2_HEADERS && self->m_on_request_headers) {
+    auto hit = self->m_streams.find(frame->hd.stream_id);
+    if (hit != self->m_streams.end() && !hit->second.req.path.empty())
+      self->m_on_request_headers(frame->hd.stream_id, hit->second.req);
+  }
+
   // Server-received request DATA: hand each frame to the request-stream handler
   // so the gRPC layer can decode/dispatch client-streaming messages
-  // incrementally. A long-lived push stream (e.g. Tarana
-  // PushSubscriptionUpdates) never sends END_STREAM, so the END_STREAM-gated
-  // dispatch below would never fire and req.body would grow without bound.
+  // incrementally. A long-lived push stream never sends END_STREAM, so the
+  // END_STREAM-gated dispatch below would never fire and req.body would grow
+  // without bound.
   if (frame->hd.type == NGHTTP2_DATA && self->m_on_request_stream) {
     auto sit = self->m_streams.find(frame->hd.stream_id);
     if (sit != self->m_streams.end() && !sit->second.req.path.empty()) {

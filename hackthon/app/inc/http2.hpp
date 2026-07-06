@@ -105,6 +105,15 @@ public:
     m_on_request_stream = std::move(on_req_stream);
   }
 
+  // Server-side: fired once when a request's HEADERS are fully received (stream
+  // opened), regardless of END_STREAM. Lets the gRPC layer open a
+  // bidirectional-streaming response immediately — a dial-out client holds the
+  // request stream open (never half-closes), so the END_STREAM-gated dispatch
+  // would never fire for it.
+  void set_request_headers_handler(handler_t on_req_headers) {
+    m_on_request_headers = std::move(on_req_headers);
+  }
+
   // Client-side: submit an HTTP/2 request.
   // Returns the new stream id (> 0) or a negative nghttp2 error code.
   int32_t submit_request(
@@ -163,6 +172,7 @@ private:
   handler_t m_handler;
   data_handler_t m_on_data;
   request_stream_handler_t m_on_request_stream;
+  handler_t m_on_request_headers;
   std::unordered_map<int32_t, stream_ctx> m_streams;
 };
 
