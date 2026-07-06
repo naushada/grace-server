@@ -4,6 +4,8 @@
 #include "framework.hpp"
 #include "fs_app.hpp"
 
+#include <openssl/err.h>
+
 extern "C" {
 #include <netdb.h>
 #include <sys/socket.h>
@@ -28,6 +30,17 @@ void client_event_cb(struct bufferevent *bev, short events, void *ctx) {
   } else if ((events & BEV_EVENT_EOF) || (events & BEV_EVENT_ERROR)) {
     // Peer closed or network error.  handle_close() is responsible for any
     // parent-notification (e.g. connected_client tells server to erase it).
+    // On error, drain any queued TLS error so a failed (m)TLS handshake reports
+    // WHY (e.g. certificate verify failed, no client cert) instead of a silent
+    // dtor. bufferevent_get_openssl_error() returns 0 for non-TLS bevs.
+    if (events & BEV_EVENT_ERROR) {
+      unsigned long e;
+      while ((e = bufferevent_get_openssl_error(bev)) != 0) {
+        char b[256];
+        ERR_error_string_n(e, b, sizeof(b));
+        std::cerr << "[tls] handshake error: " << b << "\n";
+      }
+    }
     io->handle_close(channel);
   } else if (events & BEV_EVENT_TIMEOUT) {
     io->handle_event(channel, static_cast<std::uint16_t>(events));

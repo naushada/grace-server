@@ -23,8 +23,11 @@ struct tls_config {
     if (!enabled) return nullptr;
     ssl_ctx_ptr ctx{SSL_CTX_new(TLS_server_method())};
     if (!ctx) return nullptr;
-    if (SSL_CTX_use_certificate_file(ctx.get(), cert_file.c_str(),
-                                      SSL_FILETYPE_PEM) != 1 ||
+    // use_certificate_chain_file (not use_certificate_file) so a full-chain PEM
+    // presents the leaf AND its intermediates — a client that lacks the
+    // intermediates can then still verify the server. Works for single-cert
+    // PEMs too.
+    if (SSL_CTX_use_certificate_chain_file(ctx.get(), cert_file.c_str()) != 1 ||
         SSL_CTX_use_PrivateKey_file(ctx.get(), key_file.c_str(),
                                      SSL_FILETYPE_PEM) != 1) {
       std::cerr << "[tls] server ctx: cert/key load failed\n";
