@@ -296,7 +296,7 @@ void connected_client::register_gnmi_handlers() {
                      " unparsable RegisterOp");
           return;
         }
-        switch (op.registration_case()) {
+        switch (op.Registration_case()) {
         case grpctunnel::RegisterOp::kTarget: {
           const grpctunnel::Target &t = op.target();
           if (t.op() == grpctunnel::Target::ADD) {
