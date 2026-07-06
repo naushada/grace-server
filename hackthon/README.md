@@ -94,7 +94,7 @@ app/
 ```bash
 cd hackthon
 
-./build.sh                       # build marvel:release (no tests, fast)
+./build.sh                       # build marvel:dev (no tests, fast)
 ./build.sh --tests on            # build and run the gtest suite
 ./build.sh -t marvel:dev --no-cache
 
@@ -119,21 +119,21 @@ prefer them.
 ### Manual build
 
 ```bash
-docker build -t marvel:release hackthon/
+docker build -t marvel:dev hackthon/
 ```
 
 The Dockerfile compiles everything, runs all gtests (`ctest --output-on-failure`),
 and produces a minimal runtime image.  To skip tests:
 
 ```bash
-docker build --build-arg RUN_TESTS=OFF -t marvel:release hackthon/
+docker build --build-arg RUN_TESTS=OFF -t marvel:dev hackthon/
 ```
 
 On hosts where **Podman** is installed instead of Docker, use `podman build`
 (same flags):
 
 ```bash
-podman build -t marvel:release hackthon/
+podman build -t marvel:dev hackthon/
 ```
 
 Images built inside a dev container via `docker build` are stored in Podman's
@@ -322,9 +322,9 @@ to the build/runtime stages of the Dockerfile) and is copied to
 `/app/gnmi_peer`:
 
 ```bash
-podman build -t marvel:release hackthon/        # or: docker build …
+podman build -t marvel:dev hackthon/        # or: docker build …
 # skip the gtest suite:
-podman build --build-arg RUN_TESTS=OFF -t marvel:release hackthon/
+podman build --build-arg RUN_TESTS=OFF -t marvel:dev hackthon/
 ```
 
 Native build (needs `libevent`, `libnghttp2`, `libprotobuf`+`protoc`, `liblua5.4`,
@@ -343,7 +343,7 @@ Attach a TTY (`-it`) so the two-pane UI renders:
 ```bash
 podman run --rm -it -p 58989:58989 \
   -v "$PWD/hackthon/app/command/endpoint.lua:/app/command/endpoint.lua:ro" \
-  marvel:release \
+  marvel:dev \
   /app/gnmi_peer --config=/app/command/endpoint.lua
 ```
 
@@ -365,14 +365,14 @@ podman network create peer-net
 # Peer B (receiver): local 58990, remote peerA:58989
 podman run -d --name peerB --network peer-net \
   -v "$PWD/hackthon/app/command/endpoint.lua:/app/command/endpoint.lua:ro" \
-  marvel:release \
+  marvel:dev \
   /app/gnmi_peer --headless=true \
     --config=/app/command/endpoint.lua   # edit this config so local=58990, remote=peerA:58989
 
 # Peer A (sender/interactive): local 58989, remote peerB:58990
 podman run --rm -it --name peerA --network peer-net \
   -v "$PWD/hackthon/app/command/endpoint.lua:/app/command/endpoint.lua:ro" \
-  marvel:release \
+  marvel:dev \
   /app/gnmi_peer --config=/app/command/endpoint.lua
 ```
 
@@ -405,8 +405,8 @@ B (receiver) + A (sender) on a network, and asserts B received the pushed
 updates:
 
 ```bash
-podman build --build-arg RUN_TESTS=OFF -t marvel:release hackthon/
-IMAGE=marvel:release hackthon/app/peer/test/smoke_two_peer.sh
+podman build --build-arg RUN_TESTS=OFF -t marvel:dev hackthon/
+IMAGE=marvel:dev hackthon/app/peer/test/smoke_two_peer.sh
 #   → SMOKE TEST: PASS
 ```
 

@@ -32,7 +32,7 @@ Builds the image from the Dockerfile (context = `hackthon/`).
 | Option | Default | Description |
 |--------|---------|-------------|
 | `-e, --engine <docker\|podman>` | auto | Force the container engine |
-| `-t, --image <name[:tag]>` | `marvel:release` | Image tag to build |
+| `-t, --image <name[:tag]>` | `marvel:dev` | Image tag to build |
 | `--tests <on\|off>` | `off` | Run the gtest suite (`ctest`) during the build |
 | `--build-type <type>` | `Debug` | `CMAKE_BUILD_TYPE` |
 | `--no-cache` | — | Build without layer cache |
@@ -76,7 +76,7 @@ Runs any binary in a container, or opens a shell in one.
 | Option | Default | Description |
 |--------|---------|-------------|
 | `-e, --engine <docker\|podman>` | auto | Force the engine |
-| `--image <name[:tag]>` | `marvel:release` | Image to run |
+| `--image <name[:tag]>` | `marvel:dev` | Image to run |
 | `--name <name>` | — | Container name |
 | `--network <net>` | — | Attach to a network |
 | `-p, --port <spec>` | per-command | Publish a port (repeatable), e.g. `58989:58989` |

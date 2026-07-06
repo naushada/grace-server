@@ -33,7 +33,7 @@ A new interactive peer-to-peer gNMI tool:
 
 ## Key codebase facts (already verified)
 
-- Repo root of app is `hackthon/`. Build: `docker build -t marvel:release hackthon/`.
+- Repo root of app is `hackthon/`. Build: `docker build -t marvel:dev hackthon/`.
 - `gnmi_client` (`app/src/gnmi_client.cpp`, hdr `app/inc/gnmi_client.hpp`):
   - `gnmi_client::call(host,port,rpc_path,request_pb,tls={})` — blocking, phased
     (only outside `event_base_dispatch`).
@@ -226,7 +226,7 @@ behavior, how the remote's Set lands in the bottom pane.
 - `xpath:value` first-colon split limitation (module-qualified paths) — document.
 - ncurses resize (SIGWINCH) not handled in v1 — acceptable for first cut.
 - Build cannot be run locally here; validate via
-  `docker build -t marvel:release hackthon/` (or `podman build`).
+  `docker build -t marvel:dev hackthon/` (or `podman build`).
 
 ## Suggested implementation order
 1. `gnmi_util.hpp` → 2. `update_sink.hpp` → 3. edit `client_app.cpp` →

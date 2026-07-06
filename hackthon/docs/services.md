@@ -2,7 +2,7 @@
 
 Reference for every service defined in `docs/docker-compose.yml` and the
 `docs/docker-compose.mqtt.yml` overlay.  All services share the single image
-`marvel:release` built from this repository.
+`marvel:dev` built from this repository.
 
 > For a flag-by-flag reference of every binary and the `build.sh` / `run.sh`
 > wrappers, see [commands.md](commands.md).
@@ -620,7 +620,7 @@ podman images
 **gNMI server (simplest — no TUN device needed)**
 
 ```bash
-podman run --rm -p 58989:58989 marvel:release \
+podman run --rm -p 58989:58989 marvel:dev \
   /app/app --mode=gnmi-server --gnmi-port=58989
 ```
 
@@ -629,7 +629,7 @@ podman run --rm -p 58989:58989 marvel:release \
 ```bash
 podman run --rm -it -p 58989:58989 \
   -v "$PWD/hackthon/app/command/endpoint.lua:/app/command/endpoint.lua:ro" \
-  marvel:release \
+  marvel:dev \
   /app/gnmi_peer --config=/app/command/endpoint.lua
 ```
 
@@ -648,7 +648,7 @@ podman run --rm \
   --device /dev/net/tun \
   -p 1194:1194 \
   -p 58989:58989 \
-  marvel:release \
+  marvel:dev \
   /app/vpn_server \
     --server-ip=10.8.0.1 \
     --pool-start=10.8.0.2 \
@@ -665,7 +665,7 @@ podman run --rm \
   --cap-add NET_RAW \
   --device /dev/net/tun \
   -p 11194:1194 \
-  marvel:release \
+  marvel:dev \
   /app/openvpn_server \
     --port=1194 \
     --mgmt-port=7505
@@ -679,7 +679,7 @@ podman run --rm \
   --cap-add NET_ADMIN \
   --cap-add NET_RAW \
   --device /dev/net/tun \
-  marvel:release \
+  marvel:dev \
   /app/openvpn_client \
     --server=<server-host> \
     --port=1194 \

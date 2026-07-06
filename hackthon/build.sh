@@ -3,7 +3,7 @@
 # build.sh — build the marvel image with docker or podman (whichever is present).
 #
 # The build context is this script's directory (hackthon/), which holds the
-# Dockerfile. Produces an image (default marvel:release) containing all binaries:
+# Dockerfile. Produces an image (default marvel:dev) containing all binaries:
 # /app/app, /app/cli_app, /app/gnmi_peer, /app/vpn_server, /app/vpn_client,
 # /app/openvpn_server, /app/openvpn_client.
 #
@@ -12,7 +12,7 @@
 #
 # Options:
 #   -e, --engine <docker|podman>  Force the container engine (default: auto)
-#   -t, --image  <name[:tag]>     Image tag to build   (default: marvel:release)
+#   -t, --image  <name[:tag]>     Image tag to build   (default: marvel:dev)
 #       --tests  <on|off>         Run the gtest suite during build (default: off)
 #       --build-type <type>       CMAKE_BUILD_TYPE     (default: Debug)
 #       --no-cache                Build without layer cache
@@ -31,7 +31,7 @@ set -eo pipefail
 
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
-IMAGE="marvel:release"
+IMAGE="marvel:dev"
 TESTS="off"
 BUILD_TYPE="Debug"
 ENGINE="${ENGINE:-}"

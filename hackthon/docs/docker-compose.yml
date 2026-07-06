@@ -41,7 +41,7 @@ services:
   #   gNMI requests via gnmi_client::push_async through the VPN tunnel.
   # ─────────────────────────────────────────────────────────────────────────
   vpn-server:
-    image: marvel:release
+    image: marvel:dev
     <<: *tun-caps
     command:
       - /app/vpn_server
@@ -76,7 +76,7 @@ services:
   #   Sits on both vpn-net (tunnel) and app-net (route to gnmi-server-svc).
   # ─────────────────────────────────────────────────────────────────────────
   vpn-client:
-    image: marvel:release
+    image: marvel:dev
     user: root
     cap_add:
       - NET_ADMIN   # TUN + iptables NAT
@@ -108,7 +108,7 @@ services:
   # /app/certs/ (see Dockerfile COPY certs/).  Profile: tls.
   # ─────────────────────────────────────────────────────────────────────────
   vpn-server-tls:
-    image: marvel:release
+    image: marvel:dev
     <<: *tun-caps
     command:
       - /app/vpn_server
@@ -143,7 +143,7 @@ services:
   # device cert.
   # ─────────────────────────────────────────────────────────────────────────
   vpn-client-tls:
-    image: marvel:release
+    image: marvel:dev
     <<: *tun-caps
     command:
       - /app/vpn_client
@@ -175,7 +175,7 @@ services:
   #   Profile: registration, registration-tls, mqtt, mqtt-tls
   # ─────────────────────────────────────────────────────────────────────────
   registration-svc:
-    image: marvel:release
+    image: marvel:dev
     command:
       - /app/app
       - --mode=gnmi-server
@@ -212,7 +212,7 @@ services:
   #   Profile: telemetry, telemetry-tls, mqtt, mqtt-tls
   # ─────────────────────────────────────────────────────────────────────────
   telemetry-svc:
-    image: marvel:release
+    image: marvel:dev
     command:
       - /app/app
       - --mode=gnmi-server
@@ -245,7 +245,7 @@ services:
   # Profile: gnmi
   # ─────────────────────────────────────────────────────────────────────────
   gnmi-server:
-    image: marvel:release
+    image: marvel:dev
     command:
       - /app/app
       - --mode=gnmi-server
@@ -264,7 +264,7 @@ services:
   # Profile: gnmi-tls
   # ─────────────────────────────────────────────────────────────────────────
   gnmi-server-tls:
-    image: marvel:release
+    image: marvel:dev
     command:
       - /app/app
       - --mode=gnmi-server
@@ -287,7 +287,7 @@ services:
   # Profile: gnmi
   # ─────────────────────────────────────────────────────────────────────────
   gnmi-client:
-    image: marvel:release
+    image: marvel:dev
     <<: *tun-caps
     command:
       - /app/vpn_client
@@ -311,7 +311,7 @@ services:
   # gNMI client — TLS probe.  Profile: gnmi-tls
   # ─────────────────────────────────────────────────────────────────────────
   gnmi-client-tls:
-    image: marvel:release
+    image: marvel:dev
     <<: *tun-caps
     command:
       - /app/vpn_client
@@ -426,7 +426,7 @@ services:
   #   No depends_on — starts immediately alongside mosquitto.
   # ─────────────────────────────────────────────────────────────────────────
   gnmi-server-svc:
-    image: marvel:release
+    image: marvel:dev
     command:
       - /app/app
       - --mode=gnmi-server
@@ -445,7 +445,7 @@ services:
   #   Depends on: mosquitto healthy
   # ─────────────────────────────────────────────────────────────────────────
   gnmi-client-svc:
-    image: marvel:release
+    image: marvel:dev
     command:
       - /app/app
       - --mode=gnmi-mqtt-client
@@ -469,7 +469,7 @@ services:
   #   Depends on: mosquitto healthy
   # ─────────────────────────────────────────────────────────────────────────
   openvpn-server:
-    image: marvel:release
+    image: marvel:dev
     <<: *tun-caps
     command:
       - /app/openvpn_server
@@ -504,7 +504,7 @@ services:
   #   Depends on: openvpn-server healthy, gnmi-server-svc started
   # ─────────────────────────────────────────────────────────────────────────
   openvpn-client:
-    image: marvel:release
+    image: marvel:dev
     user: root
     cap_add:
       - NET_ADMIN
@@ -541,7 +541,7 @@ services:
   #               openvpn-server started
   # ─────────────────────────────────────────────────────────────────────────
   cli:
-    image: marvel:release
+    image: marvel:dev
     entrypoint: /app/cli_app
     stdin_open: true
     tty: true

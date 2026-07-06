@@ -3,7 +3,7 @@
 # run.sh — run any marvel binary in a container with docker or podman
 #          (whichever is present), or open a shell in one.
 #
-# The image is built by ./build.sh (default marvel:release) and bundles:
+# The image is built by ./build.sh (default marvel:dev) and bundles:
 #   gnmi-peer  gnmi-server  cli  app  vpn-server  vpn-client
 #   openvpn-server  openvpn-client
 #
@@ -32,7 +32,7 @@
 #
 # Global options:
 #   -e, --engine <docker|podman>   Force the engine        (default: auto)
-#       --image  <name[:tag]>      Image to run            (default: marvel:release)
+#       --image  <name[:tag]>      Image to run            (default: marvel:dev)
 #       --name   <name>            Container name
 #       --network <net>            Attach to a network
 #   -p, --port   <spec>            Publish a port (repeatable), e.g. 58989:58989
@@ -63,7 +63,7 @@ set -eo pipefail
 
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
-IMAGE="${IMAGE:-marvel:release}"
+IMAGE="${IMAGE:-marvel:dev}"
 ENGINE="${ENGINE:-}"
 NAME=""
 NETWORK=""
