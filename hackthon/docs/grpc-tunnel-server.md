@@ -229,7 +229,7 @@ Then drive gNMI either interactively or one-shot (scriptable):
 # — or one-shot over the tunnel —
 ./service.sh get /system/state
 ./service.sh set /interfaces/interface[name=eth0]/config/enabled:true
-./service.sh subscribe /components    # streams until Ctrl-C
+./service.sh subscribe /interfaces 10s # SAMPLE every 10s (omit interval => on-change); Ctrl-C to stop
 ```
 `./service.sh down` tears it down; `ps`, `restart`, `build`, `--help` also exist.
 The one-shot commands run an ephemeral gnmi_peer against `tunnel:9339` — the
