@@ -12,6 +12,7 @@
 #include "tunnel/tunnel.pb.h"
 
 #include <cstdint>
+#include <functional>
 #include <string>
 #include <unordered_map>
 
@@ -60,9 +61,32 @@ public:
     return true;
   }
 
+  // ---- Request correlation (operator gNMI forwarded over the tunnel) --------
+  // A monotonic id tags each forwarded request; the reply carries it back.
+  using reply_fn = std::function<void(int status, const std::string &payload)>;
+
+  std::uint64_t next_id() { return ++m_next_id; }
+
+  void add_pending(std::uint64_t id, reply_fn on_reply) {
+    m_pending[id] = std::move(on_reply);
+  }
+  void cancel_pending(std::uint64_t id) { m_pending.erase(id); }
+
+  // Deliver a target's reply to the waiting operator request, once.
+  void complete(std::uint64_t id, int status, const std::string &payload) {
+    auto it = m_pending.find(id);
+    if (it == m_pending.end())
+      return;
+    reply_fn cb = std::move(it->second);
+    m_pending.erase(it);
+    cb(status, payload);
+  }
+
 private:
   tunnel_hub() = default;
   std::unordered_map<std::string, session> m_sessions;
+  std::unordered_map<std::uint64_t, reply_fn> m_pending;
+  std::uint64_t m_next_id{0};
 };
 
 #endif // __tunnel_hub_hpp__

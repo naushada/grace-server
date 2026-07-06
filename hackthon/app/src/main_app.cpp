@@ -284,8 +284,12 @@ int main(int argc, const char *argv[]) {
       get_flag(argc, argv, "key",  ""),
       get_flag(argc, argv, "ca",   ""),
     };
+    // Operator gNMI Get/Set on this server forward to the target named in
+    // prefix.target, over its held-open tunnel stream.
+    connected_client::s_tunnel_forward = true;
     std::cout << "[main] mode=grpc-tunnel-server port=" << port
-              << " tls=" << (tls_cfg.enabled ? "ON" : "OFF") << '\n';
+              << " tls=" << (tls_cfg.enabled ? "ON" : "OFF")
+              << " (gNMI Get/Set forwarded over tunnel)" << '\n';
     server tunnel_svc("0.0.0.0", port, tls_cfg);
     run_evt_loop{}();
     return 0;
