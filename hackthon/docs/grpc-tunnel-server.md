@@ -54,9 +54,12 @@ service Tunnel {
 `Target{ADD}`/drops `Target{REMOVE}`, acks, and lists live targets in a monitor
 TUI. Run interactively for the dashboard; `--headless=true` for log-only.
 
-**Increment B (todo): Tunnel data plane.** Session negotiation + `Tunnel` byte
-streams + a local gNMI listener that byte-proxies an operator connection to a
-target.
+**Increment B (done): Tunnel data plane.** A local gNMI listener (`--local-port`,
+`--target`) byte-proxies operator connections to a registered target: on accept
+the server sends `Session{tag}` on the target's Register stream; the device opens
+`Tunnel(stream Data)`; the first `Data{tag}` pairs the stream and bytes relay
+both ways (operator socket ⇄ `Data{tag}` ⇄ device's local gNMI). The listener is
+raw TCP, so operator-side TLS (if any) is tunnelled end-to-end to the device.
 
 ---
 
@@ -82,11 +85,15 @@ cd hackthon
 
 # monitor TUI (interactive):
 ./run.sh --image gnmiserver:dev grpc-tunnel-server
-# or plain / headless:
-docker run -d --name tunnel -p 58989:58989 \
-  gnmiserver:dev /app/app --mode=grpc-tunnel-server --port=58989 --headless=true
+# or plain / headless, with the data-plane listener enabled:
+docker run -d --name tunnel -p 58989:58989 -p 9339:9339 \
+  gnmiserver:dev /app/app --mode=grpc-tunnel-server --port=58989 --headless=true \
+    --local-port=9339 --target=dev1
 # TLS: add --tls=true --cert=… --key=…  (no --ca ⇒ one-way TLS, no client cert)
 ```
+
+With `--local-port=9339 --target=dev1`, point a gNMI client at the server's
+`:9339` and its traffic is byte-proxied to `dev1`'s local gNMI over the tunnel.
 
 Headless logs (also shown in the TUI transcript):
 ```
