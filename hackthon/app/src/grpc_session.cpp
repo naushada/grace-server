@@ -106,6 +106,10 @@ grpc_session::grpc_session(raw_tx_t tx)
   m_h2.set_request_stream_handler(
       [this](int32_t sid, const std::string &path, std::string &body,
              bool /*end_stream*/) { on_request_stream(sid, path, body); });
+  m_h2.set_request_headers_handler(
+      [this](int32_t sid, const http2_session::request &req) {
+        on_request_headers(sid, req);
+      });
   // Send the server's initial SETTINGS frame.
   flush();
 }
@@ -127,6 +131,30 @@ void grpc_session::register_server_stream(const std::string &path,
 void grpc_session::register_client_stream(const std::string &path,
                                           client_stream_handler_t handler) {
   m_client_stream_handlers[path] = std::move(handler);
+}
+
+void grpc_session::register_bidi_stream(const std::string &path,
+                                        bidi_open_handler_t on_open,
+                                        client_stream_handler_t on_message) {
+  m_bidi_open_handlers[path] = std::move(on_open);
+  // Incoming messages reuse the client-streaming decode/dispatch path.
+  m_client_stream_handlers[path] = std::move(on_message);
+}
+
+// Open the response side of a bidi stream when the client opens the request
+// stream (HEADERS received). The app can then push frames with stream_send().
+void grpc_session::on_request_headers(int32_t stream_id,
+                                      const http2_session::request &req) {
+  auto it = m_bidi_open_handlers.find(req.path);
+  if (it == m_bidi_open_handlers.end())
+    return; // not a bidi method — normal (unary/server-stream) dispatch applies
+  if (m_bidi_opened[stream_id])
+    return; // already opened for this stream
+  m_bidi_opened[stream_id] = true;
+  m_h2.submit_response_stream(
+      stream_id, 200, {{"content-type", "application/grpc+proto"}});
+  flush();
+  it->second(stream_id);
 }
 
 void grpc_session::on_request_stream(int32_t stream_id,
@@ -202,7 +230,13 @@ void grpc_session::on_request(int32_t stream_id,
   if (cit != m_client_stream_handlers.end()) {
     std::string leftover = req.body;
     on_request_stream(stream_id, req.path, leftover);
-    send_unary_response(stream_id, 0, "");
+    if (m_bidi_open_handlers.count(req.path)) {
+      // Bidi: the streaming response is already open — close it with a trailer.
+      stream_finish(stream_id, 0);
+      m_bidi_opened.erase(stream_id);
+    } else {
+      send_unary_response(stream_id, 0, ""); // pure client-streaming
+    }
     return;
   }
 

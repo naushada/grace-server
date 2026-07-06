@@ -15,6 +15,8 @@
 #                    Use --headless for line-mode (pipe/CI). --config mounts a
 #                    host endpoint.lua. Default port 58989.
 #   gnmi-server      Plain gNMI server: /app/app --mode=gnmi-server (port 58989).
+#   grpc-tunnel-server  Accept dial-out tunnel sessions from targets behind NAT
+#                    (/app/app --mode=grpc-tunnel-server, port 58989).
 #   cli              Interactive readline CLI: /app/cli_app.
 #   app              /app/app — pass the mode yourself, e.g. `-- --mode=client`.
 #   vpn-server       /app/vpn_server        (auto: --root + TUN, port 1194).
@@ -139,6 +141,10 @@ case "$cmd" in
   gnmi-server)
     add_default_port "58989:58989"
     BIN=(/app/app --mode=gnmi-server)
+    ;;
+  grpc-tunnel-server)
+    add_default_port "58989:58989"
+    BIN=(/app/app --mode=grpc-tunnel-server)
     ;;
   cli)
     INTERACTIVE=1

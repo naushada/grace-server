@@ -1,0 +1,40 @@
+syntax = "proto3";
+
+// A minimal, vendor-neutral gRPC tunnel for reaching devices behind NAT.
+//
+// A target (device) dials OUT to the tunnel server and holds a persistent
+// bidirectional stream. The server sends TunnelRequest frames DOWN the stream;
+// the target executes each and replies with a TunnelResponse. This inverts the
+// usual direction so the server can query/control targets it cannot dial into.
+//
+// Payloads are opaque bytes so any RPC can be tunnelled (e.g. a serialised
+// gnmi.GetRequest down, a serialised gnmi.GetResponse back), correlated by id.
+package tunnel;
+
+service Tunnel {
+  // The target opens this stream, sends a Register frame first, then streams
+  // TunnelResponse frames as it answers the server's requests.
+  rpc Session(stream TunnelResponse) returns (stream TunnelRequest);
+}
+
+// First frame a target sends after opening the stream, to identify itself.
+message Register {
+  string target_id = 1; // stable identifier for this device/target
+}
+
+// Server → target (down the stream): a request to execute on the target.
+message TunnelRequest {
+  uint64 id = 1;      // correlates with the TunnelResponse.id
+  string method = 2;  // e.g. "/gnmi.gNMI/Get" — how the target should interpret payload
+  bytes payload = 3;  // serialised request message
+}
+
+// Target → server (up the stream): the target's registration or a reply.
+message TunnelResponse {
+  uint64 id = 1;             // echoes the TunnelRequest.id (0 for register/unsolicited)
+  oneof body {
+    Register register = 2;   // sent once, first, to identify the target
+    bytes payload = 3;       // serialised response message
+    string error = 4;        // error string if the request failed
+  }
+}

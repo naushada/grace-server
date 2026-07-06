@@ -56,6 +56,16 @@ public:
   void register_client_stream(const std::string &path,
                               client_stream_handler_t handler);
 
+  // A bidirectional-streaming RPC: `on_open` fires when the client opens the
+  // stream (the response is opened so the app can push with stream_send();
+  // close with stream_finish()); `on_message` fires once per request message
+  // the client sends. Used for a dial-out tunnel where the target holds the
+  // stream open and the server pushes requests down it.
+  using bidi_open_handler_t = std::function<void(int32_t stream_id)>;
+  void register_bidi_stream(const std::string &path,
+                            bidi_open_handler_t on_open,
+                            client_stream_handler_t on_message);
+
   // Send one framed message on an open streaming response.
   void stream_send(int32_t stream_id, const std::string &message_pb);
 
@@ -82,9 +92,12 @@ public:
 private:
   void on_request(int32_t stream_id, const http2_session::request &req);
   // Decode and dispatch complete gRPC messages buffered on a client-streaming
-  // request, consuming them from `body` so it stays bounded.
+  // (or bidi) request, consuming them from `body` so it stays bounded.
   void on_request_stream(int32_t stream_id, const std::string &path,
                          std::string &body);
+  // Open a bidi response when the client opens a bidi-registered stream.
+  void on_request_headers(int32_t stream_id,
+                          const http2_session::request &req);
   void send_unary_response(int32_t stream_id, int grpc_status,
                             const std::string &body_pb);
 
@@ -94,6 +107,8 @@ private:
   std::unordered_map<std::string, stream_handler_t> m_stream_handlers;
   std::unordered_map<std::string, client_stream_handler_t>
       m_client_stream_handlers;
+  std::unordered_map<std::string, bidi_open_handler_t> m_bidi_open_handlers;
+  std::unordered_map<int32_t, bool> m_bidi_opened; // streams already opened
 };
 
 #endif // __grpc_session_hpp__

@@ -6,11 +6,13 @@
 #include "gnmi_util.hpp"
 #include "server_app.hpp"
 #include "sub_hub.hpp"
+#include "tunnel_hub.hpp"
 #include "update_sink.hpp"
 
 // Generated protobuf headers (produced by protoc at build time under
 // ${CMAKE_BINARY_DIR}/app/proto_gen/).
 #include "gnmi/gnmi.pb.h"
+#include "tunnel/tunnel.pb.h"
 
 #include <cstdint>
 #include <cstdio>
@@ -268,6 +270,44 @@ void connected_client::register_gnmi_handlers() {
           update_sink::instance().emit(
               prefix + gnmi_util::path_to_string(n.delete_(i)) + " = (deleted)");
       });
+
+  // ----- Tunnel: dial-out control channel (server side, increment 1) --------
+  // A target dials in and opens /tunnel.Tunnel/Session, then sends a Register
+  // frame identifying itself. We record it in tunnel_hub so the server can push
+  // TunnelRequest frames DOWN to that target (e.g. gNMI Get/Set/Subscribe —
+  // wired in increment 2). Reply frames are logged for now.
+  m_grpc->register_bidi_stream(
+      "/tunnel.Tunnel/Session",
+      [](std::int32_t sid) {
+        std::cout << "[tunnel] session opened stream=" << sid << "\n";
+      },
+      [this](std::int32_t sid, const std::string &msg_pb) {
+        tunnel::TunnelResponse resp;
+        if (!resp.ParseFromString(msg_pb)) {
+          std::cerr << "[tunnel] stream=" << sid << " unparsable response\n";
+          return;
+        }
+        switch (resp.body_case()) {
+        case tunnel::TunnelResponse::kRegister: {
+          const std::string &tid = resp.register_().target_id();
+          tunnel_hub::instance().add(tid, m_grpc.get(), sid);
+          std::cout << "[tunnel] target '" << tid << "' registered (stream="
+                    << sid << ", " << tunnel_hub::instance().size()
+                    << " connected)\n";
+          break;
+        }
+        case tunnel::TunnelResponse::kPayload:
+          std::cout << "[tunnel] stream=" << sid << " reply id=" << resp.id()
+                    << " (" << resp.payload().size() << " bytes)\n";
+          break;
+        case tunnel::TunnelResponse::kError:
+          std::cout << "[tunnel] stream=" << sid << " error id=" << resp.id()
+                    << ": " << resp.error() << "\n";
+          break;
+        default:
+          break;
+        }
+      });
 }
 
 // ---------------------------------------------------------------------------
@@ -326,6 +366,8 @@ std::int32_t connected_client::handle_close(const std::int32_t &channel) {
   // Drop any Subscribe streams this connection owns before it is destroyed, so
   // the hub never holds a dangling grpc_session pointer.
   sub_hub::instance().remove(this);
+  // Likewise drop any tunnel sessions registered by this connection.
+  tunnel_hub::instance().remove(m_grpc.get());
   // Tell the server to remove this connection from its client map.
   // server::handle_close erases the unique_ptr<connected_client>, destroying
   // this object — no member access is safe after this call returns.
