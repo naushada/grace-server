@@ -119,9 +119,30 @@ to the server — often a pipe-delimited descriptor like
 - If the device disconnects, its targets are dropped
   (`[reg] -target '…' (disconnected)`) until it re-registers.
 
-For several devices behind one server, run **a listener per target**
-(`--local-port=9339 --target=devA`, `--local-port=9340 --target=devB`, …), or
-extend it to pick the target from client metadata (SNI) — not done yet.
+For several devices behind one server, map **one local port per target** in a
+config file (`--config`). The port is the *admin's* choice — the device never
+asks for a port, it only publishes a target name; you decide which local port
+fronts it. Example `docs/tunnel.lua`:
+
+```lua
+return {
+  port = 58989,                                   -- control/tunnel port
+  tls  = { enabled = false },
+  listeners = {                                   -- "port" -> published target
+    ["9339"] = "<device-A published target>",
+    ["9340"] = "<device-B published target>",
+  },
+}
+```
+```bash
+docker run -d -p 58989:58989 -p 9339:9339 -p 9340:9340 \
+  -v "$PWD/tunnel.lua:/app/tunnel.lua:ro" \
+  marvel:release /app/app --mode=grpc-tunnel-server --headless=true \
+    --config=/app/tunnel.lua
+```
+Then `:9339` reaches device A, `:9340` reaches device B — each a transparent
+gNMI pipe. (Alternatively, extend it to pick the target from client metadata
+such as SNI — not done yet.)
 
 ## Using it — gNMI over the tunnel
 
