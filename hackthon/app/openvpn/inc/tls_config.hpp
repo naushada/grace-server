@@ -35,6 +35,13 @@ struct tls_config {
     }
     if (!ca_file.empty()) {
       SSL_CTX_load_verify_locations(ctx.get(), ca_file.c_str(), nullptr);
+      // Advertise the acceptable client-CA names in the CertificateRequest so
+      // the client knows which client certificate to present — without this the
+      // hint is empty and some clients send no cert ("peer did not return a
+      // certificate"). Ownership of the stack transfers to the ctx.
+      if (STACK_OF(X509_NAME) *ca_names =
+              SSL_load_client_CA_file(ca_file.c_str()))
+        SSL_CTX_set_client_CA_list(ctx.get(), ca_names);
       // Require client to present a certificate signed by the CA.
       // CN-based authorisation is then enforced in vpn_peer::handle_connect.
       SSL_CTX_set_verify(ctx.get(),
