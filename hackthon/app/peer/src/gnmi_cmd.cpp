@@ -3,6 +3,9 @@
 
 #include "gnmi/gnmi.pb.h"
 
+#include <cctype>
+#include <cstdint>
+#include <cstdlib>
 #include <sstream>
 #include <utility>
 
@@ -16,6 +19,34 @@ static std::string trim(const std::string &s) {
     return "";
   const auto e = s.find_last_not_of(" \t");
   return s.substr(b, e - b + 1);
+}
+
+// Parse a duration like "10s", "500ms", "250us", "1000ns", "1m", "2h", or a
+// bare number (seconds) into nanoseconds. Returns 0 on parse failure.
+static std::uint64_t parse_duration_ns(const std::string &s) {
+  std::size_t i = 0;
+  while (i < s.size() && (std::isdigit((unsigned char)s[i]) || s[i] == '.'))
+    ++i;
+  if (i == 0)
+    return 0;
+  const double val = std::strtod(s.substr(0, i).c_str(), nullptr);
+  const std::string unit = s.substr(i);
+  double mult;
+  if (unit.empty() || unit == "s")
+    mult = 1e9;
+  else if (unit == "ms")
+    mult = 1e6;
+  else if (unit == "us")
+    mult = 1e3;
+  else if (unit == "ns")
+    mult = 1.0;
+  else if (unit == "m")
+    mult = 60e9;
+  else if (unit == "h")
+    mult = 3600e9;
+  else
+    return 0;
+  return static_cast<std::uint64_t>(val * mult);
 }
 
 static const char *op_name(gnmi::UpdateResult::Operation op) {
@@ -72,8 +103,8 @@ void gnmi_cmd::help() {
         "(role ADMIN)");
   m_out("  gnmi get <xpath>[,<xpath>...]                  send GetRequest "
         "(role VIEWER)");
-  m_out("  gnmi subscribe <xpath>[,<xpath>...]            stream telemetry "
-        "(SubscribeResponse as JSON)");
+  m_out("  gnmi subscribe <xpath>[,<xpath>...] [interval]  stream telemetry; "
+        "interval (10s/500ms/1m) => SAMPLE, omit => on-change");
   m_out("  help                                           show this help");
   m_out("  quit | exit                                    leave gnmi_peer");
   m_out("notes: xpath uses '/'-separated YANG form, e.g. "
@@ -164,8 +195,31 @@ void gnmi_cmd::do_get(const std::string &spec) {
 
 void gnmi_cmd::do_subscribe(const std::string &spec) {
   if (spec.empty()) {
-    m_out("usage: gnmi subscribe <xpath>[,<xpath>...]");
+    m_out("usage: gnmi subscribe <xpath>[,<xpath>...] [interval]   "
+          "(interval e.g. 10s, 500ms, 1m => SAMPLE; omit => on-change)");
     return;
+  }
+
+  // Peel an optional trailing interval token. xpaths start with '/', so a
+  // trailing whitespace-separated token that starts with a digit is the
+  // interval. With one, each subscription is SAMPLE mode at that interval;
+  // without one, TARGET_DEFINED (the device decides — typically the current
+  // state, then on-change).
+  std::string paths = spec;
+  std::uint64_t interval_ns = 0;
+  std::string interval_disp;
+  if (const std::size_t ws = spec.find_last_of(" \t");
+      ws != std::string::npos) {
+    const std::string tail = trim(spec.substr(ws + 1));
+    if (!tail.empty() && std::isdigit((unsigned char)tail[0])) {
+      interval_ns = parse_duration_ns(tail);
+      if (interval_ns == 0) {
+        m_out("bad interval '" + tail + "' (e.g. 10s, 500ms, 1m)");
+        return;
+      }
+      interval_disp = tail;
+      paths = spec.substr(0, ws);
+    }
   }
 
   gnmi::SubscribeRequest req;
@@ -175,13 +229,18 @@ void gnmi_cmd::do_subscribe(const std::string &spec) {
   sl->set_encoding(gnmi::JSON);
 
   int n = 0;
-  std::istringstream ss(spec);
+  std::istringstream ss(paths);
   std::string path;
   while (std::getline(ss, path, ',')) {
     path = trim(path);
     if (path.empty())
       continue;
-    *sl->add_subscription()->mutable_path() = gnmi_util::parse_yang_path(path);
+    auto *sub = sl->add_subscription();
+    *sub->mutable_path() = gnmi_util::parse_yang_path(path);
+    if (interval_ns > 0) {
+      sub->set_mode(gnmi::SAMPLE);
+      sub->set_sample_interval(interval_ns);
+    }
     ++n;
   }
   if (n == 0) {
@@ -192,7 +251,8 @@ void gnmi_cmd::do_subscribe(const std::string &spec) {
   std::string pb;
   req.SerializeToString(&pb);
   m_out("[sub] -> " + m_remote.host + ":" + std::to_string(m_remote.port) +
-        " (" + std::to_string(n) + " path(s), STREAM)");
+        " (" + std::to_string(n) + " path(s), STREAM" +
+        (interval_ns ? ", SAMPLE @" + interval_disp : ", on-change") + ")");
 
   gnmi_client::subscribe_async(
       m_remote.host, m_remote.port, pb, m_tls,
