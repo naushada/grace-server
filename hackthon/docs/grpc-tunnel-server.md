@@ -101,6 +101,60 @@ Headless logs (also shown in the TUI transcript):
 [reg] +target 'dev1' (GNMI_GNOI) — 1 total
 ```
 
+## Target selection
+
+Routing keys off the **target name the device publishes** in its `Register`
+(`Target{ADD, target, target_type}`). The name is the device's choice and opaque
+to the server — often a pipe-delimited descriptor like
+`<serial>|<model>|grpc-tunnel|<sw-version>`.
+
+- The device is the **authority** on target names; the server stores them in
+  `tunnel_hub`, each owned by the connection that ADDed it.
+- To reach a target the server sends `Session{tag, target}` down **that
+  connection's** Register stream; the device uses `target`/`target_type` to
+  choose which local service to bridge to.
+- A local listener is bound to **one** target via `--target` (exact string
+  match). Client → `:9339` ⇒ that one target. A wrong/absent name is refused
+  (`[tun] refused: target '…' not connected`).
+- If the device disconnects, its targets are dropped
+  (`[reg] -target '…' (disconnected)`) until it re-registers.
+
+For several devices behind one server, run **a listener per target**
+(`--local-port=9339 --target=devA`, `--local-port=9340 --target=devB`, …), or
+extend it to pick the target from client metadata (SNI) — not done yet.
+
+## Using it — gNMI over the tunnel
+
+The local listener is a transparent byte pipe, so **any gNMI client** works, and
+**all of Get/Set/Subscribe** ride through unchanged. You do NOT set a
+target/prefix on the client — `:9339` *is* the device.
+
+**gnmic:**
+```bash
+gnmic -a <server>:9339 --insecure capabilities              # simplest check
+gnmic -a <server>:9339 --insecure get --path /system/state
+gnmic -a <server>:9339 --insecure subscribe --path /…
+```
+
+**gnmi_peer** (this repo's tool) — point its `remote` at the listener:
+```lua
+-- endpoint.lua
+return {
+  ["local"]  = { endpoint = { ip = "0.0.0.0",   port = 58989 } },
+  ["remote"] = { endpoint = { ip = "<server>",  port = 9339  } },  -- the tunnel listener
+  tls = { enabled = false },
+}
+```
+```bash
+./run.sh --config ./endpoint.lua gnmi-peer
+# then: gnmi get /system/state   |   gnmi set /a/b:5   |   gnmi subscribe /…
+```
+
+Note: `--insecure` / `tls.enabled=false` means **plaintext** gNMI to the device;
+if the device's *local* gNMI is TLS, give the client TLS args instead — that TLS
+is end-to-end to the device (the tunnel only relays bytes), independent of the
+tunnel's own control-channel TLS.
+
 ## Smoke test (no device)
 
 `docs/tunnel-smoke.sh` uses grpcurl to open `Register` and send
