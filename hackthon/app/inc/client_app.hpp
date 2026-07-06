@@ -42,6 +42,11 @@ public:
 
   server &parent() const { return *m_parent; }
 
+  // When true, connections forward gNMI Get/Set to a dial-out target over the
+  // tunnel (by prefix.target) instead of answering from the local stub. Set by
+  // main_app for --mode=grpc-tunnel-server; process-wide.
+  static bool s_tunnel_forward;
+
   virtual std::int32_t handle_read(const std::int32_t &channel,
                                    const std::string &data,
                                    const bool &dry_run) override;

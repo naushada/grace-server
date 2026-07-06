@@ -16,6 +16,7 @@
 
 #include <cstdint>
 #include <functional>
+#include <memory>
 #include <string>
 #include <unordered_map>
 #include <vector>
@@ -32,6 +33,7 @@ public:
   // raw_tx is called whenever bytes need to be written to the socket.
   using raw_tx_t = std::function<void(const char *data, size_t len)>;
   explicit grpc_session(raw_tx_t tx);
+  ~grpc_session();
 
   // A server-streaming RPC handler: receives the request protobuf bytes and the
   // stream id, and initiates streaming. It returns immediately; the application
@@ -42,6 +44,19 @@ public:
 
   // Register a unary RPC handler for path "/package.Service/Method".
   void register_unary(const std::string &path, unary_handler_t handler);
+
+  // An async unary RPC handler: like unary, but the response is produced later
+  // (possibly after an off-box round-trip). The handler is given a `respond`
+  // callback to invoke — once — when the {status, response} is ready. Used to
+  // forward gNMI over a tunnel and await the target's reply without blocking the
+  // event loop. `respond` self-guards: it is a no-op if this connection has
+  // since closed.
+  using respond_fn =
+      std::function<void(int status, const std::string &response_pb)>;
+  using unary_async_handler_t = std::function<void(
+      int32_t stream_id, const std::string &request_pb, respond_fn respond)>;
+  void register_unary_async(const std::string &path,
+                            unary_async_handler_t handler);
 
   // Register a server-streaming handler for path "/package.Service/Method".
   void register_server_stream(const std::string &path, stream_handler_t handler);
@@ -104,11 +119,15 @@ private:
   http2_session m_h2;
   raw_tx_t m_tx;
   std::unordered_map<std::string, unary_handler_t> m_handlers;
+  std::unordered_map<std::string, unary_async_handler_t> m_async_handlers;
   std::unordered_map<std::string, stream_handler_t> m_stream_handlers;
   std::unordered_map<std::string, client_stream_handler_t>
       m_client_stream_handlers;
   std::unordered_map<std::string, bidi_open_handler_t> m_bidi_open_handlers;
   std::unordered_map<int32_t, bool> m_bidi_opened; // streams already opened
+  // True while this connection is alive; async `respond` callbacks capture a
+  // copy and no-op after the connection closes (see register_unary_async).
+  std::shared_ptr<bool> m_alive{std::make_shared<bool>(true)};
 };
 
 #endif // __grpc_session_hpp__

@@ -114,6 +114,13 @@ grpc_session::grpc_session(raw_tx_t tx)
   flush();
 }
 
+grpc_session::~grpc_session() {
+  // Invalidate any outstanding async `respond` callbacks so a late reply after
+  // this connection closes is a safe no-op rather than a use-after-free.
+  if (m_alive)
+    *m_alive = false;
+}
+
 // ---------------------------------------------------------------------------
 // Public interface
 // ---------------------------------------------------------------------------
@@ -131,6 +138,11 @@ void grpc_session::register_server_stream(const std::string &path,
 void grpc_session::register_client_stream(const std::string &path,
                                           client_stream_handler_t handler) {
   m_client_stream_handlers[path] = std::move(handler);
+}
+
+void grpc_session::register_unary_async(const std::string &path,
+                                        unary_async_handler_t handler) {
+  m_async_handlers[path] = std::move(handler);
 }
 
 void grpc_session::register_bidi_stream(const std::string &path,
@@ -252,6 +264,22 @@ void grpc_session::on_request(int32_t stream_id,
         stream_id, 200, {{"content-type", "application/grpc+proto"}});
     flush();
     sit->second(stream_id, request_pb);
+    return;
+  }
+
+  // Async unary methods (e.g. gNMI forwarded over a tunnel): the handler sends
+  // the response later via the `respond` callback, which is a no-op if this
+  // connection has closed by then.
+  auto ait = m_async_handlers.find(req.path);
+  if (ait != m_async_handlers.end()) {
+    auto alive = m_alive;
+    respond_fn respond = [this, alive, stream_id](int status,
+                                                  const std::string &body) {
+      if (!alive || !*alive)
+        return; // connection closed — drop the late reply
+      send_unary_response(stream_id, status, body);
+    };
+    ait->second(stream_id, request_pb, std::move(respond));
     return;
   }
 

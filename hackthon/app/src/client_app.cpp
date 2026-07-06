@@ -19,6 +19,44 @@
 #include <ctime>
 #include <iostream>
 
+// Process-wide: forward gNMI over the tunnel (set by --mode=grpc-tunnel-server).
+bool connected_client::s_tunnel_forward = false;
+
+// Forward one serialised gNMI request to a dial-out target over the tunnel and
+// arrange for its reply to complete the operator's async response. `respond`
+// self-guards against the operator connection closing first.
+static void forward_gnmi_over_tunnel(const char *method,
+                                     const std::string &target,
+                                     const std::string &req_pb,
+                                     grpc_session::respond_fn respond) {
+  if (target.empty()) {
+    respond(3, ""); // INVALID_ARGUMENT — prefix.target names the device
+    return;
+  }
+  if (!tunnel_hub::instance().connected(target)) {
+    std::cerr << "[tunnel] " << method << " for '" << target
+              << "': target not connected\n";
+    respond(14, ""); // UNAVAILABLE
+    return;
+  }
+  const std::uint64_t id = tunnel_hub::instance().next_id();
+  tunnel::TunnelRequest treq;
+  treq.set_id(id);
+  treq.set_method(method);
+  treq.set_payload(req_pb);
+  tunnel_hub::instance().add_pending(
+      id, [respond](int status, const std::string &payload) {
+        respond(status, payload);
+      });
+  if (!tunnel_hub::instance().send(target, treq)) {
+    tunnel_hub::instance().cancel_pending(id);
+    respond(14, "");
+    return;
+  }
+  std::cout << "[tunnel] -> '" << target << "' " << method << " id=" << id
+            << " (" << req_pb.size() << " req bytes)\n";
+}
+
 // Format a gNMI notification timestamp (nanoseconds since the Unix epoch) as a
 // human-readable UTC instant with millisecond precision.
 static std::string format_ns_timestamp(std::int64_t ts_ns) {
@@ -297,17 +335,50 @@ void connected_client::register_gnmi_handlers() {
           break;
         }
         case tunnel::TunnelResponse::kPayload:
-          std::cout << "[tunnel] stream=" << sid << " reply id=" << resp.id()
-                    << " (" << resp.payload().size() << " bytes)\n";
+          // Reply from the target — complete the waiting operator request.
+          tunnel_hub::instance().complete(resp.id(), 0, resp.payload());
           break;
         case tunnel::TunnelResponse::kError:
-          std::cout << "[tunnel] stream=" << sid << " error id=" << resp.id()
-                    << ": " << resp.error() << "\n";
+          std::cerr << "[tunnel] target error id=" << resp.id() << ": "
+                    << resp.error() << "\n";
+          tunnel_hub::instance().complete(resp.id(), 2 /*UNKNOWN*/, "");
           break;
         default:
           break;
         }
       });
+
+  // ----- gNMI forwarding over the tunnel (--mode=grpc-tunnel-server) ---------
+  // When forwarding is on, Get/Set are answered by relaying to the dial-out
+  // target named in prefix.target (async: the operator's response completes
+  // when the target replies). Registered as async unary, which takes precedence
+  // over the local stubs above for the same path.
+  if (s_tunnel_forward) {
+    m_grpc->register_unary_async(
+        "/gnmi.gNMI/Get",
+        [](std::int32_t /*sid*/, const std::string &req_pb,
+           grpc_session::respond_fn respond) {
+          gnmi::GetRequest req;
+          if (!req.ParseFromString(req_pb)) {
+            respond(3, "");
+            return;
+          }
+          forward_gnmi_over_tunnel("/gnmi.gNMI/Get", req.prefix().target(),
+                                   req_pb, std::move(respond));
+        });
+    m_grpc->register_unary_async(
+        "/gnmi.gNMI/Set",
+        [](std::int32_t /*sid*/, const std::string &req_pb,
+           grpc_session::respond_fn respond) {
+          gnmi::SetRequest req;
+          if (!req.ParseFromString(req_pb)) {
+            respond(3, "");
+            return;
+          }
+          forward_gnmi_over_tunnel("/gnmi.gNMI/Set", req.prefix().target(),
+                                   req_pb, std::move(respond));
+        });
+  }
 }
 
 // ---------------------------------------------------------------------------
