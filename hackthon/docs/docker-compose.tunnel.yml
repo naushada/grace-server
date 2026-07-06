@@ -9,6 +9,10 @@
 #                     tunnel :9339 → target   (internal, on tunnel-net)
 #   gnmi_peer.remote = tunnel:9339 ──► your gnmi get / set / subscribe
 #
+# Easiest: use the wrapper `./service.sh up` / `./service.sh attach` (it builds
+# the image if needed and calls compose for you). The steps below are the raw
+# compose commands it runs.
+#
 # ── Setup ───────────────────────────────────────────────────────────────────
 #   1. Put your device's PUBLISHED target name in tunnel.lua
 #      (listeners["9339"] = "<serial>|<model>|grpc-tunnel|<sw-version>").
