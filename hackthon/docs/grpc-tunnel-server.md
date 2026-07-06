@@ -122,6 +122,20 @@ and per forwarded request:
 An operator points a normal gNMI client at the server and sets
 `prefix.target = <id>` to select the device.
 
+## Smoke test (no device)
+
+`docs/tunnel-smoke.sh` exercises the server with **grpcurl**: it simulates a
+target (opens `Session`, registers), sends an operator gNMI `Get`, and asserts
+the server forwarded it down the tunnel. It verifies the forward direction only
+— a full round-trip needs a real target, since grpcurl can't reply reactively to
+a received `TunnelRequest`.
+
+```bash
+# with the server running (plaintext) on :58989
+CONTAINER=tunnel docs/tunnel-smoke.sh     # PASS = Get was forwarded to the target
+```
+Needs `grpcurl` on PATH; protos are resolved from this repo's `app/idl`.
+
 ---
 
 ## Known limits
