@@ -206,6 +206,8 @@ void tunnel_tui::draw_foot() {
     for (std::size_t i = 0; i < snap.size(); ++i) {
       if (i) s += "   ·   ";
       s += snap[i].target;
+      if (snap[i].local_port != 0)
+        s += "  →  :" + std::to_string(snap[i].local_port);
     }
   }
   const int attr = (m_attr_reg ? m_attr_reg : A_NORMAL) | A_BOLD;

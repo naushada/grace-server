@@ -31,6 +31,7 @@ public:
     std::string target;
     std::string type;
     std::time_t since{0};
+    std::uint16_t local_port{0}; // configured local listener port (0 = none)
   };
 
   static tunnel_hub &instance() {
@@ -75,11 +76,21 @@ public:
     return m_targets.find(target) != m_targets.end();
   }
   std::size_t size() const { return m_targets.size(); }
+
+  // Record the local listener port configured for a target (for the monitor).
+  void set_listener_port(const std::string &target, std::uint16_t port) {
+    m_ports[target] = port;
+  }
+
   std::vector<target_info> snapshot() const {
     std::vector<target_info> out;
     out.reserve(m_targets.size());
-    for (const auto &kv : m_targets)
-      out.push_back({kv.first, kv.second.type, kv.second.since});
+    for (const auto &kv : m_targets) {
+      std::uint16_t port = 0;
+      if (auto pit = m_ports.find(kv.first); pit != m_ports.end())
+        port = pit->second;
+      out.push_back({kv.first, kv.second.type, kv.second.since, port});
+    }
     return out;
   }
 
@@ -204,7 +215,8 @@ private:
   }
 
   std::unordered_map<std::string, reg> m_targets;
-  std::unordered_map<std::int32_t, bridge> m_bridges; // tag -> bridge
+  std::unordered_map<std::string, std::uint16_t> m_ports; // target -> local port
+  std::unordered_map<std::int32_t, bridge> m_bridges;     // tag -> bridge
   std::int32_t m_next_tag{0};
 };
 
