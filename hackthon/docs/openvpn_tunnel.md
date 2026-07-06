@@ -39,7 +39,7 @@ x-tun-caps: &tun-caps
 ## 2. Building the image
 
 ```bash
-docker build -t marvel:release .
+docker build -t marvel:dev .
 ```
 
 ---
@@ -265,9 +265,9 @@ Read it from a Lua script via `require()` or load it with `lua_engine`.
 
 ---
 
-## 9. Docker Compose — running with `marvel:release`
+## 9. Docker Compose — running with `marvel:dev`
 
-The `docs/docker-compose.yml` file runs both services from the `marvel:release` image
+The `docs/docker-compose.yml` file runs both services from the `marvel:dev` image
 on a dedicated bridge network (`172.20.0.0/24`).
 
 ### Services
@@ -496,7 +496,7 @@ safe because no phase calls it while another phase is still inside it.
 ```bash
 # Plain (no TLS)
 docker run -d --name vpn-client --cap-add NET_ADMIN --device /dev/net/tun \
-  --network vpn-net marvel:release \
+  --network vpn-net marvel:dev \
   /app/app --mode=client --server=vpn-server --port=1194 \
            --status=/run/vpn_status.lua \
            --gnmi-probe=true --server-vip=10.8.0.1 --gnmi-port=58989
@@ -974,7 +974,7 @@ docker exec docs-vpn-client-1 ss -tlnp | grep 58989
 
 ```bash
 # Build the image
-docker build -t marvel:release .
+docker build -t marvel:dev .
 
 # Start all mqtt-profile services
 docker compose -f docs/docker-compose.yml --profile mqtt up

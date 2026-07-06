@@ -27,7 +27,7 @@
 # Several devices: add more ports to tunnel.lua listeners (["9340"]=…), publish
 # them, and run one peer per target (remote = tunnel:<port>).
 #
-# Requires the image: ./build.sh -t marvel:release
+# Requires the image: ./build.sh -t marvel:dev
 
 networks:
   tunnel-net:
@@ -36,7 +36,7 @@ networks:
 services:
 
   tunnel:
-    image: marvel:release
+    image: marvel:dev
     command:
       - /app/app
       - --mode=grpc-tunnel-server
@@ -54,7 +54,7 @@ services:
     restart: unless-stopped
 
   peer:
-    image: marvel:release
+    image: marvel:dev
     command:
       - /app/gnmi_peer
       - --config=/app/command/endpoint.lua

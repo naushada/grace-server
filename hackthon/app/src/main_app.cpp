@@ -12,6 +12,7 @@
 
 #include "mqtt_io.hpp"
 #include "tunnel_config.hpp"
+#include "tunnel_hub.hpp"
 #include "tunnel_proxy.hpp"
 #include "tunnel_tui.hpp"
 #include "gnmi/gnmi.pb.h"
@@ -322,9 +323,11 @@ int main(int argc, const char *argv[]) {
 
     server tunnel_svc("0.0.0.0", tcfg.port, tcfg.tls);
     std::vector<std::unique_ptr<tunnel_gnmi_listener>> locals;
-    for (const auto &l : tcfg.listeners)
+    for (const auto &l : tcfg.listeners) {
       locals.push_back(
           std::make_unique<tunnel_gnmi_listener>("0.0.0.0", l.port, l.target));
+      tunnel_hub::instance().set_listener_port(l.target, l.port); // for the TUI
+    }
 
     if (headless) {
       std::cout << "[main] mode=grpc-tunnel-server port=" << tcfg.port

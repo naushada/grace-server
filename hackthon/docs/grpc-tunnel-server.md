@@ -137,7 +137,7 @@ return {
 ```bash
 docker run -d -p 58989:58989 -p 9339:9339 -p 9340:9340 \
   -v "$PWD/tunnel.lua:/app/tunnel.lua:ro" \
-  marvel:release /app/app --mode=grpc-tunnel-server --headless=true \
+  marvel:dev /app/app --mode=grpc-tunnel-server --headless=true \
     --config=/app/tunnel.lua
 ```
 Then `:9339` reaches device A, `:9340` reaches device B — each a transparent
@@ -190,7 +190,7 @@ Terminal 1 — the tunnel server on host `10.0.60.110`; the device has dialed in
 and published a target:
 ```
 $ docker run --rm -p 10.0.60.110:58989:58989 -p 10.0.60.110:9339:9339 \
-    marvel:release /app/app --mode=grpc-tunnel-server \
+    marvel:dev /app/app --mode=grpc-tunnel-server \
       --local-port=9339 --target='<published-target>'
 [main] mode=grpc-tunnel-server port=58989 tls=OFF local=:9339 target=<published-target>
 [reg] Register stream opened (stream=1)

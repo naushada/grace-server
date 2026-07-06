@@ -11,12 +11,12 @@
 # from hackthon/ that contains /app/gnmi_peer.
 #
 # Usage:
-#   podman build --build-arg RUN_TESTS=OFF -t marvel:release hackthon/
-#   IMAGE=marvel:release hackthon/app/peer/test/smoke_two_peer.sh
+#   podman build --build-arg RUN_TESTS=OFF -t marvel:dev hackthon/
+#   IMAGE=marvel:dev hackthon/app/peer/test/smoke_two_peer.sh
 set -euo pipefail
 
 ENGINE="${ENGINE:-podman}"
-IMAGE="${IMAGE:-marvel:release}"
+IMAGE="${IMAGE:-marvel:dev}"
 NET="${NET:-gnmi-peer-smoke-net}"
 WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"; $ENGINE rm -f peerA peerB >/dev/null 2>&1 || true; \

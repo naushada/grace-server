@@ -27,7 +27,7 @@
 #
 # Podman: replace `docker compose` with `podman-compose` (or `podman compose`).
 #
-# Requires the image: `./build.sh` (or `docker build -t marvel:release hackthon/`).
+# Requires the image: `./build.sh` (or `docker build -t marvel:dev hackthon/`).
 
 networks:
   gnmi-peer-net:
@@ -39,7 +39,7 @@ networks:
 services:
 
   peerA:
-    image: marvel:release
+    image: marvel:dev
     command:
       - /app/gnmi_peer
       - --config=/app/command/endpoint.lua
@@ -66,7 +66,7 @@ services:
     restart: "no"
 
   peerB:
-    image: marvel:release
+    image: marvel:dev
     command:
       - /app/gnmi_peer
       - --config=/app/command/endpoint.lua

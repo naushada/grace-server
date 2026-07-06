@@ -123,22 +123,22 @@ COPY --chown=edge:cordoba certs/server.key /app/certs/server.key
 # Custom-protocol VPN binaries (vpn_server / vpn_client):
 #
 #   Plain server:
-#     docker run --cap-add NET_ADMIN --device /dev/net/tun marvel:release \
+#     docker run --cap-add NET_ADMIN --device /dev/net/tun marvel:dev \
 #       /app/vpn_server
 #
 #   TLS server:
-#     docker run --cap-add NET_ADMIN --device /dev/net/tun marvel:release \
+#     docker run --cap-add NET_ADMIN --device /dev/net/tun marvel:dev \
 #       /app/vpn_server --tls=true \
 #                       --cert=/app/certs/server.pem \
 #                       --key=/app/certs/server.key \
 #                       --ca=/app/certs/ca.pem
 #
 #   Plain client:
-#     docker run --cap-add NET_ADMIN --device /dev/net/tun marvel:release \
+#     docker run --cap-add NET_ADMIN --device /dev/net/tun marvel:dev \
 #       /app/vpn_client --server=<host>
 #
 #   TLS client:
-#     docker run --cap-add NET_ADMIN --device /dev/net/tun marvel:release \
+#     docker run --cap-add NET_ADMIN --device /dev/net/tun marvel:dev \
 #       /app/vpn_client --server=<host> --tls=true \
 #                       --cert=/app/certs/client.pem \
 #                       --key=/app/certs/client.key \
@@ -148,11 +148,11 @@ COPY --chown=edge:cordoba certs/server.key /app/certs/server.key
 # Require the system openvpn binary (included via the openvpn package above).
 #
 #   Plain server (no TLS, for testing):
-#     docker run --cap-add NET_ADMIN --device /dev/net/tun marvel:release \
+#     docker run --cap-add NET_ADMIN --device /dev/net/tun marvel:dev \
 #       /app/openvpn_server
 #
 #   TLS server with MQTT forwarding:
-#     docker run --cap-add NET_ADMIN --device /dev/net/tun marvel:release \
+#     docker run --cap-add NET_ADMIN --device /dev/net/tun marvel:dev \
 #       /app/openvpn_server --tls=true \
 #                           --cert=/app/certs/server.pem \
 #                           --key=/app/certs/server.key \
@@ -161,7 +161,7 @@ COPY --chown=edge:cordoba certs/server.key /app/certs/server.key
 #                           --gnmi-port=58989
 #
 #   Client — forward VIP ports to local services:
-#     docker run --cap-add NET_ADMIN --device /dev/net/tun marvel:release \
+#     docker run --cap-add NET_ADMIN --device /dev/net/tun marvel:dev \
 #       /app/openvpn_client --server=<host> \
 #                           --fwd-host=127.0.0.1 \
 #                           --fwd-ports=80,443,58989
