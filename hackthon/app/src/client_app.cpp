@@ -337,7 +337,8 @@ void connected_client::register_gnmi_handlers() {
           break;
         }
         case grpctunnel::RegisterOp::kSession:
-          // Client-side Session ack — session/data setup is increment B.
+          // Client acks a Session we requested; the data stream follows on the
+          // Tunnel RPC below.
           tunnel_log("[reg] session tag=" +
                      std::to_string(op.session().tag()) +
                      (op.session().accept() ? " accept" : ""));
@@ -345,6 +346,30 @@ void connected_client::register_gnmi_handlers() {
         default:
           break;
         }
+      });
+
+  // ----- grpctunnel Tunnel (data plane, increment B) ------------------------
+  // The client opens a Tunnel(stream Data) RPC per session. Data carries the tag
+  // (set on every frame); pair the stream to the bridge and relay bytes to/from
+  // the operator socket. Data{close} tears the bridge down.
+  m_grpc->register_bidi_stream(
+      "/grpctunnel.Tunnel/Tunnel",
+      [](std::int32_t sid) {
+        tunnel_log("[tun] Tunnel stream opened (stream=" +
+                   std::to_string(sid) + ")");
+      },
+      [this](std::int32_t sid, const std::string &msg_pb) {
+        grpctunnel::Data d;
+        if (!d.ParseFromString(msg_pb))
+          return;
+        const std::int32_t tag = d.tag();
+        tunnel_hub::instance().pair_tunnel(tag, m_grpc.get(), sid);
+        if (d.close()) {
+          tunnel_hub::instance().close_from_device(tag);
+          return;
+        }
+        if (!d.data().empty())
+          tunnel_hub::instance().from_device(tag, d.data());
       });
 }
 
