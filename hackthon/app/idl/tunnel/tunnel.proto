@@ -1,40 +1,108 @@
+//
+// Copyright 2019 Google Inc. All Rights Reserved.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//    http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+//
+// Vendored from openconfig/grpctunnel (proto/tunnel/tunnel.proto), version 0.2.
+// Do not edit — this is the upstream wire format the device speaks.
+
 syntax = "proto3";
 
-// A minimal, vendor-neutral gRPC tunnel for reaching devices behind NAT.
-//
-// A target (device) dials OUT to the tunnel server and holds a persistent
-// bidirectional stream. The server sends TunnelRequest frames DOWN the stream;
-// the target executes each and replies with a TunnelResponse. This inverts the
-// usual direction so the server can query/control targets it cannot dial into.
-//
-// Payloads are opaque bytes so any RPC can be tunnelled (e.g. a serialised
-// gnmi.GetRequest down, a serialised gnmi.GetResponse back), correlated by id.
-package tunnel;
+// Package grpctunnel defines a service specification for a TCP over gRPC proxy
+// interface. This interface is set so that the tunnel can act as a transparent
+// TCP proxy between a pair of gRPC client and server endpoints.
+package grpctunnel;
+
+option go_package = "proto/tunnel;grpctunnel";
 
 service Tunnel {
-  // The target opens this stream, sends a Register frame first, then streams
-  // TunnelResponse frames as it answers the server's requests.
-  rpc Session(stream TunnelResponse) returns (stream TunnelRequest);
+  // Register is used to register targets reachable via either the client
+  // or server and request new Tunnel RPC invocations.
+  rpc Register(stream RegisterOp) returns (stream RegisterOp);
+  // Tunnel allows the tunnel client and server to create a bidirectional stream
+  // in which data can be forwarded.
+  rpc Tunnel(stream Data) returns (stream Data);
 }
 
-// First frame a target sends after opening the stream, to identify itself.
-message Register {
-  string target_id = 1; // stable identifier for this device/target
+message Data {
+  int32 tag = 1;   // Tag associated with the initial TCP stream setup.
+  bytes data = 2;  // Bytes received from client connection.
+  bool close = 3;  // Connection has reached EOF.
 }
 
-// Server → target (down the stream): a request to execute on the target.
-message TunnelRequest {
-  uint64 id = 1;      // correlates with the TunnelResponse.id
-  string method = 2;  // e.g. "/gnmi.gNMI/Get" — how the target should interpret payload
-  bytes payload = 3;  // serialised request message
-}
-
-// Target → server (up the stream): the target's registration or a reply.
-message TunnelResponse {
-  uint64 id = 1;             // echoes the TunnelRequest.id (0 for register/unsolicited)
-  oneof body {
-    Register register = 2;   // sent once, first, to identify the target
-    bytes payload = 3;       // serialised response message
-    string error = 4;        // error string if the request failed
+message RegisterOp {
+  oneof Registration {
+    Target target = 1;
+    Session session = 2;
+    Subscription subscription = 3;
   }
+}
+
+enum TargetType {
+  UNKNOWN = 0;
+  SSH = 22;
+  NETCONF_SSH = 830;
+  OPENFLOW = 6653;
+  GNMI_GNOI = 9339;
+  GRIBI = 9340;
+  P4_RUNTIME = 9559;
+}
+
+message Target {
+  enum TargetOp {
+    UNKNOWN = 0;
+    ADD = 1;
+    REMOVE = 2;
+  }
+  TargetOp op = 1;
+  // Used to ack the registration of target and target_type.
+  bool accept = 2;
+  // Target identifies which handler to use for a tunnel stream.
+  string target = 3;
+  // String value of the corresponding TargetType for a standard protocol.
+  // A non-enumerated protocol is supported so long as both tunnel client and
+  // server are in agreement on a particular value.
+  string target_type = 4;
+  string error = 5;
+}
+
+message Session {
+  // The tag associated with the initial TCP stream setup.
+  int32 tag = 1;
+  // Used to ack the connection tag.
+  bool accept = 2;
+  // Target identifies which handler to use for a tunnel stream.
+  string target = 3;
+  // String value of the corresponding TargetType for a standard protocol.
+  // A non-enumerated protocol is supported so long as both tunnel client and
+  // server are in agreement on a particular value.
+  string target_type = 4;
+  // Error allows the register stream to return an error without breaking the
+  // stream.
+  string error = 5;
+}
+
+message Subscription {
+  enum SubscriptionOp {
+    UNKNOWN = 0;
+    SUBCRIBE = 1;
+    UNSUBCRIBE = 2;
+  }
+  SubscriptionOp op = 1;
+  // Used to ack the registration of (un)subscription.
+  bool accept = 2;
+  // String value of the corresponding TargetType for a standard protocol.
+  // Used to filter targets for subscription. If empty, it will subscribe all.
+  string target_type = 3;
+  string error = 4;
 }

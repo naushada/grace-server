@@ -11,14 +11,17 @@
 #include "tls_config.hpp"
 
 #include "mqtt_io.hpp"
+#include "tunnel_tui.hpp"
 #include "gnmi/gnmi.pb.h"
 
 #include <iomanip>
 #include <cstdint>
 #include <cstring>
+#include <fstream>
 #include <iostream>
 #include <sstream>
 #include <string>
+#include <unistd.h> // isatty, STDIN_FILENO
 
 // ---------------------------------------------------------------------------
 // Argument parsing helpers
@@ -139,8 +142,9 @@ static void print_usage(const char *prog) {
     << "    --gnmi-cert/--gnmi-key/--gnmi-ca  PEM files for TLS\n"
     << "\n"
     << "  " << prog << " --mode=grpc-tunnel-server [options]\n"
-    << "       Accept dial-out tunnel sessions from targets behind NAT; the\n"
-    << "       server pushes requests down each target's held-open stream.\n"
+    << "       openconfig/grpctunnel server: tunnel clients (devices behind NAT)\n"
+    << "       dial in and Register targets. Shows a monitor TUI when interactive\n"
+    << "       (use --headless=true for log-only).\n"
     << "    --port=<port>            Listen port                 (default: 58989)\n"
     << "    --tls=true               Enable TLS\n"
     << "    --cert/--key/--ca        PEM files for TLS\n"
@@ -271,11 +275,11 @@ int main(int argc, const char *argv[]) {
   }
 
   // ── grpc-tunnel-server ─────────────────────────────────────────────────────
-  // Accepts dial-out tunnel sessions from targets behind NAT. A target opens
-  // /tunnel.Tunnel/Session (bidi), registers its id, and holds the stream open;
-  // the server can then push requests DOWN to it (gNMI Get/Set/Subscribe over
-  // the tunnel is increment 2). The Session endpoint is registered per accepted
-  // connection by connected_client; this mode just stands up the listener.
+  // openconfig/grpctunnel server: a tunnel client (device behind NAT) dials in,
+  // opens Register, and advertises Target{ADD, target_type=GNMI_GNOI}. This mode
+  // stands up the listener; the Register endpoint is registered per accepted
+  // connection by connected_client. A monitor TUI shows registered targets when
+  // run interactively (Session/Tunnel data-plane byte-proxy is increment B).
   if (mode == "grpc-tunnel-server") {
     const uint16_t port = get_port_flag(argc, argv, "port", 58989);
     const tls_config tls_cfg{
@@ -284,14 +288,28 @@ int main(int argc, const char *argv[]) {
       get_flag(argc, argv, "key",  ""),
       get_flag(argc, argv, "ca",   ""),
     };
-    // Operator gNMI Get/Set on this server forward to the target named in
-    // prefix.target, over its held-open tunnel stream.
-    connected_client::s_tunnel_forward = true;
-    std::cout << "[main] mode=grpc-tunnel-server port=" << port
-              << " tls=" << (tls_cfg.enabled ? "ON" : "OFF")
-              << " (gNMI Get/Set forwarded over tunnel)" << '\n';
+    const std::string hl = get_flag(argc, argv, "headless", "");
+    const bool headless = (hl == "true") ||
+                          (hl != "false" &&
+                           (!isatty(STDIN_FILENO) || !isatty(STDOUT_FILENO)));
     server tunnel_svc("0.0.0.0", port, tls_cfg);
-    run_evt_loop{}();
+    if (headless) {
+      std::cout << "[main] mode=grpc-tunnel-server port=" << port
+                << " tls=" << (tls_cfg.enabled ? "ON" : "OFF") << '\n';
+      run_evt_loop{}();
+    } else {
+      // Interactive monitor TUI. The linked stack logs to std::cout/cerr; send
+      // those to a logfile so ncurses owns the screen (tunnel_log also feeds the
+      // TUI transcript via update_sink).
+      static std::ofstream tlog("/tmp/grpc_tunnel.log", std::ios::app);
+      if (tlog) {
+        std::cout.rdbuf(tlog.rdbuf());
+        std::cerr.rdbuf(tlog.rdbuf());
+        std::cout << std::unitbuf;
+      }
+      tunnel_tui tui(port);
+      run_evt_loop{}();
+    }
     return 0;
   }
 

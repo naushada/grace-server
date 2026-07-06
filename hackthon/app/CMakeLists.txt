@@ -12,6 +12,11 @@ pkg_check_modules(NGHTTP2 REQUIRED libnghttp2)
 find_package(Lua REQUIRED)
 include_directories(${LUA_INCLUDE_DIR})
 
+# Wide ncurses for the grpc-tunnel-server monitor TUI (tunnel_tui.cpp).
+set(CURSES_NEED_NCURSES TRUE)
+set(CURSES_NEED_WIDE TRUE)
+find_package(Curses REQUIRED)
+
 set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -std=c++20 -g -Wall -Wextra")
 
 # ---------------------------------------------------------------------------
@@ -87,13 +92,14 @@ file(GLOB OPENVPN_SOURCES "openvpn/src/*.cpp")
 # built by app/openvpn/CMakeLists.txt as vpn_server / vpn_client.
 list(FILTER OPENVPN_SOURCES EXCLUDE REGEX ".*_main\\.cpp$")
 add_executable(app ${SOURCES} ${OPENVPN_SOURCES})
-target_include_directories(app PRIVATE ${PROTO_GEN_DIR})
+target_include_directories(app PRIVATE ${PROTO_GEN_DIR} ${CURSES_INCLUDE_DIRS})
 target_link_libraries(app PUBLIC
   gnmi_proto
   mosquitto
   pthread
   ssl
   crypto
+  ${CURSES_LIBRARIES}
   ${LIBEVENT_LIBRARIES}
   ${LIBEVENT_OPENSSL_LIBRARIES}
   ${NGHTTP2_LIBRARIES}

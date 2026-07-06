@@ -1,96 +1,76 @@
-# gRPC tunnel server — reach devices behind NAT
+# gRPC tunnel server — openconfig/grpctunnel (reach devices behind NAT)
 
-`app --mode=grpc-tunnel-server` lets the server reach devices it **cannot dial
-into**. The device dials OUT to the server and holds a persistent bidirectional
-gRPC stream open; the server pushes requests DOWN that stream. Once the tunnel
-is up, operator **gNMI Get/Set/Subscribe** ride over it to the device.
+`app --mode=grpc-tunnel-server` is an **openconfig/grpctunnel** server. A device
+behind NAT runs a grpctunnel **client**, dials OUT to this server, and Registers
+the services it fronts (e.g. a `GNMI_GNOI` target). The server can then open a
+data tunnel to that target and byte-proxy a connection to it.
 
-This is the inverse of a normal gNMI target: instead of the collector connecting
-to the device, the device connects to the collector — the standard trick for
-NAT/firewall traversal.
+grpctunnel is a **TCP-over-gRPC byte proxy** — it forwards raw bytes, it does not
+parse gNMI. A gNMI session to a NATed device is tunnelled as an opaque byte
+stream.
+
+The proto is vendored verbatim at `app/idl/tunnel/tunnel.proto` (package
+`grpctunnel`, version 0.2) — the wire format the device speaks.
+
+---
+
+## The protocol
+
+```proto
+service Tunnel {
+  rpc Register(stream RegisterOp) returns (stream RegisterOp);  // control
+  rpc Tunnel(stream Data)         returns (stream Data);        // data (bytes)
+}
+```
+
+- **Register** — the client advertises `Target{op=ADD, target, target_type}`; the
+  server acks (`accept=true`). To reach a target the server sends
+  `Session{tag, target}`; both sides then open a **Tunnel** stream for that tag.
+- **Tunnel** — `Data{tag, data, close}` carries the raw bytes of the proxied
+  connection, multiplexed by tag.
 
 ---
 
 ## Topology
 
 ```
-  Device (behind NAT)                         Server (public / reachable)
-        │                                            │
-        │  1. dial out, open Session ──────────────► │  app --mode=grpc-tunnel-server
-        │  2. send Register{target_id}               │        │
-        │  ◄──────────── TunnelRequest ───────────── │        │  operator gNMI in:
-        │  3. execute gNMI locally                   │        │   Get/Set/Subscribe
-        │  ─────────────── TunnelResponse ─────────► │        ▼   (prefix.target = id)
-        │                                       ┌──────────────────────────────┐
-        │                                       │ tunnel_hub: id → session      │
-        │                                       │ + request correlation by id   │
-        │                                       └──────────────────────────────┘
+  Device (behind NAT)                         Server (reachable)
+   grpctunnel client                          app --mode=grpc-tunnel-server
+        │  Register ──► Target{ADD, GNMI_GNOI} │
+        │  ◄── Target{accept}                  │   monitor TUI lists targets
+        │                                      │
+        │  (Increment B: Session{tag} ◄──────  │   ◄── operator connects
+        │   Tunnel Data{tag} bytes ◄─────────► │       to a local gNMI listener
+        │   → device's local gNMI :9339        │       bytes proxied over Tunnel
 ```
 
-`endpoint.lua` is **not** used — the tunnel server is CLI-flag configured, like
-`--mode=gnmi-server`.
+`endpoint.lua` is not used — CLI-flag configured, like `--mode=gnmi-server`.
 
 ---
 
-## The protocol (`app/idl/tunnel/tunnel.proto`)
+## Status
 
-Vendor-neutral. Payloads are opaque bytes so any RPC can be tunnelled; gNMI is
-carried as serialised gNMI messages, correlated by `id`.
+**Increment A (done): Register.** The server accepts `Register`, records
+`Target{ADD}`/drops `Target{REMOVE}`, acks, and lists live targets in a monitor
+TUI. Run interactively for the dashboard; `--headless=true` for log-only.
 
-```proto
-service Tunnel {
-  rpc Session(stream TunnelResponse) returns (stream TunnelRequest);
-}
-
-message Register      { string target_id = 1; }
-message TunnelRequest { uint64 id = 1; string method = 2; bytes payload = 3; }
-message TunnelResponse {
-  uint64 id = 1;
-  oneof body { Register register = 2; bytes payload = 3; string error = 4; }
-}
-```
-
-The device is the gRPC **client**: it opens `Session`, sends `Register` first,
-then answers each `TunnelRequest` by running the RPC (`method` + `payload`)
-against its local gNMI stack and streaming back `TunnelResponse` frames.
+**Increment B (todo): Tunnel data plane.** Session negotiation + `Tunnel` byte
+streams + a local gNMI listener that byte-proxies an operator connection to a
+target.
 
 ---
 
-## How gNMI flows over the tunnel
+## Architecture (reused transport)
 
-The server also accepts operator gNMI on the same listener. When forwarding is
-on (it is, in `grpc-tunnel-server` mode), a gNMI request selects its target via
-`prefix.target`:
-
-| Operator RPC | Over the tunnel | Reply |
-|---|---|---|
-| `Get` / `Set` (unary) | `TunnelRequest{id, method, payload=<GetRequest…>}` | one `TunnelResponse{id, payload=<GetResponse…>}` completes it |
-| `Subscribe` (server-stream) | same, `method=/gnmi.gNMI/Subscribe` | every `TunnelResponse{id, payload=<SubscribeResponse>}` is relayed to the operator's stream |
-
-Errors: no `prefix.target` → `INVALID_ARGUMENT (3)`; target not connected →
-`UNAVAILABLE (14)`; target reports failure → `UNKNOWN (2)` / stream ends.
-
----
-
-## Architecture
-
-Three reusable pieces, built on the existing gRPC-over-nghttp2 stack:
-
-1. **Bidi transport** — a dial-out client never half-closes, so the server
-   can't wait for END_STREAM to start responding. `http2_session` fires a
-   *headers-received* hook so `grpc_session::register_bidi_stream()` opens the
-   response as soon as the stream opens; incoming frames reuse the
-   client-streaming decode path, outgoing use the server-streaming send path.
-2. **Async unary responses** — `grpc_session::register_unary_async()` hands the
-   handler a `respond` callback to invoke when the reply arrives, so an
-   operator's `Get` never blocks the event loop while the round-trip happens.
-   `respond` self-guards via a shared alive-flag: a late reply after the
-   operator disconnects is a safe no-op.
-3. **`tunnel_hub`** — registry of live target sessions (by `target_id`) plus
-   request correlation by `id`: unary (`add_pending`→`on_target_payload`
-   completes) and streaming (`add_stream` relays each reply). A **target**
-   disconnect fails/ends every request routed to it; an **operator** disconnect
-   drops the relays it owns — no hung requests or streams.
+- **Bidi transport** — Register and Tunnel are both bidi. `http2_session` fires a
+  headers-received hook so `grpc_session::register_bidi_stream()` opens the
+  response as the stream opens (a dial-out client never half-closes); incoming
+  frames reuse the client-streaming decode path, outgoing use the
+  server-streaming send path.
+- **`tunnel_hub`** — registry of registered targets (id → owning Register stream
+  + type + since), cleaned up when a Register stream closes.
+- **`tunnel_tui`** — the monitor: a targets pane (id / type / uptime) over a
+  scrolling event transcript (scrollback + scrollbar + resize), 1s uptime tick.
 
 ---
 
@@ -100,49 +80,22 @@ Three reusable pieces, built on the existing gRPC-over-nghttp2 stack:
 cd hackthon
 ./build.sh -t gnmiserver:dev
 
-# via run.sh:
+# monitor TUI (interactive):
 ./run.sh --image gnmiserver:dev grpc-tunnel-server
-# or plain:
+# or plain / headless:
 docker run -d --name tunnel -p 58989:58989 \
-  gnmiserver:dev /app/app --mode=grpc-tunnel-server --port=58989
-# add --tls=true --cert=… --key=… --ca=… for TLS.
+  gnmiserver:dev /app/app --mode=grpc-tunnel-server --port=58989 --headless=true
+# TLS: add --tls=true --cert=… --key=…  (no --ca ⇒ one-way TLS, no client cert)
 ```
 
-Startup logs `[main] mode=grpc-tunnel-server port=58989 … (gNMI Get/Set
-forwarded over tunnel)`, then per target:
+Headless logs (also shown in the TUI transcript):
 ```
-[tunnel] session opened stream=…
-[tunnel] target '<id>' registered (stream=…, N connected)
+[reg] Register stream opened (stream=…)
+[reg] +target 'dev1' (GNMI_GNOI) — 1 total
 ```
-and per forwarded request:
-```
-[tunnel] -> '<id>' /gnmi.gNMI/Get id=7 (… req bytes)
-```
-
-An operator points a normal gNMI client at the server and sets
-`prefix.target = <id>` to select the device.
 
 ## Smoke test (no device)
 
-`docs/tunnel-smoke.sh` exercises the server with **grpcurl**: it simulates a
-target (opens `Session`, registers), sends an operator gNMI `Get`, and asserts
-the server forwarded it down the tunnel. It verifies the forward direction only
-— a full round-trip needs a real target, since grpcurl can't reply reactively to
-a received `TunnelRequest`.
-
-```bash
-# with the server running (plaintext) on :58989
-CONTAINER=tunnel docs/tunnel-smoke.sh     # PASS = Get was forwarded to the target
-```
-Needs `grpcurl` on PATH; protos are resolved from this repo's `app/idl`.
-
----
-
-## Known limits
-
-- No **timeout** for a target that stays connected but never answers a request
-  (cleanup fires on a disconnect, not on a hung/slow target).
-- `Subscribe` **ONCE** mode has no explicit done-marker in `tunnel.proto`;
-  `STREAM` mode (indefinite on-change telemetry — the normal case) works.
-- The device implements `tunnel.proto` and drives the target side; only the
-  server side lives here.
+`docs/tunnel-smoke.sh` uses grpcurl to open `Register` and send
+`Target{op:ADD, target_type:GNMI_GNOI}`, asserting the server acks and logs the
+target. See that script's header for usage.

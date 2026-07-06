@@ -19,42 +19,12 @@
 #include <ctime>
 #include <iostream>
 
-// Process-wide: forward gNMI over the tunnel (set by --mode=grpc-tunnel-server).
-bool connected_client::s_tunnel_forward = false;
-
-// Forward one serialised gNMI request to a dial-out target over the tunnel and
-// arrange for its reply to complete the operator's async response. `respond`
-// self-guards against the operator connection closing first.
-static void forward_gnmi_over_tunnel(const char *method,
-                                     const std::string &target,
-                                     const std::string &req_pb,
-                                     grpc_session::respond_fn respond) {
-  if (target.empty()) {
-    respond(3, ""); // INVALID_ARGUMENT — prefix.target names the device
-    return;
-  }
-  if (!tunnel_hub::instance().connected(target)) {
-    std::cerr << "[tunnel] " << method << " for '" << target
-              << "': target not connected\n";
-    respond(14, ""); // UNAVAILABLE
-    return;
-  }
-  const std::uint64_t id = tunnel_hub::instance().next_id();
-  tunnel::TunnelRequest treq;
-  treq.set_id(id);
-  treq.set_method(method);
-  treq.set_payload(req_pb);
-  tunnel_hub::instance().add_pending(
-      id, target, [respond](int status, const std::string &payload) {
-        respond(status, payload);
-      });
-  if (!tunnel_hub::instance().send(target, treq)) {
-    tunnel_hub::instance().cancel_pending(id);
-    respond(14, "");
-    return;
-  }
-  std::cout << "[tunnel] -> '" << target << "' " << method << " id=" << id
-            << " (" << req_pb.size() << " req bytes)\n";
+// Emit a tunnel event to the console AND the update_sink (so the monitor TUI can
+// render it). In TUI mode std::cout is redirected to a logfile; in headless it
+// is the log and the sink has no subscriber.
+static void tunnel_log(const std::string &line) {
+  std::cout << line << "\n";
+  update_sink::instance().emit(line);
 }
 
 // Format a gNMI notification timestamp (nanoseconds since the Unix epoch) as a
@@ -309,120 +279,73 @@ void connected_client::register_gnmi_handlers() {
               prefix + gnmi_util::path_to_string(n.delete_(i)) + " = (deleted)");
       });
 
-  // ----- Tunnel: dial-out control channel (server side, increment 1) --------
-  // A target dials in and opens /tunnel.Tunnel/Session, then sends a Register
-  // frame identifying itself. We record it in tunnel_hub so the server can push
-  // TunnelRequest frames DOWN to that target (e.g. gNMI Get/Set/Subscribe —
-  // wired in increment 2). Reply frames are logged for now.
+  // ----- grpctunnel Register (server side, increment A) ---------------------
+  // A tunnel client (device) dials in and opens Register (bidi). It sends
+  // Target{op=ADD, target, target_type} for each service it fronts; we record
+  // the target and ack. Session/Tunnel data-plane setup is increment B.
   m_grpc->register_bidi_stream(
-      "/tunnel.Tunnel/Session",
+      "/grpctunnel.Tunnel/Register",
       [](std::int32_t sid) {
-        std::cout << "[tunnel] session opened stream=" << sid << "\n";
+        tunnel_log("[reg] Register stream opened (stream=" +
+                   std::to_string(sid) + ")");
       },
       [this](std::int32_t sid, const std::string &msg_pb) {
-        tunnel::TunnelResponse resp;
-        if (!resp.ParseFromString(msg_pb)) {
-          std::cerr << "[tunnel] stream=" << sid << " unparsable response\n";
+        grpctunnel::RegisterOp op;
+        if (!op.ParseFromString(msg_pb)) {
+          tunnel_log("[reg] stream=" + std::to_string(sid) +
+                     " unparsable RegisterOp");
           return;
         }
-        switch (resp.body_case()) {
-        case tunnel::TunnelResponse::kRegister: {
-          const std::string &tid = resp.register_().target_id();
-          tunnel_hub::instance().add(tid, m_grpc.get(), sid);
-          std::cout << "[tunnel] target '" << tid << "' registered (stream="
-                    << sid << ", " << tunnel_hub::instance().size()
-                    << " connected)\n";
+        switch (op.registration_case()) {
+        case grpctunnel::RegisterOp::kTarget: {
+          const grpctunnel::Target &t = op.target();
+          if (t.op() == grpctunnel::Target::ADD) {
+            tunnel_hub::instance().add_target(t.target(), t.target_type(),
+                                              m_grpc.get(), sid,
+                                              std::time(nullptr));
+            tunnel_log("[reg] +target '" + t.target() + "' (" +
+                       t.target_type() + ") — " +
+                       std::to_string(tunnel_hub::instance().size()) + " total");
+          } else if (t.op() == grpctunnel::Target::REMOVE) {
+            tunnel_hub::instance().remove_target(t.target());
+            tunnel_log("[reg] -target '" + t.target() + "'");
+          }
+          // Ack: echo the Target with accept=true.
+          grpctunnel::RegisterOp ack;
+          grpctunnel::Target *at = ack.mutable_target();
+          at->set_op(t.op());
+          at->set_target(t.target());
+          at->set_target_type(t.target_type());
+          at->set_accept(true);
+          std::string out;
+          ack.SerializeToString(&out);
+          m_grpc->stream_send(sid, out);
           break;
         }
-        case tunnel::TunnelResponse::kPayload:
-          // Reply from the target — complete a Get/Set or relay a Subscribe msg.
-          tunnel_hub::instance().on_target_payload(resp.id(), resp.payload());
+        case grpctunnel::RegisterOp::kSubscription: {
+          // A subscriber wants to learn about targets — ack it (increment A).
+          grpctunnel::RegisterOp ack;
+          grpctunnel::Subscription *s = ack.mutable_subscription();
+          s->set_op(op.subscription().op());
+          s->set_target_type(op.subscription().target_type());
+          s->set_accept(true);
+          std::string out;
+          ack.SerializeToString(&out);
+          m_grpc->stream_send(sid, out);
+          tunnel_log("[reg] subscription ack (type='" +
+                     op.subscription().target_type() + "')");
           break;
-        case tunnel::TunnelResponse::kError:
-          std::cerr << "[tunnel] target error id=" << resp.id() << ": "
-                    << resp.error() << "\n";
-          tunnel_hub::instance().on_target_error(resp.id(), resp.error());
+        }
+        case grpctunnel::RegisterOp::kSession:
+          // Client-side Session ack — session/data setup is increment B.
+          tunnel_log("[reg] session tag=" +
+                     std::to_string(op.session().tag()) +
+                     (op.session().accept() ? " accept" : ""));
           break;
         default:
           break;
         }
       });
-
-  // ----- gNMI forwarding over the tunnel (--mode=grpc-tunnel-server) ---------
-  // When forwarding is on, Get/Set are answered by relaying to the dial-out
-  // target named in prefix.target (async: the operator's response completes
-  // when the target replies). Registered as async unary, which takes precedence
-  // over the local stubs above for the same path.
-  if (s_tunnel_forward) {
-    m_grpc->register_unary_async(
-        "/gnmi.gNMI/Get",
-        [](std::int32_t /*sid*/, const std::string &req_pb,
-           grpc_session::respond_fn respond) {
-          gnmi::GetRequest req;
-          if (!req.ParseFromString(req_pb)) {
-            respond(3, "");
-            return;
-          }
-          forward_gnmi_over_tunnel("/gnmi.gNMI/Get", req.prefix().target(),
-                                   req_pb, std::move(respond));
-        });
-    m_grpc->register_unary_async(
-        "/gnmi.gNMI/Set",
-        [](std::int32_t /*sid*/, const std::string &req_pb,
-           grpc_session::respond_fn respond) {
-          gnmi::SetRequest req;
-          if (!req.ParseFromString(req_pb)) {
-            respond(3, "");
-            return;
-          }
-          forward_gnmi_over_tunnel("/gnmi.gNMI/Set", req.prefix().target(),
-                                   req_pb, std::move(respond));
-        });
-
-    // Subscribe forwarding (server-streaming): relay every SubscribeResponse
-    // the target streams back to the operator's open stream. Overwrites the
-    // local start_subscription registration above for this path.
-    m_grpc->register_server_stream(
-        "/gnmi.gNMI/Subscribe",
-        [this](std::int32_t sid, const std::string &req_pb) {
-          gnmi::SubscribeRequest req;
-          if (!req.ParseFromString(req_pb)) {
-            m_grpc->stream_finish(sid, 3); // INVALID_ARGUMENT
-            return;
-          }
-          const std::string target = req.subscribe().prefix().target();
-          if (target.empty() || !tunnel_hub::instance().connected(target)) {
-            std::cerr << "[tunnel] Subscribe for '" << target
-                      << "': target not connected\n";
-            m_grpc->stream_finish(sid, 14); // UNAVAILABLE
-            return;
-          }
-          const std::uint64_t id = tunnel_hub::instance().next_id();
-          grpc_session *op = m_grpc.get();
-          auto alive = op->alive_token();
-          tunnel_hub::instance().add_stream(
-              id, target, op,
-              [op, alive, sid](const std::string &payload) {
-                if (alive && *alive)
-                  op->stream_send(sid, payload); // relay one SubscribeResponse
-              },
-              [op, alive, sid](int status) {
-                if (alive && *alive)
-                  op->stream_finish(sid, status);
-              });
-          tunnel::TunnelRequest treq;
-          treq.set_id(id);
-          treq.set_method("/gnmi.gNMI/Subscribe");
-          treq.set_payload(req_pb);
-          if (!tunnel_hub::instance().send(target, treq)) {
-            tunnel_hub::instance().cancel_stream(id);
-            m_grpc->stream_finish(sid, 14);
-            return;
-          }
-          std::cout << "[tunnel] -> '" << target
-                    << "' /gnmi.gNMI/Subscribe id=" << id << "\n";
-        });
-  }
 }
 
 // ---------------------------------------------------------------------------
@@ -481,10 +404,10 @@ std::int32_t connected_client::handle_close(const std::int32_t &channel) {
   // Drop any Subscribe streams this connection owns before it is destroyed, so
   // the hub never holds a dangling grpc_session pointer.
   sub_hub::instance().remove(this);
-  // Likewise drop any tunnel sessions registered by this connection (target
-  // side) and any Subscribe relays this connection owns (operator side).
-  tunnel_hub::instance().remove(m_grpc.get());
-  tunnel_hub::instance().drop_streams_owned_by(m_grpc.get());
+  // Drop any grpctunnel targets registered over this connection's Register
+  // stream so the registry never holds a dangling grpc_session pointer.
+  for (const auto &id : tunnel_hub::instance().remove_by_stream(m_grpc.get()))
+    tunnel_log("[reg] -target '" + id + "' (disconnected)");
   // Tell the server to remove this connection from its client map.
   // server::handle_close erases the unique_ptr<connected_client>, destroying
   // this object — no member access is safe after this call returns.
