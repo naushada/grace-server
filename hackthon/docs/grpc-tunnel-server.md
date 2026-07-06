@@ -211,6 +211,31 @@ Back in Terminal 1, the client connect drives the data plane:
 If `[tun] bridge tag=…` is missing, `--target` didn't match the published name
 exactly (it is often long, with spaces and `|` — quote it).
 
+## One-command stack (`service.sh`)
+
+`service.sh` wraps `docs/docker-compose.tunnel.yml` (docker or podman compose)
+to run the tunnel + gnmi_peer together, so an end user does gNMI without
+touching the internals:
+
+```bash
+# 1. set your device's published target in docs/tunnel.lua (listeners["9339"])
+./service.sh up                       # builds marvel:dev if needed, starts both services
+./service.sh logs | grep '+target'    # confirm the device registered
+```
+
+Then drive gNMI either interactively or one-shot (scriptable):
+```bash
+./service.sh attach                   # interactive shell: gnmi get/set/subscribe
+# — or one-shot over the tunnel —
+./service.sh get /system/state
+./service.sh set /interfaces/interface[name=eth0]/config/enabled:true
+./service.sh subscribe /components    # streams until Ctrl-C
+```
+`./service.sh down` tears it down; `ps`, `restart`, `build`, `--help` also exist.
+The one-shot commands run an ephemeral gnmi_peer against `tunnel:9339` — the
+stack must be `up` first so the device is registered. For several devices, add
+ports to `tunnel.lua` and run a peer per target.
+
 ## Smoke test (no device)
 
 `docs/tunnel-smoke.sh` uses grpcurl to open `Register` and send

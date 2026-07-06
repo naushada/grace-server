@@ -12,13 +12,19 @@
 # tls table and mount the certs (see the compose file).
 #
 # Usage:
-#   ./service.sh up         Build if needed, then bring up both services (detached)
-#   ./service.sh attach     Attach to the gnmi_peer shell (gnmi get/set/subscribe)
-#   ./service.sh logs [svc] Tail logs (default: tunnel — shows target registrations)
-#   ./service.sh ps         Show service status
-#   ./service.sh down       Stop and remove the stack
-#   ./service.sh restart    down + up
-#   ./service.sh build      Build the marvel:dev image (./build.sh)
+#   ./service.sh up                 Build if needed, then bring up both services
+#   ./service.sh attach             Attach to the gnmi_peer shell (interactive)
+#   ./service.sh get <path>         One-shot gNMI Get over the tunnel (scriptable)
+#   ./service.sh set <path>:<val>   One-shot gNMI Set
+#   ./service.sh subscribe <path>   Stream telemetry over the tunnel (Ctrl-C to stop)
+#   ./service.sh logs [svc]         Tail logs (default: tunnel — target registrations)
+#   ./service.sh ps                 Show service status
+#   ./service.sh down               Stop and remove the stack
+#   ./service.sh restart            down + up
+#   ./service.sh build              Build the marvel:dev image (./build.sh)
+#
+# get/set/subscribe run an ephemeral gnmi_peer against the tunnel — the stack
+# must be up first (./service.sh up) so the device is registered.
 #
 # Env: ENGINE=docker|podman (default: auto).
 set -euo pipefail
@@ -81,6 +87,21 @@ case "$cmd" in
   restart)   dc down; dc up -d ;;
   ps|status) dc ps "$@" ;;
   logs)      dc logs -f "${1:-tunnel}" ;;
+  get|set|subscribe|sub)
+    # One-shot headless gNMI over the tunnel (no attach; good for scripting).
+    # Runs an ephemeral gnmi_peer that connects to tunnel:9339, sends the
+    # command, prints the result, and exits. `subscribe` streams until Ctrl-C.
+    [ $# -gt 0 ] || die "$cmd needs a gNMI path, e.g. ./service.sh get /system/state"
+    verb="$cmd"; [ "$verb" = sub ] && verb="subscribe"
+    # Pass the command via an env var to avoid shell-quoting the path.
+    if [ "$verb" = subscribe ]; then
+      dc run --rm -T -e "GNMI_CMD=gnmi $verb $*" peer sh -c \
+        '{ printf "%s\n" "$GNMI_CMD"; sleep 315360000; } | /app/gnmi_peer --config=/app/command/endpoint.lua --headless=true'
+    else
+      dc run --rm -T -e "GNMI_CMD=gnmi $verb $*" peer sh -c \
+        'printf "%s\n" "$GNMI_CMD" | /app/gnmi_peer --config=/app/command/endpoint.lua --headless=true'
+    fi
+    ;;
   attach|peer)
     echo "[service] attaching to gnmi_peer — detach with Ctrl-P Ctrl-Q, quit the shell with 'quit'"
     exec $COMPOSE -f "$COMPOSE_FILE" attach peer
@@ -88,5 +109,5 @@ case "$cmd" in
   -h|--help|help)
     awk 'NR==1{next} /^set -e/{exit} {sub(/^# ?/,""); print}' "$0"
     ;;
-  *) die "unknown command '$cmd' (up|attach|logs|ps|down|restart|build; --help)" ;;
+  *) die "unknown command '$cmd' (up|attach|get|set|subscribe|logs|ps|down|restart|build; --help)" ;;
 esac
