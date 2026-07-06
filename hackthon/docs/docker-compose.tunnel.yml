@@ -1,0 +1,69 @@
+# gRPC tunnel + gnmi_peer — seamless gNMI to a device behind NAT.
+#
+# The device dials the tunnel server (:58989) and publishes a target. The tunnel
+# maps a local port (:9339) to that target. gnmi_peer points its `remote` at the
+# tunnel's :9339, so the end user just types `gnmi get/set/subscribe` — the
+# tunnel plumbing is invisible.
+#
+#   device ──dials──► tunnel :58989        (published to the host/LAN)
+#                     tunnel :9339 → target   (internal, on tunnel-net)
+#   gnmi_peer.remote = tunnel:9339 ──► your gnmi get / set / subscribe
+#
+# ── Setup ───────────────────────────────────────────────────────────────────
+#   1. Put your device's PUBLISHED target name in tunnel.lua
+#      (listeners["9339"] = "<serial>|<model>|grpc-tunnel|<sw-version>").
+#      For mTLS, also set tunnel.lua's tls table and mount the certs (below).
+#   2. Bring it up:
+#        docker compose -f docs/docker-compose.tunnel.yml up -d
+#   3. Confirm the device registered:
+#        docker compose -f docs/docker-compose.tunnel.yml logs tunnel | grep '+target'
+#   4. Drive gNMI (the tunnel is invisible):
+#        docker compose -f docs/docker-compose.tunnel.yml attach peer
+#        # in the peer:  gnmi get /system/state
+#        #               gnmi set /a/b:5
+#        #               gnmi subscribe /...
+#        # detach without stopping: Ctrl-P Ctrl-Q ;  leave the shell: quit
+#
+# Several devices: add more ports to tunnel.lua listeners (["9340"]=…), publish
+# them, and run one peer per target (remote = tunnel:<port>).
+#
+# Requires the image: ./build.sh -t marvel:release
+
+networks:
+  tunnel-net:
+    driver: bridge
+
+services:
+
+  tunnel:
+    image: marvel:release
+    command:
+      - /app/app
+      - --mode=grpc-tunnel-server
+      - --config=/app/tunnel.lua
+      - --headless=true
+    volumes:
+      - ./tunnel.lua:/app/tunnel.lua:ro
+      # For mTLS: mount your certs and reference them in tunnel.lua's tls table.
+      # - ./certs:/certs:ro
+    ports:
+      - "58989:58989"      # device dial-in — reachable from the LAN
+      # - "9339:9339"      # uncomment to also reach the target from the host
+    networks:
+      - tunnel-net
+    restart: unless-stopped
+
+  peer:
+    image: marvel:release
+    command:
+      - /app/gnmi_peer
+      - --config=/app/command/endpoint.lua
+    volumes:
+      - ./tunnel/peer.lua:/app/command/endpoint.lua:ro
+    stdin_open: true       # keep STDIN open for the TUI
+    tty: true              # allocate a PTY so gnmi_peer starts the ncurses UI
+    depends_on:
+      - tunnel
+    networks:
+      - tunnel-net
+    restart: "no"
