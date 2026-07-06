@@ -94,8 +94,8 @@ public:
   // Server-side: fired for each DATA frame on a received request stream,
   // including the END_STREAM one. Lets the gRPC layer decode and dispatch
   // client-streaming request messages incrementally instead of waiting for
-  // END_STREAM (which a long-lived push stream — e.g. Tarana
-  // PushSubscriptionUpdates — never sends). `body` is the stream's accumulated,
+  // END_STREAM (which a long-lived push stream — e.g. a client-streaming
+  // telemetry push — never sends). `body` is the stream's accumulated,
   // not-yet-consumed request bytes; the handler may consume from it (erase
   // complete frames) to bound memory. `end_stream` is true on the final frame.
   using request_stream_handler_t = std::function<void(

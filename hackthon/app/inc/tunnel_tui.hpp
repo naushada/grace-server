@@ -39,6 +39,7 @@ private:
   void draw_header();
   void draw_targets();
   void draw_sep();
+  void draw_foot();  // full-width footer with the full target name(s)
   void redraw_out(); // transcript viewport + scrollbar
   void push_history(const std::string &part);
   void scroll_by(int lines);
@@ -56,6 +57,7 @@ private:
   struct _win_st *m_targets{nullptr}; // targets pane
   struct _win_st *m_sep{nullptr};     // separator row
   struct _win_st *m_out{nullptr};     // event transcript
+  struct _win_st *m_foot{nullptr};    // full target-name footer
   struct event *m_winch_ev{nullptr};  // SIGWINCH (resize)
   struct event *m_tick_ev{nullptr};   // 1s uptime refresh
   std::deque<std::string> m_lines;    // transcript scrollback buffer

@@ -209,8 +209,8 @@ void connected_client::register_gnmi_handlers() {
         start_subscription(sid, req_pb);
       });
 
-  // ----- Tarana DialTcc / IsAlive -------------------------------------------
-  // Tarana radios/BNs dial out to their controller and probe liveness with a
+  // ----- DialTcc / IsAlive (dial-out liveness) ------------------------------
+  // Devices dial out to their controller and probe liveness with a
   // unary /tnmi.DialTcc/IsAlive before they begin pushing telemetry. This is
   // NOT a gNMI method: grace-server otherwise only speaks gnmi.gNMI, so an
   // unregistered path returns UNIMPLEMENTED (12), the device concludes the peer
@@ -229,7 +229,7 @@ void connected_client::register_gnmi_handlers() {
         return {0, ""};
       });
 
-  // ----- Tarana DialTcc / PushSubscriptionUpdates (client-streaming) --------
+  // ----- DialTcc / PushSubscriptionUpdates (client-streaming) ---------------
   // After IsAlive the device opens this stream and pushes telemetry messages
   // continuously without ever sending END_STREAM. Per tnmi_dialout.proto the
   // RPC is:

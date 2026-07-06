@@ -115,6 +115,7 @@ tunnel_tui::~tunnel_tui() {
   if (m_targets) delwin(m_targets);
   if (m_sep) delwin(m_sep);
   if (m_out) delwin(m_out);
+  if (m_foot) delwin(m_foot);
   curs_set(1);
   endwin();
 }
@@ -186,6 +187,32 @@ void tunnel_tui::draw_sep() {
   mvwhline(m_sep, 0, 0, ACS_HLINE, w);
   wattroff(m_sep, A_DIM);
   wnoutrefresh(m_sep);
+}
+
+// Full-width footer with the full target name(s) — the targets pane truncates
+// them, so show the complete published name(s) here for visibility.
+void tunnel_tui::draw_foot() {
+  if (!m_foot) return;
+  int h = 0, w = 0;
+  getmaxyx(m_foot, h, w);
+  (void)h;
+  werase(m_foot);
+  auto snap = tunnel_hub::instance().snapshot();
+  std::string s;
+  if (snap.empty()) {
+    s = " target: (none registered yet)";
+  } else {
+    s = " target: ";
+    for (std::size_t i = 0; i < snap.size(); ++i) {
+      if (i) s += "   ·   ";
+      s += snap[i].target;
+    }
+  }
+  const int attr = (m_attr_reg ? m_attr_reg : A_NORMAL) | A_BOLD;
+  wattron(m_foot, attr);
+  mvwaddnstr(m_foot, 0, 0, s.c_str(), utf8_clip(s, w));
+  wattroff(m_foot, attr);
+  wnoutrefresh(m_foot);
 }
 
 int tunnel_tui::attr_for(const std::string &s) const {
@@ -264,6 +291,7 @@ void tunnel_tui::println(const std::string &line) {
   if (m_scroll > 0)
     m_scroll += added; // hold the view when scrolled up
   draw_header();       // target count may have changed
+  draw_foot();         // and the target name(s)
   redraw_out();
 }
 
@@ -281,20 +309,23 @@ void tunnel_tui::relayout() {
   int th = H / 3;
   if (th < 4) th = 4;
   if (th > 10) th = 10;
-  if (th > H - 3) th = H - 3; // leave room for header + sep + >=1 transcript row
+  if (th > H - 4) th = H - 4; // room for header + sep + >=1 transcript + footer
+  if (th < 1) th = 1;
   const int out_top = 1 + th + 1;
-  int out_h = H - out_top;
+  int out_h = H - out_top - 1; // -1 for the footer at H-1
   if (out_h < 1) out_h = 1;
 
   if (m_head) { delwin(m_head); m_head = nullptr; }
   if (m_targets) { delwin(m_targets); m_targets = nullptr; }
   if (m_sep) { delwin(m_sep); m_sep = nullptr; }
   if (m_out) { delwin(m_out); m_out = nullptr; }
+  if (m_foot) { delwin(m_foot); m_foot = nullptr; }
 
   m_head = newwin(1, W, 0, 0);
   m_targets = newwin(th, W, 1, 0);
   m_sep = newwin(1, W, 1 + th, 0);
   m_out = newwin(out_h, W, out_top, 0);
+  m_foot = newwin(1, W, H - 1, 0);
   scrollok(m_out, FALSE);
   keypad(m_out, TRUE);
   nodelay(m_out, TRUE);
@@ -305,6 +336,7 @@ void tunnel_tui::relayout() {
   draw_targets();
   draw_sep();
   redraw_out();
+  draw_foot();
 }
 
 void tunnel_tui::on_winch(int, short, void *arg) {
@@ -320,6 +352,7 @@ void tunnel_tui::on_tick(int, short, void *arg) {
   auto *self = static_cast<tunnel_tui *>(arg);
   self->draw_header();
   self->draw_targets();
+  self->draw_foot();
   doupdate();
 }
 
