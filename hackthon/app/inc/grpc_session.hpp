@@ -81,6 +81,11 @@ public:
                             bidi_open_handler_t on_open,
                             client_stream_handler_t on_message);
 
+  // A token that is true while this connection is alive and flips false when it
+  // closes. Streaming relays (e.g. Subscribe over a tunnel) capture a copy to
+  // guard cross-connection stream_send/stream_finish against use-after-free.
+  std::shared_ptr<const bool> alive_token() const { return m_alive; }
+
   // Send one framed message on an open streaming response.
   void stream_send(int32_t stream_id, const std::string &message_pb);
 

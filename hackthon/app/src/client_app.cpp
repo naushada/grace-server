@@ -45,7 +45,7 @@ static void forward_gnmi_over_tunnel(const char *method,
   treq.set_method(method);
   treq.set_payload(req_pb);
   tunnel_hub::instance().add_pending(
-      id, [respond](int status, const std::string &payload) {
+      id, target, [respond](int status, const std::string &payload) {
         respond(status, payload);
       });
   if (!tunnel_hub::instance().send(target, treq)) {
@@ -335,13 +335,13 @@ void connected_client::register_gnmi_handlers() {
           break;
         }
         case tunnel::TunnelResponse::kPayload:
-          // Reply from the target — complete the waiting operator request.
-          tunnel_hub::instance().complete(resp.id(), 0, resp.payload());
+          // Reply from the target — complete a Get/Set or relay a Subscribe msg.
+          tunnel_hub::instance().on_target_payload(resp.id(), resp.payload());
           break;
         case tunnel::TunnelResponse::kError:
           std::cerr << "[tunnel] target error id=" << resp.id() << ": "
                     << resp.error() << "\n";
-          tunnel_hub::instance().complete(resp.id(), 2 /*UNKNOWN*/, "");
+          tunnel_hub::instance().on_target_error(resp.id(), resp.error());
           break;
         default:
           break;
@@ -377,6 +377,50 @@ void connected_client::register_gnmi_handlers() {
           }
           forward_gnmi_over_tunnel("/gnmi.gNMI/Set", req.prefix().target(),
                                    req_pb, std::move(respond));
+        });
+
+    // Subscribe forwarding (server-streaming): relay every SubscribeResponse
+    // the target streams back to the operator's open stream. Overwrites the
+    // local start_subscription registration above for this path.
+    m_grpc->register_server_stream(
+        "/gnmi.gNMI/Subscribe",
+        [this](std::int32_t sid, const std::string &req_pb) {
+          gnmi::SubscribeRequest req;
+          if (!req.ParseFromString(req_pb)) {
+            m_grpc->stream_finish(sid, 3); // INVALID_ARGUMENT
+            return;
+          }
+          const std::string target = req.subscribe().prefix().target();
+          if (target.empty() || !tunnel_hub::instance().connected(target)) {
+            std::cerr << "[tunnel] Subscribe for '" << target
+                      << "': target not connected\n";
+            m_grpc->stream_finish(sid, 14); // UNAVAILABLE
+            return;
+          }
+          const std::uint64_t id = tunnel_hub::instance().next_id();
+          grpc_session *op = m_grpc.get();
+          auto alive = op->alive_token();
+          tunnel_hub::instance().add_stream(
+              id, target, op,
+              [op, alive, sid](const std::string &payload) {
+                if (alive && *alive)
+                  op->stream_send(sid, payload); // relay one SubscribeResponse
+              },
+              [op, alive, sid](int status) {
+                if (alive && *alive)
+                  op->stream_finish(sid, status);
+              });
+          tunnel::TunnelRequest treq;
+          treq.set_id(id);
+          treq.set_method("/gnmi.gNMI/Subscribe");
+          treq.set_payload(req_pb);
+          if (!tunnel_hub::instance().send(target, treq)) {
+            tunnel_hub::instance().cancel_stream(id);
+            m_grpc->stream_finish(sid, 14);
+            return;
+          }
+          std::cout << "[tunnel] -> '" << target
+                    << "' /gnmi.gNMI/Subscribe id=" << id << "\n";
         });
   }
 }
@@ -437,8 +481,10 @@ std::int32_t connected_client::handle_close(const std::int32_t &channel) {
   // Drop any Subscribe streams this connection owns before it is destroyed, so
   // the hub never holds a dangling grpc_session pointer.
   sub_hub::instance().remove(this);
-  // Likewise drop any tunnel sessions registered by this connection.
+  // Likewise drop any tunnel sessions registered by this connection (target
+  // side) and any Subscribe relays this connection owns (operator side).
   tunnel_hub::instance().remove(m_grpc.get());
+  tunnel_hub::instance().drop_streams_owned_by(m_grpc.get());
   // Tell the server to remove this connection from its client map.
   // server::handle_close erases the unique_ptr<connected_client>, destroying
   // this object — no member access is safe after this call returns.
