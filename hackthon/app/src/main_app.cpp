@@ -11,6 +11,7 @@
 #include "tls_config.hpp"
 
 #include "mqtt_io.hpp"
+#include "tunnel_config.hpp"
 #include "tunnel_proxy.hpp"
 #include "tunnel_tui.hpp"
 #include "gnmi/gnmi.pb.h"
@@ -147,6 +148,9 @@ static void print_usage(const char *prog) {
     << "       openconfig/grpctunnel server: tunnel clients (devices behind NAT)\n"
     << "       dial in and Register targets. Shows a monitor TUI when interactive\n"
     << "       (use --headless=true for log-only).\n"
+    << "    --config=<file.lua>      Config: control port, TLS, and a map of\n"
+    << "                             local-port -> target (one server, many\n"
+    << "                             devices). Overrides the flags below.\n"
     << "    --port=<port>            Tunnel listen port          (default: 58989)\n"
     << "    --tls=true               Enable TLS\n"
     << "    --cert/--key/--ca        PEM files for TLS\n"
@@ -280,41 +284,54 @@ int main(int argc, const char *argv[]) {
   }
 
   // ── grpc-tunnel-server ─────────────────────────────────────────────────────
-  // openconfig/grpctunnel server: a tunnel client (device behind NAT) dials in,
-  // opens Register, and advertises Target{ADD, target_type=GNMI_GNOI}. This mode
-  // stands up the listener; the Register endpoint is registered per accepted
-  // connection by connected_client. A monitor TUI shows registered targets when
-  // run interactively (Session/Tunnel data-plane byte-proxy is increment B).
+  // openconfig/grpctunnel server: tunnel clients (devices behind NAT) dial in,
+  // open Register, and advertise Target{ADD, target_type=GNMI_GNOI}. This mode
+  // stands up the control listener plus zero or more data-plane listeners that
+  // byte-proxy operator gNMI to a target over the Tunnel RPC. A monitor TUI
+  // shows registered targets when run interactively.
+  //
+  // Config is either --config <file.lua> (control port, TLS, and a map of
+  // local-port -> target — one server can front many devices) or the single
+  // --port/--tls/--local-port/--target flags.
   if (mode == "grpc-tunnel-server") {
-    const uint16_t port = get_port_flag(argc, argv, "port", 58989);
-    const tls_config tls_cfg{
-      get_flag(argc, argv, "tls", "false") == "true",
-      get_flag(argc, argv, "cert", ""),
-      get_flag(argc, argv, "key",  ""),
-      get_flag(argc, argv, "ca",   ""),
-    };
+    tunnel_config tcfg;
+    const std::string cfg_path = get_flag(argc, argv, "config", "");
+    if (!cfg_path.empty()) {
+      std::string cerr_msg;
+      if (!load_tunnel_config(cfg_path, tcfg, cerr_msg)) {
+        std::cerr << "[main] tunnel config error: " << cerr_msg << '\n';
+        return 1;
+      }
+    } else {
+      tcfg.port = get_port_flag(argc, argv, "port", 58989);
+      tcfg.tls = tls_config{
+          get_flag(argc, argv, "tls", "false") == "true",
+          get_flag(argc, argv, "cert", ""),
+          get_flag(argc, argv, "key", ""),
+          get_flag(argc, argv, "ca", ""),
+      };
+      const uint16_t lp = get_port_flag(argc, argv, "local-port", 0);
+      if (lp != 0)
+        tcfg.listeners.push_back({lp, get_flag(argc, argv, "target", "")});
+    }
+
     const std::string hl = get_flag(argc, argv, "headless", "");
     const bool headless = (hl == "true") ||
                           (hl != "false" &&
                            (!isatty(STDIN_FILENO) || !isatty(STDOUT_FILENO)));
-    server tunnel_svc("0.0.0.0", port, tls_cfg);
 
-    // Optional data-plane: a local gNMI listener that byte-proxies operator
-    // connections to a registered target over the Tunnel RPC. --local-port opens
-    // it; --target names the device it fronts.
-    const uint16_t local_port = get_port_flag(argc, argv, "local-port", 0);
-    const std::string local_target = get_flag(argc, argv, "target", "");
-    std::unique_ptr<tunnel_gnmi_listener> local;
-    if (local_port != 0)
-      local = std::make_unique<tunnel_gnmi_listener>("0.0.0.0", local_port,
-                                                     local_target);
+    server tunnel_svc("0.0.0.0", tcfg.port, tcfg.tls);
+    std::vector<std::unique_ptr<tunnel_gnmi_listener>> locals;
+    for (const auto &l : tcfg.listeners)
+      locals.push_back(
+          std::make_unique<tunnel_gnmi_listener>("0.0.0.0", l.port, l.target));
 
     if (headless) {
-      std::cout << "[main] mode=grpc-tunnel-server port=" << port
-                << " tls=" << (tls_cfg.enabled ? "ON" : "OFF");
-      if (local_port != 0)
-        std::cout << " local=:" << local_port << " target=" << local_target;
-      std::cout << '\n';
+      std::cout << "[main] mode=grpc-tunnel-server port=" << tcfg.port
+                << " tls=" << (tcfg.tls.enabled ? "ON" : "OFF") << " listeners="
+                << tcfg.listeners.size() << '\n';
+      for (const auto &l : tcfg.listeners)
+        std::cout << "[main]   :" << l.port << " -> '" << l.target << "'\n";
       run_evt_loop{}();
     } else {
       // Interactive monitor TUI. The linked stack logs to std::cout/cerr; send
@@ -326,7 +343,7 @@ int main(int argc, const char *argv[]) {
         std::cerr.rdbuf(tlog.rdbuf());
         std::cout << std::unitbuf;
       }
-      tunnel_tui tui(port);
+      tunnel_tui tui(tcfg.port);
       run_evt_loop{}();
     }
     return 0;
