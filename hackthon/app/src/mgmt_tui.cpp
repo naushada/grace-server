@@ -232,18 +232,24 @@ void mgmt_tui::draw_foot() {
   (void)h;
   werase(m_foot);
   auto snap = mgmt_hub::instance().snapshot();
+  const std::time_t now = std::time(nullptr);
   std::string s;
   if (snap.empty()) {
     s = " (no sessions — waiting for a device to open DialTcc.Subscribe)";
   } else {
-    s = " identity: ";
+    // The top pane is gone; the whole session summary lives here:
+    // "#1 role(hostname)  3m".
+    s = " ";
     for (std::size_t i = 0; i < snap.size(); ++i) {
       if (i) s += "   ·   ";
       const auto &t = snap[i];
+      s += "#" + std::to_string(t.id) + " ";
       if (!t.role.empty() && !t.hostname.empty()) s += t.role + "(" + t.hostname + ")";
       else if (!t.hostname.empty()) s += t.hostname;
       else if (!t.role.empty()) s += t.role;
-      else s += "#" + std::to_string(t.id);
+      else if (!t.device.empty()) s += t.device;
+      else s += "(probing…)";
+      s += "  " + fmt_uptime(now - t.since);
     }
   }
   // Sticky CliRequest settings moved off the header live here.
@@ -607,15 +613,11 @@ void mgmt_tui::send_file(const std::string &path) {
 void mgmt_tui::relayout() {
   int H = 0, W = 0;
   getmaxyx(stdscr, H, W);
-  if (H < 9 || W < 10) return;
+  if (H < 7 || W < 10) return;
 
-  int th = H / 3; // match the tunnel targets pane
-  if (th < 3) th = 3;
-  if (th > 10) th = 10;
-  if (th > H - 8) th = H - 8; // header + sep + >=1 transcript + foot + 3-row box
-  if (th < 1) th = 1;
-  const int out_top = 1 + th + 1;
-  int out_h = H - out_top - 4; // footer (H-4) + 3-row input box (H-3..H-1)
+  // No top pane — the transcript fills the whole area; session/identity live in
+  // the footer next to the input box: header(1) + transcript + footer(1) + box(3).
+  int out_h = H - 1 - 1 - 3;
   if (out_h < 1) out_h = 1;
 
   if (m_head) { delwin(m_head); m_head = nullptr; }
@@ -626,9 +628,7 @@ void mgmt_tui::relayout() {
   if (m_inp) { delwin(m_inp); m_inp = nullptr; }
 
   m_head = newwin(1, W, 0, 0);
-  m_sessions = newwin(th, W, 1, 0);
-  m_sep = newwin(1, W, 1 + th, 0);
-  m_out = newwin(out_h, W, out_top, 0);
+  m_out = newwin(out_h, W, 1, 0);
   m_foot = newwin(1, W, H - 4, 0);
   m_inp = newwin(3, W, H - 3, 0);
   scrollok(m_out, FALSE);
@@ -638,8 +638,6 @@ void mgmt_tui::relayout() {
   clear();
   refresh();
   draw_header();
-  draw_sessions();
-  draw_sep();
   redraw_out();
   draw_foot();
   draw_input();
@@ -658,7 +656,6 @@ void mgmt_tui::on_winch(int, short, void *arg) {
 void mgmt_tui::on_tick(int, short, void *arg) {
   auto *self = static_cast<mgmt_tui *>(arg);
   self->draw_header();
-  self->draw_sessions();
   self->draw_foot();
   self->draw_input();
   doupdate();
