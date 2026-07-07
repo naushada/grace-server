@@ -97,7 +97,8 @@ return {
 }
 ```
 Samples in **`docs/mgmt-requests/`**: `cli.lua`, `gnmi_get.lua`,
-`gnmi_get_key.lua` (explicit key map), `gnmi_subscribe.lua`.
+`gnmi_get_key.lua` (explicit key map), `gnmi_set.lua` (TypedValue oneof),
+`gnmi_subscribe.lua`.
 
 Mount a request dir into the container and `send` from there:
 ```bash
