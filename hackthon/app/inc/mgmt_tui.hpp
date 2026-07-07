@@ -16,7 +16,10 @@
 // Grpc-tunnel-style, with a bottom input line: type a command + Enter to send
 // it (mgmt_hub packs a DeviceRequest with a random rpc_id); replies + proactive
 // pushes stream into the transcript. Input model:
-//   <cmd> [args...]            run on the BN
+//   <cmd> [args...]            run a CLI command on the BN
+//   gnmi get <xpath>[,…]       gNMI Get (packed into DeviceRequest.request)
+//   gnmi set <xpath>:<val>[,…] gNMI Set
+//   gnmi subscribe <xpath> [interval]   gNMI Subscribe (SAMPLE if interval given)
 //   @<device_id> <cmd> ...     run on a specific device (inline, per command)
 //   :set cec on|off            sticky CliRequest.cec_cli
 //   :set json on|off           sticky CliRequest.json
@@ -53,6 +56,8 @@ private:
   void push_history(const std::string &part);
   void scroll_by(int lines);
   void submit_input();
+  void send_gnmi(const std::string &verb, const std::string &spec,
+                 const std::string &device_id);
   int attr_for(const std::string &line) const;
   void relayout();
   static void on_winch(int, short, void *arg);

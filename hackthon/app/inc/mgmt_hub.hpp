@@ -13,6 +13,8 @@
 #include "grpc_session.hpp"
 #include "dialout/tnmi_dialout.pb.h"
 
+#include <google/protobuf/message.h>
+
 #include <cstdint>
 #include <ctime>
 #include <map>
@@ -62,13 +64,12 @@ public:
     return out;
   }
 
-  // Build a DeviceRequest{rpc_id, CliRequest} and send it on every open session.
-  // device_id/cec_cli/json/timeout_ns come from the TUI's sticky settings.
-  // Returns the generated rpc_id (empty if no session is connected).
-  std::string send_cli(const std::string &cmd,
-                       const std::vector<std::string> &args,
-                       const std::string &device_id, bool cec_cli, bool json,
-                       std::uint64_t timeout_ns) {
+  // Pack any operation message into a DeviceRequest{rpc_id, device_id, request}
+  // and send it on every open session. `label` is remembered so replies can be
+  // correlated back and shown. Returns the rpc_id ("" if no session connected).
+  std::string send_request(const google::protobuf::Message &op,
+                           const std::string &device_id,
+                           const std::string &label) {
     if (m_sessions.empty())
       return "";
     const std::string rpc_id = gen_rpc_id();
@@ -77,6 +78,22 @@ public:
     req.set_rpc_id(rpc_id);
     if (!device_id.empty())
       req.set_device_id(device_id);
+    req.mutable_request()->PackFrom(op);
+
+    std::string pb;
+    req.SerializeToString(&pb);
+    for (auto &s : m_sessions)
+      s.grpc->stream_send(s.sid, pb);
+
+    m_pending[rpc_id] = label;
+    return rpc_id;
+  }
+
+  // Convenience: build a CliRequest from the sticky settings and send it.
+  std::string send_cli(const std::string &cmd,
+                       const std::vector<std::string> &args,
+                       const std::string &device_id, bool cec_cli, bool json,
+                       std::uint64_t timeout_ns) {
     tnmi::DeviceRequest::CliRequest cli;
     cli.set_cmd(cmd);
     for (const auto &a : args)
@@ -91,15 +108,7 @@ public:
       cli.mutable_timeout()->set_nanos(
           static_cast<std::int32_t>(timeout_ns % 1000000000ULL));
     }
-    req.mutable_request()->PackFrom(cli);
-
-    std::string pb;
-    req.SerializeToString(&pb);
-    for (auto &s : m_sessions)
-      s.grpc->stream_send(s.sid, pb);
-
-    m_pending[rpc_id] = cmd; // remember so replies can be correlated
-    return rpc_id;
+    return send_request(cli, device_id, cmd);
   }
 
   // Was `rpc_id` a command we sent? Returns the command text, or "" if unknown

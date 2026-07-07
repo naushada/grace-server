@@ -434,6 +434,24 @@ void connected_client::register_gnmi_handlers() {
             tunnel_log(cli.stdout_op());
           if (!cli.stderr_op().empty())
             tunnel_log("[stderr] " + cli.stderr_op());
+        } else if (resp.response().Is<gnmi::GetResponse>()) {
+          gnmi::GetResponse gr;
+          resp.response().UnpackTo(&gr);
+          for (const auto &n : gr.notification()) {
+            const std::string prefix = gnmi_util::path_to_string(n.prefix());
+            for (const auto &u : n.update())
+              tunnel_log("    " + prefix + gnmi_util::path_to_string(u.path()) +
+                         " = " + gnmi_util::typed_value_to_json(u.val()));
+          }
+        } else if (resp.response().Is<gnmi::SubscribeResponse>()) {
+          gnmi::SubscribeResponse sr;
+          resp.response().UnpackTo(&sr);
+          tunnel_log("    " + gnmi_util::subscribe_response_to_json(sr));
+        } else if (resp.response().Is<gnmi::SetResponse>()) {
+          gnmi::SetResponse sr;
+          resp.response().UnpackTo(&sr);
+          tunnel_log("    set OK, " + std::to_string(sr.response_size()) +
+                     " result(s)");
         } else if (!resp.response().type_url().empty()) {
           tunnel_log("    response: " + resp.response().type_url());
         }
