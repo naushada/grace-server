@@ -13,6 +13,7 @@
 #include <functional>
 #include <string>
 #include <utility>
+#include <vector>
 
 class update_sink {
 public:
@@ -23,16 +24,26 @@ public:
     return s;
   }
 
-  void set(cb_t cb) { m_cb = std::move(cb); }
-  void clear() { m_cb = nullptr; }
+  // Append a subscriber (multiple may coexist — e.g. a TUI and a file logger).
+  void add(cb_t cb) {
+    if (cb)
+      m_cbs.push_back(std::move(cb));
+  }
+  // Replace all subscribers with one (back-compat for single-observer UIs).
+  void set(cb_t cb) {
+    m_cbs.clear();
+    add(std::move(cb));
+  }
+  void clear() { m_cbs.clear(); }
 
   void emit(const std::string &line) {
-    if (m_cb)
-      m_cb(line);
+    for (const auto &cb : m_cbs)
+      if (cb)
+        cb(line);
   }
 
 private:
-  cb_t m_cb;
+  std::vector<cb_t> m_cbs;
 };
 
 #endif // __update_sink_hpp__
