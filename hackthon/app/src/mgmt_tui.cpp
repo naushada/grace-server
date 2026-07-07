@@ -41,6 +41,22 @@ static int utf8_clip(const std::string &s, int cols) {
   return bytes;
 }
 
+// Column width of `s` (each UTF-8 code point counts as one column).
+static int utf8_cols(const std::string &s) {
+  int cols = 0;
+  for (std::size_t i = 0; i < s.size();) {
+    const unsigned char c = static_cast<unsigned char>(s[i]);
+    int len = 1;
+    if ((c & 0x80) == 0) len = 1;
+    else if ((c & 0xE0) == 0xC0) len = 2;
+    else if ((c & 0xF0) == 0xE0) len = 3;
+    else if ((c & 0xF8) == 0xF0) len = 4;
+    i += len;
+    ++cols;
+  }
+  return cols;
+}
+
 static std::string fmt_uptime(std::time_t secs) {
   if (secs < 0) secs = 0;
   char b[32];
@@ -241,11 +257,21 @@ void mgmt_tui::draw_input() {
   getmaxyx(m_inp, h, w);
   (void)h;
   werase(m_inp);
-  const std::string prompt = " \xE2\x9D\xAF "; // " ❯ "
-  wattron(m_inp, A_BOLD);
+  // Prompt reflects the first identified session: "role(hostname)> ", falling
+  // back to "hostname> ", "role> ", or the default "❯ " before the probe.
+  std::string prompt = " \xE2\x9D\xAF "; // " ❯ "
+  for (const auto &s : mgmt_hub::instance().snapshot()) {
+    std::string who;
+    if (!s.role.empty() && !s.hostname.empty()) who = s.role + "(" + s.hostname + ")";
+    else if (!s.hostname.empty()) who = s.hostname;
+    else if (!s.role.empty()) who = s.role;
+    if (!who.empty()) { prompt = " " + who + "> "; break; }
+  }
+  const int px = utf8_cols(prompt);
+  const int attr = (m_attr_head ? m_attr_head : A_NORMAL) | A_BOLD;
+  wattron(m_inp, attr);
   mvwaddnstr(m_inp, 0, 0, prompt.c_str(), utf8_clip(prompt, w));
-  wattroff(m_inp, A_BOLD);
-  const int px = 3; // prompt columns
+  wattroff(m_inp, attr);
   if (w > px)
     mvwaddnstr(m_inp, 0, px, m_input.c_str(), utf8_clip(m_input, w - px));
   wmove(m_inp, 0, px + static_cast<int>(m_input.size())); // caret at end
