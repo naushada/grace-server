@@ -20,6 +20,7 @@
 //   gnmi get <xpath>[,…]       gNMI Get (packed into DeviceRequest.request)
 //   gnmi set <xpath>:<val>[,…] gNMI Set
 //   gnmi subscribe <xpath> [interval]   gNMI Subscribe (SAMPLE if interval given)
+//   send <file.lua>            build a whole DeviceRequest from a Lua file
 //   @<device_id> <cmd> ...     run on a specific device (inline, per command)
 //   :set cec on|off            sticky CliRequest.cec_cli
 //   :set json on|off           sticky CliRequest.json
@@ -58,6 +59,7 @@ private:
   void submit_input();
   void send_gnmi(const std::string &verb, const std::string &spec,
                  const std::string &device_id);
+  void send_file(const std::string &path); // build a DeviceRequest from a .lua
   int attr_for(const std::string &line) const;
   void relayout();
   static void on_winch(int, short, void *arg);
