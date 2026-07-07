@@ -63,6 +63,10 @@ server_tui::server_tui(std::uint16_t port, const std::string &log_file)
   m_attr_warn = color_id(COLOR_YELLOW, have_color, &next);
   m_attr_remote = color_id(COLOR_MAGENTA, have_color, &next);
 
+  // Mouse-wheel scrolling (works inside tmux).
+  mousemask(BUTTON4_PRESSED | BUTTON5_PRESSED, nullptr);
+  mouseinterval(0);
+
   relayout();
 
   update_sink::instance().add(
@@ -283,6 +287,12 @@ std::int32_t server_tui::handle_read(const std::int32_t & /*channel*/,
     } else if (ch == KEY_END) {
       m_scroll = 0;
       redraw_out();
+    } else if (ch == KEY_MOUSE) {
+      MEVENT ev;
+      if (getmouse(&ev) == OK) {
+        if (ev.bstate & BUTTON4_PRESSED) scroll_by(3);       // wheel up
+        else if (ev.bstate & BUTTON5_PRESSED) scroll_by(-3); // wheel down
+      }
     }
   }
   return 0;

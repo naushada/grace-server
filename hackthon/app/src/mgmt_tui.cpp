@@ -129,6 +129,11 @@ mgmt_tui::mgmt_tui(std::uint16_t port, const std::string &log_file)
   m_attr_leaf = color_id(COLOR_WHITE, have_color, &next);
   m_attr_warn = color_id(COLOR_YELLOW, have_color, &next);
 
+  // Mouse-wheel scrolling of the transcript. Important inside tmux, where the
+  // wheel otherwise drives tmux copy-mode instead of this viewport.
+  mousemask(BUTTON4_PRESSED | BUTTON5_PRESSED, nullptr);
+  mouseinterval(0);
+
   relayout();
 
   update_sink::instance().add(
@@ -674,6 +679,12 @@ std::int32_t mgmt_tui::handle_read(const std::int32_t & /*channel*/,
     } else if (ch == KEY_END) {
       m_scroll = 0;
       redraw_out(); draw_input(); doupdate();
+    } else if (ch == KEY_MOUSE) {
+      MEVENT ev;
+      if (getmouse(&ev) == OK) {
+        if (ev.bstate & BUTTON4_PRESSED) scroll_by(3);       // wheel up
+        else if (ev.bstate & BUTTON5_PRESSED) scroll_by(-3); // wheel down
+      }
     } else if (ch >= 32 && ch < 127) { // printable → append to the command
       m_input.push_back(static_cast<char>(ch));
       draw_input();

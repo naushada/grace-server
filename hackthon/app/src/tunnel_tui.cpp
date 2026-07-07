@@ -89,6 +89,11 @@ tunnel_tui::tunnel_tui(std::uint16_t port)
   m_attr_reply = color_id(COLOR_GREEN, have_color, &next);
   m_attr_warn = color_id(COLOR_YELLOW, have_color, &next);
 
+  // Mouse-wheel scrolling (works inside tmux, where the wheel otherwise drives
+  // tmux copy-mode instead of this viewport).
+  mousemask(BUTTON4_PRESSED | BUTTON5_PRESSED, nullptr);
+  mouseinterval(0);
+
   relayout(); // creates windows + first paint
 
   // Tunnel events (tunnel_log) arrive via update_sink; render each as a line.
@@ -389,6 +394,12 @@ std::int32_t tunnel_tui::handle_read(const std::int32_t & /*channel*/,
     } else if (ch == KEY_END) {
       m_scroll = 0;
       redraw_out();
+    } else if (ch == KEY_MOUSE) {
+      MEVENT ev;
+      if (getmouse(&ev) == OK) {
+        if (ev.bstate & BUTTON4_PRESSED) scroll_by(3);       // wheel up
+        else if (ev.bstate & BUTTON5_PRESSED) scroll_by(-3); // wheel down
+      }
     }
   }
   return 0;
