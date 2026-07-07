@@ -24,20 +24,50 @@ at `app/idl/dialout/tnmi_dialout.proto`, package `tnmi`.)
 
 ## Run it
 
-Easiest — the wrapper (builds `marvel:dev` if needed, single-container TUI):
+Easiest — the wrapper (builds `marvel:dev` if needed, single-container TUI). It
+mounts `docs/mgmt-requests` at `/req` and forces `TERM=xterm-256color` (so keys
+work under tmux):
 ```bash
-./service.sh mgmt                          # command TUI on :58989
+./service.sh mgmt                              # command TUI on :58989
 ./service.sh mgmt --out-file ./logs/mgmt.txt   # + save every response to a file
+./service.sh mgmt --req-dir ./my-requests      # mount a request-.lua dir at /req
 ```
 Or directly:
 ```bash
-docker run -it --rm -p 58989:58989 marvel:dev /app/app --mode=mgmt-dialout
+docker run -it --rm -e TERM=xterm-256color -p 58989:58989 \
+  marvel:dev /app/app --mode=mgmt-dialout
 #   --tls=true --cert/--key/--ca   TLS
 #   --log-file=<path>              append every response to a file
 #   --headless=true                stdout instead of the TUI
 ```
+Under tmux, force `TERM=xterm-256color` as shown (tmux's `screen`/`tmux-256color`
+may be missing from the container's terminfo, which breaks PgUp/Home/wheel).
+
 Wait for a device to dial in — the sessions pane shows `#1`, and the transcript
 logs `[mgmt] session #1 opened`.
+
+## The console (TUI)
+
+A grpc-tunnel-style monitor plus a command input line:
+```
+ Marvel gNMI Mgmt · :58989 · 1 session(s)      PgUp/PgDn·End scroll · ^D quit
+ SESSION   DEVICE                 UPTIME
+ #1        S147F2223907369        31s
+──────────────────────────────────────────────
+ ▸ bn(S147F2223907369) connected · device S147F2223907369
+ [mgmt] → gnmi get /system/state  rpc=r-8f3a…
+     /system/state/hostname = "bn-1"  …
+ identity: bn(S147F2223907369)      · defaults          ← footer
+ bn(S147F2223907369)>                                   ← input line
+```
+- On session-open the server auto-probes `gnmi Get /system/state` and prints a
+  **banner** (`▸ role(hostname) connected …`); the **prompt** becomes
+  `role(hostname)> `.
+- **Keys:** `Up`/`Down` recall command history; `PgUp`/`PgDn`/`Home`/`End` and
+  the **mouse wheel** scroll the transcript; `help` (or `?`) lists commands;
+  `quit`/`exit`/`^D` leaves.
+- Colours: cyan `[mgmt]` headers, green replies, magenta proactive pushes, yellow
+  errors.
 
 ## Sending requests (the input line)
 
