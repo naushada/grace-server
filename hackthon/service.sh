@@ -130,7 +130,9 @@ case "$cmd" in
       echo "[service] image '$IMAGE' not found — building …"
       "$here/build.sh" -t "$IMAGE"
     fi
-    runargs=(-it --rm -p 58989:58989)
+    # Force a widely-available TERM: inside tmux, TERM=tmux-256color may be
+    # missing from the container's terminfo DB, breaking key/wheel handling.
+    runargs=(-it --rm -e "TERM=${MGMT_TERM:-xterm-256color}" -p 58989:58989)
     binargs=(/app/app --mode=mgmt-dialout)
     # Mount the request .lua dir at /req so `send /req/<file>.lua` works.
     if [ -d "$reqdir" ]; then
