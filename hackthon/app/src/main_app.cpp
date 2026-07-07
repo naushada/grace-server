@@ -11,10 +11,12 @@
 #include "tls_config.hpp"
 
 #include "mqtt_io.hpp"
+#include "server_tui.hpp"
 #include "tunnel_config.hpp"
 #include "tunnel_hub.hpp"
 #include "tunnel_proxy.hpp"
 #include "tunnel_tui.hpp"
+#include "update_sink.hpp"
 #include "gnmi/gnmi.pb.h"
 
 #include <iomanip>
@@ -144,6 +146,9 @@ static void print_usage(const char *prog) {
     << "    --gnmi-tls=true          Single-port TLS mode (ignored when\n"
     << "                             --gnmi-tls-port is set)\n"
     << "    --gnmi-cert/--gnmi-key/--gnmi-ca  PEM files for TLS\n"
+    << "    --log-file=<path>        Append every update line to a file\n"
+    << "    --headless=true          Log to stdout (default: monitor TUI when\n"
+    << "                             attached to a terminal)\n"
     << "\n"
     << "  " << prog << " --mode=grpc-tunnel-server [options]\n"
     << "       openconfig/grpctunnel server: tunnel clients (devices behind NAT)\n"
@@ -262,23 +267,59 @@ int main(int argc, const char *argv[]) {
       get_flag(argc, argv, "gnmi-key",  ""),
       get_flag(argc, argv, "gnmi-ca",   ""),
     };
+    const std::string log_file = get_flag(argc, argv, "log-file", "");
+    const std::string hl = get_flag(argc, argv, "headless", "");
+    const bool headless = (hl == "true") ||
+                          (hl != "false" &&
+                           (!isatty(STDIN_FILENO) || !isatty(STDOUT_FILENO)));
 
+    // Build the listener(s), kept alive for the event loop.
+    std::vector<std::unique_ptr<server>> svcs;
+    std::string mode_desc;
     if (gnmi_tls_port != 0) {
-      // Dual-port: plain listener on gnmi_port, TLS listener on gnmi_tls_port.
-      std::cout << "[main] mode=gnmi-server plain=" << gnmi_port
-                << " tls=" << gnmi_tls_port << '\n';
-      server plain_svc("0.0.0.0", gnmi_port);
-      server tls_svc("0.0.0.0", gnmi_tls_port, tls_cfg);
-      run_evt_loop{}();
+      // Dual-port: plain on gnmi_port, TLS on gnmi_tls_port.
+      svcs.push_back(std::make_unique<server>("0.0.0.0", gnmi_port));
+      svcs.push_back(std::make_unique<server>("0.0.0.0", gnmi_tls_port, tls_cfg));
+      mode_desc = "plain=" + std::to_string(gnmi_port) + " tls=" +
+                  std::to_string(gnmi_tls_port);
     } else {
-      // Single-port: plain or TLS depending on --gnmi-tls flag.
+      // Single-port: plain or TLS depending on --gnmi-tls.
       const tls_config single_tls{
         get_flag(argc, argv, "gnmi-tls", "false") == "true",
         tls_cfg.cert_file, tls_cfg.key_file, tls_cfg.ca_file,
       };
-      std::cout << "[main] mode=gnmi-server port=" << gnmi_port
-                << " tls=" << (single_tls.enabled ? "ON" : "OFF") << '\n';
-      server gnmi_svc("0.0.0.0", gnmi_port, single_tls);
+      svcs.push_back(std::make_unique<server>("0.0.0.0", gnmi_port, single_tls));
+      mode_desc = "port=" + std::to_string(gnmi_port) + " tls=" +
+                  (single_tls.enabled ? "ON" : "OFF");
+    }
+
+    // Optional file sink: tee every update line to a file (headless or TUI).
+    std::ofstream logf;
+    if (!log_file.empty()) {
+      logf.open(log_file, std::ios::app);
+      if (logf)
+        update_sink::instance().add([&logf](const std::string &l) {
+          logf << l << '\n';
+          logf.flush();
+        });
+      else
+        std::cerr << "[main] cannot open --log-file " << log_file << '\n';
+    }
+
+    if (headless) {
+      std::cout << "[main] mode=gnmi-server " << mode_desc
+                << (log_file.empty() ? "" : " log=" + log_file) << '\n';
+      run_evt_loop{}();
+    } else {
+      // Interactive monitor TUI. Redirect cout/cerr to a logfile so ncurses
+      // owns the screen; the TUI renders the update_sink stream.
+      static std::ofstream tlog("/tmp/gnmi_server.log", std::ios::app);
+      if (tlog) {
+        std::cout.rdbuf(tlog.rdbuf());
+        std::cerr.rdbuf(tlog.rdbuf());
+        std::cout << std::unitbuf;
+      }
+      server_tui tui(gnmi_port, log_file);
       run_evt_loop{}();
     }
     return 0;
