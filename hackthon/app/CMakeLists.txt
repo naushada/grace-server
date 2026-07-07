@@ -35,6 +35,7 @@ set(GNMI_PROTO_FILES
     "${IDL_DIR}/collector/collector.proto"
     "${IDL_DIR}/target/target.proto"
     "${IDL_DIR}/tunnel/tunnel.proto"
+    "${IDL_DIR}/dialout/tnmi_dialout.proto"
 )
 
 set(PROTO_GEN_DIR "${CMAKE_CURRENT_BINARY_DIR}/proto_gen")
@@ -49,6 +50,7 @@ set(GNMI_GEN_SRCS
     "${PROTO_GEN_DIR}/collector/collector.pb.cc"
     "${PROTO_GEN_DIR}/target/target.pb.cc"
     "${PROTO_GEN_DIR}/tunnel/tunnel.pb.cc"
+    "${PROTO_GEN_DIR}/dialout/tnmi_dialout.pb.cc"
 )
 set(GNMI_GEN_HDRS
     "${PROTO_GEN_DIR}/gnmi_ext/gnmi_ext.pb.h"
@@ -56,6 +58,7 @@ set(GNMI_GEN_HDRS
     "${PROTO_GEN_DIR}/collector/collector.pb.h"
     "${PROTO_GEN_DIR}/target/target.pb.h"
     "${PROTO_GEN_DIR}/tunnel/tunnel.pb.h"
+    "${PROTO_GEN_DIR}/dialout/tnmi_dialout.pb.h"
 )
 
 add_custom_command(
