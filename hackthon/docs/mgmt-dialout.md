@@ -100,12 +100,16 @@ Samples in **`docs/mgmt-requests/`**: `cli.lua`, `gnmi_get.lua`,
 `gnmi_get_key.lua` (explicit key map), `gnmi_set.lua` (TypedValue oneof),
 `gnmi_subscribe.lua`.
 
-Mount a request dir into the container and `send` from there:
+`./service.sh mgmt` auto-mounts `docs/mgmt-requests` at **`/req`** (override with
+`--req-dir <dir>`), so `send /req/gnmi_get.lua` works out of the box. With a bare
+`docker run`, mount it yourself:
 ```bash
 docker run -it --rm -p 58989:58989 -v "$PWD/docs/mgmt-requests:/req:ro" \
   marvel:dev /app/app --mode=mgmt-dialout
 #   in the TUI:  send /req/gnmi_get.lua
 ```
+(`.lua` files are read from the container filesystem, so the path you `send` is
+the in-container path — e.g. `/req/…`.)
 
 ## Reading responses
 

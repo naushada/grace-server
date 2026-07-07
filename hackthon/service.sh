@@ -17,9 +17,12 @@
 #   ./service.sh get <path>         One-shot gNMI Get over the tunnel (scriptable)
 #   ./service.sh set <path>:<val>   One-shot gNMI Set
 #   ./service.sh subscribe <path>   Stream telemetry over the tunnel (Ctrl-C to stop)
-#   ./service.sh mgmt [--out-file <path>]   tNMI mgmt dial-out server + command
-#                                   TUI (device dials in; type CLI commands).
-#                                   --out-file also saves responses to a file.
+#   ./service.sh mgmt [--out-file <path>] [--req-dir <dir>]
+#                                   tNMI mgmt dial-out server + command TUI
+#                                   (device dials in; type commands or
+#                                   `send /req/<file>.lua`). --out-file saves
+#                                   responses; --req-dir mounts a request-.lua
+#                                   dir at /req (default: docs/mgmt-requests).
 #   ./service.sh logs [svc]         Tail logs (default: tunnel — target registrations)
 #   ./service.sh ps                 Show service status
 #   ./service.sh down               Stop and remove the stack
@@ -114,11 +117,12 @@ case "$cmd" in
     # A device dials :58989 and opens DialTcc.Subscribe; type CLI commands in the
     # TUI to send, results/pushes stream back. --out-file <path> also saves every
     # received response to a host file.
-    out=""
+    out=""; reqdir="$here/docs/mgmt-requests"
     while [ $# -gt 0 ]; do
       case "$1" in
         --out-file) out="$2"; shift 2 ;;
-        *) die "mgmt: unknown option '$1' (only --out-file <path>)" ;;
+        --req-dir)  reqdir="$2"; shift 2 ;;
+        *) die "mgmt: unknown option '$1' (--out-file <path> | --req-dir <path>)" ;;
       esac
     done
     eng="$(engine_bin)"
@@ -128,13 +132,19 @@ case "$cmd" in
     fi
     runargs=(-it --rm -p 58989:58989)
     binargs=(/app/app --mode=mgmt-dialout)
+    # Mount the request .lua dir at /req so `send /req/<file>.lua` works.
+    if [ -d "$reqdir" ]; then
+      ra="$(cd "$reqdir" && pwd)"
+      runargs+=(-v "$ra:/req:ro")
+    fi
     if [ -n "$out" ]; then
       od="$(dirname "$out")"; mkdir -p "$od" || die "cannot create dir: $od"
       oa="$(cd "$od" && pwd)"
       runargs+=(-v "$oa:/out")
       binargs+=("--log-file=/out/$(basename "$out")")
     fi
-    echo "[service] mgmt dial-out on :58989 — device dials in, type commands in the TUI (^D to quit)"
+    echo "[service] mgmt dial-out on :58989 — device dials in; type commands or"
+    echo "          'send /req/<file>.lua' in the TUI (^D to quit)"
     exec "$eng" run "${runargs[@]}" "$IMAGE" "${binargs[@]}"
     ;;
   -h|--help|help)
