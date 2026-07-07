@@ -15,6 +15,8 @@
 #                    Use --headless for line-mode (pipe/CI). --config mounts a
 #                    host endpoint.lua. Default port 58989.
 #   gnmi-server      Plain gNMI server: /app/app --mode=gnmi-server (port 58989).
+#                    Shows a colour-coded monitor TUI by default; --headless for
+#                    stdout. --out-file <path> also appends updates to a file.
 #   grpc-tunnel-server  Accept dial-out tunnel sessions from targets behind NAT
 #                    (/app/app --mode=grpc-tunnel-server, port 58989).
 #   cli              Interactive readline CLI: /app/cli_app.
@@ -37,7 +39,8 @@
 #       --network <net>            Attach to a network
 #   -p, --port   <spec>            Publish a port (repeatable), e.g. 58989:58989
 #       --config <path>            Host endpoint.lua to mount (gnmi-peer)
-#       --headless                 gnmi-peer line-mode (no TTY, adds --headless=true)
+#       --out-file <path>          gnmi-server: append updates to this host file
+#       --headless                 line-mode (no TTY, adds --headless=true)
 #   -E, --env    <K=V>             Set an env var (repeatable)
 #   -d, --detach                   Run detached (background)
 #       --root                     Run as root user
@@ -53,6 +56,9 @@
 # Examples:
 #   ./run.sh gnmi-peer                         # interactive TUI, port 58989
 #   ./run.sh --config ./my.lua gnmi-peer       # with a custom config
+#   ./run.sh gnmi-server                       # monitor TUI, port 58989
+#   ./run.sh gnmi-server --out-file ./logs/updates.txt   # TUI + append to file
+#   ./run.sh --headless gnmi-server --out-file ./u.txt   # no TUI, just log to file
 #   ./run.sh --build gnmi-server -- --gnmi-port=9339
 #   echo 'gnmi get /a/b' | ./run.sh --headless gnmi-peer
 #   ./run.sh --name peerB -d --network peer-net gnmi-peer --headless
@@ -68,6 +74,7 @@ ENGINE="${ENGINE:-}"
 NAME=""
 NETWORK=""
 CONFIG=""
+OUTFILE=""
 DETACH=0
 ROOT=0
 TUN=0
@@ -99,6 +106,7 @@ while [ $# -gt 0 ]; do
     --network)    NETWORK="$2"; shift 2 ;;
     -p|--port)    PORTS+=("$2"); shift 2 ;;
     --config)     CONFIG="$2"; shift 2 ;;
+    --out-file)   OUTFILE="$2"; shift 2 ;;
     --headless)   HEADLESS=1; shift ;;
     -E|--env)     ENVS+=("$2"); shift 2 ;;
     -d|--detach)  DETACH=1; shift ;;
@@ -139,6 +147,7 @@ case "$cmd" in
     [ "$HEADLESS" = 1 ] && BIN+=(--headless=true)
     ;;
   gnmi-server)
+    INTERACTIVE=1   # default: monitor TUI (use --headless for stdout, -d to detach)
     add_default_port "58989:58989"
     BIN=(/app/app --mode=gnmi-server)
     ;;
@@ -283,6 +292,17 @@ if [ -n "$CONFIG" ]; then
   [ -f "$CONFIG" ] || die "config not found: $CONFIG"
   cfg_abs="$(cd "$(dirname "$CONFIG")" && pwd)/$(basename "$CONFIG")"
   run_args+=(-v "$cfg_abs:$inner_cfg:ro")
+fi
+
+# --out-file (gnmi-server): mount the file's directory and append updates to it.
+# The TUI still runs by default; the file logging is in addition to it.
+if [ -n "$OUTFILE" ]; then
+  [ "$cmd" = gnmi-server ] || die "--out-file is only valid for gnmi-server"
+  out_dir="$(dirname "$OUTFILE")"
+  mkdir -p "$out_dir" || die "cannot create out-file directory: $out_dir"
+  out_abs="$(cd "$out_dir" && pwd)"
+  run_args+=(-v "$out_abs:/out")
+  BIN+=("--log-file=/out/$(basename "$OUTFILE")")
 fi
 
 # TTY selection.
