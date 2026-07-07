@@ -11,7 +11,9 @@
 //   [mgmt] reply 'show version'  rpc=r-8f3a…           (results + proactive
 //       exit=0  12ms                                     pushes)
 //   {"sw":"SYS.A3…"}
-//   ❯ show interfaces_                              <- command input line
+//   BN(bn-1)> show interfaces_                      <- input line; the prompt is
+//                                                      role(hostname) from an
+//                                                      on-open /system/state probe
 //
 // Grpc-tunnel-style, with a bottom input line: type a command + Enter to send
 // it (mgmt_hub packs a DeviceRequest with a random rpc_id); replies + proactive

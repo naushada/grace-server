@@ -404,6 +404,16 @@ void connected_client::register_gnmi_handlers() {
                                                         std::time(nullptr));
         tunnel_log("[mgmt] session #" + std::to_string(id) +
                    " opened (stream=" + std::to_string(sid) + ")");
+        // Probe identity for the prompt/banner: gNMI Get /system/state.
+        gnmi::GetRequest g;
+        *g.add_path() = gnmi_util::parse_yang_path("/system/state");
+        g.set_encoding(gnmi::JSON);
+        tnmi::DeviceRequest probe;
+        probe.set_rpc_id("__mgmt_probe__");
+        probe.mutable_request()->PackFrom(g);
+        std::string ppb;
+        probe.SerializeToString(&ppb);
+        m_grpc->stream_send(sid, ppb);
       },
       [this](std::int32_t sid, const std::string &msg_pb) {
         tnmi::DeviceResponse resp;
@@ -415,6 +425,51 @@ void connected_client::register_gnmi_handlers() {
         if (resp.fake())
           return; // heartbeat — carries no real data
         mgmt_hub::instance().note_device(m_grpc.get(), sid, resp.device_id());
+
+        // Identity probe reply (from session-open): extract hostname/role, set
+        // the session identity (drives the prompt), and print a banner — but do
+        // NOT render it as a normal reply.
+        if (resp.rpc_id() == "__mgmt_probe__") {
+          std::string hostname, role;
+          if (resp.response().Is<gnmi::GetResponse>()) {
+            gnmi::GetResponse gr;
+            resp.response().UnpackTo(&gr);
+            auto unq = [](std::string v) {
+              if (v.size() >= 2 && v.front() == '"' && v.back() == '"')
+                v = v.substr(1, v.size() - 2);
+              return v;
+            };
+            auto ends = [](const std::string &p, const char *suf) {
+              const std::string s(suf);
+              return p.size() >= s.size() &&
+                     p.compare(p.size() - s.size(), s.size(), s) == 0;
+            };
+            for (const auto &n : gr.notification()) {
+              const std::string prefix = gnmi_util::path_to_string(n.prefix());
+              for (const auto &u : n.update()) {
+                const std::string p = prefix + gnmi_util::path_to_string(u.path());
+                if (ends(p, "hostname"))
+                  hostname = unq(gnmi_util::typed_value_to_json(u.val()));
+                else if (ends(p, "role"))
+                  role = unq(gnmi_util::typed_value_to_json(u.val()));
+              }
+            }
+          }
+          mgmt_hub::instance().set_identity(m_grpc.get(), sid, hostname, role);
+
+          std::string who;
+          if (!role.empty() && !hostname.empty()) who = role + "(" + hostname + ")";
+          else if (!hostname.empty()) who = hostname;
+          else if (!role.empty()) who = role;
+          else who = resp.device_id().empty() ? "device" : resp.device_id();
+          std::string rule;
+          for (int i = 0; i < 46; ++i) rule += "\xE2\x94\x80"; // ─
+          tunnel_log(rule);
+          tunnel_log("  \xE2\x96\xB8 " + who + " connected" +
+                     (resp.device_id().empty() ? "" : "   device " + resp.device_id()));
+          tunnel_log(rule);
+          return;
+        }
 
         const std::string cmd = mgmt_hub::instance().command_for(resp.rpc_id());
         std::string hdr = "[mgmt] " + (cmd.empty() ? std::string("push")

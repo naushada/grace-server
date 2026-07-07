@@ -27,7 +27,9 @@ public:
   struct session_info {
     int id{0};
     std::time_t since{0};
-    std::string device; // device_id last seen on this session ("" until a reply)
+    std::string device;   // device_id last seen on this session ("" until a reply)
+    std::string hostname; // from the on-open /system/state probe
+    std::string role;     // from the on-open /system/state probe
   };
 
   static mgmt_hub &instance() {
@@ -61,7 +63,7 @@ public:
     std::vector<session_info> out;
     out.reserve(m_sessions.size());
     for (const auto &s : m_sessions)
-      out.push_back({s.id, s.since, s.device});
+      out.push_back({s.id, s.since, s.device, s.hostname, s.role});
     return out;
   }
 
@@ -73,6 +75,16 @@ public:
     for (auto &s : m_sessions)
       if (s.grpc == g && s.sid == sid)
         s.device = device_id;
+  }
+
+  // Record hostname/role from the on-open /system/state identity probe.
+  void set_identity(grpc_session *g, std::int32_t sid,
+                    const std::string &hostname, const std::string &role) {
+    for (auto &s : m_sessions)
+      if (s.grpc == g && s.sid == sid) {
+        if (!hostname.empty()) s.hostname = hostname;
+        if (!role.empty()) s.role = role;
+      }
   }
 
   // Pack any operation message into a DeviceRequest{rpc_id, device_id, request}
@@ -161,7 +173,9 @@ private:
     std::int32_t sid{0};
     int id{0};
     std::time_t since{0};
-    std::string device; // last device_id seen on this stream
+    std::string device;   // last device_id seen on this stream
+    std::string hostname; // from /system/state probe
+    std::string role;     // from /system/state probe
   };
   std::vector<sess> m_sessions;
   int m_next_id{0};
