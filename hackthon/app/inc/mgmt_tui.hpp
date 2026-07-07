@@ -97,6 +97,7 @@ private:
   struct event *m_tick_ev{nullptr};
   std::deque<std::string> m_lines;
   int m_scroll{0};
+  int m_hscroll{0}; // horizontal scroll offset (columns), for wide output
 };
 
 #endif // __mgmt_tui_hpp__

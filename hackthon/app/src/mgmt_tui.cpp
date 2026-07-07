@@ -57,6 +57,31 @@ static int utf8_cols(const std::string &s) {
   return cols;
 }
 
+// UTF-8 substring covering display columns [start_col, start_col+max_cols),
+// never splitting a multibyte sequence (for horizontal scrolling).
+static std::string utf8_window(const std::string &s, int start_col, int max_cols) {
+  const int n = static_cast<int>(s.size());
+  auto clen = [&](int b) {
+    const unsigned char c = static_cast<unsigned char>(s[b]);
+    if ((c & 0x80) == 0) return 1;
+    if ((c & 0xE0) == 0xC0) return 2;
+    if ((c & 0xF0) == 0xE0) return 3;
+    if ((c & 0xF8) == 0xF0) return 4;
+    return 1;
+  };
+  int bytes = 0, col = 0;
+  while (bytes < n && col < start_col) { bytes += clen(bytes); ++col; }
+  const int b0 = bytes;
+  int shown = 0;
+  while (bytes < n && shown < max_cols) {
+    const int len = clen(bytes);
+    if (bytes + len > n) break;
+    bytes += len;
+    ++shown;
+  }
+  return s.substr(b0, bytes - b0);
+}
+
 static std::string fmt_uptime(std::time_t secs) {
   if (secs < 0) secs = 0;
   char b[32];
@@ -176,7 +201,7 @@ void mgmt_tui::draw_header() {
   std::string s = " Marvel gNMI Mgmt · :" + std::to_string(m_port) + " · " +
                   std::to_string(mgmt_hub::instance().size()) + " session(s)";
   if (!m_log_path.empty()) s += " · log " + m_log_path;
-  s += "      PgUp/PgDn·End scroll · ^D quit";
+  s += "      PgUp/PgDn·←/→ scroll · ^D quit";
   wattron(m_head, A_DIM);
   mvwaddnstr(m_head, 0, 0, s.c_str(), utf8_clip(s, w > 0 ? w : 0));
   wattroff(m_head, A_DIM);
@@ -338,25 +363,42 @@ void mgmt_tui::redraw_out() {
   getmaxyx(m_out, H, W);
   werase(m_out);
   const int total = static_cast<int>(m_lines.size());
-  const int view_h = H;
+  const int view_h = H - 1; // bottom row is the horizontal scrollbar
   int maxscroll = total - view_h;
   if (maxscroll < 0) maxscroll = 0;
   if (m_scroll > maxscroll) m_scroll = maxscroll;
   if (m_scroll < 0) m_scroll = 0;
   int first = total - view_h - m_scroll;
   if (first < 0) first = 0;
-  const bool bar = (W > 2 && total > view_h);
-  const int text_w = bar ? W - 1 : W;
+  const bool vbar = (W > 2 && total > view_h);
+  const int text_w = vbar ? W - 1 : W;
+
+  // Widest visible line → bound horizontal scroll + size the h-scrollbar.
+  int maxw = 0;
+  for (int row = 0; row < view_h; ++row) {
+    const int idx = first + row;
+    if (idx < 0 || idx >= total) break;
+    const int lw = utf8_cols(m_lines[idx]);
+    if (lw > maxw) maxw = lw;
+  }
+  int maxh = maxw - text_w;
+  if (maxh < 0) maxh = 0;
+  if (m_hscroll > maxh) m_hscroll = maxh;
+  if (m_hscroll < 0) m_hscroll = 0;
+
   for (int row = 0; row < view_h; ++row) {
     const int idx = first + row;
     if (idx < 0 || idx >= total) break;
     const std::string &l = m_lines[idx];
     const int attr = attr_for(l);
     if (attr) wattron(m_out, attr);
-    mvwaddnstr(m_out, row, 0, l.c_str(), utf8_clip(l, text_w));
+    const std::string win = utf8_window(l, m_hscroll, text_w);
+    mvwaddnstr(m_out, row, 0, win.c_str(), static_cast<int>(win.size()));
     if (attr) wattroff(m_out, attr);
   }
-  if (bar) {
+
+  // Vertical scrollbar (right column, content rows only).
+  if (vbar) {
     int thumb = view_h * view_h / total;
     if (thumb < 1) thumb = 1;
     if (thumb > view_h) thumb = view_h;
@@ -369,6 +411,23 @@ void mgmt_tui::redraw_out() {
     for (int row = 0; row < view_h; ++row)
       mvwaddstr(m_out, row, W - 1,
                 (row >= thumb_top && row < thumb_top + thumb) ? "█" : "░");
+    wattroff(m_out, A_DIM);
+  }
+
+  // Horizontal scrollbar on the bottom row (thumb fills the track if it fits).
+  {
+    int thumb = maxw > 0 ? text_w * text_w / maxw : text_w;
+    if (thumb < 1) thumb = 1;
+    if (thumb > text_w) thumb = text_w;
+    const int track = text_w - thumb;
+    int thumb_left = maxh > 0 ? track * m_hscroll / maxh : 0;
+    if (thumb_left < 0) thumb_left = 0;
+    if (thumb_left > track) thumb_left = track;
+    wattron(m_out, A_DIM);
+    for (int x = 0; x < text_w; ++x)
+      mvwaddstr(m_out, view_h, x,
+                (x >= thumb_left && x < thumb_left + thumb) ? "\xE2\x96\x84"   // ▄
+                                                            : "\xE2\x94\x80"); // ─
     wattroff(m_out, A_DIM);
   }
   wnoutrefresh(m_out);
@@ -422,7 +481,7 @@ void mgmt_tui::submit_input() {
     println("  send <file.lua>                 DeviceRequest described in Lua");
     println("  @<device_id> <cmd> …            target a specific device");
     println("  :set cec|json on|off · :set timeout 20s · :show · :reset");
-    println("  Up/Down history · PgUp/PgDn/Home scroll · quit/^D leave");
+    println("  Up/Down history · PgUp/PgDn/Home & ←/→ scroll · quit/^D leave");
     return;
   }
 
@@ -711,6 +770,12 @@ std::int32_t mgmt_tui::handle_read(const std::int32_t & /*channel*/,
       redraw_out(); draw_input(); doupdate();
     } else if (ch == KEY_END) {
       m_scroll = 0;
+      redraw_out(); draw_input(); doupdate();
+    } else if (ch == KEY_LEFT) {
+      m_hscroll -= 8; if (m_hscroll < 0) m_hscroll = 0;
+      redraw_out(); draw_input(); doupdate();
+    } else if (ch == KEY_RIGHT) {
+      m_hscroll += 8; // clamped to content width in redraw_out
       redraw_out(); draw_input(); doupdate();
     } else if (ch == KEY_MOUSE) {
       MEVENT ev;
