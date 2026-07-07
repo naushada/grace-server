@@ -117,7 +117,8 @@ still work if you prefer them.
 ### Dial-out server modes (devices behind NAT)
 
 For devices that dial *out* to a controller, `app` has two dial-out server modes,
-each with a monitor TUI and optional file logging — see their runbooks:
+each with a monitor TUI and optional file logging. Start with the
+[dial-out overview](docs/dialout-overview.md), then the per-feature runbooks:
 
 - **`--mode=grpc-tunnel-server`** — openconfig/grpctunnel byte-proxy; reach a
   device's real gNMI (Get/Set/Subscribe) through the tunnel. One command:
@@ -448,3 +449,7 @@ m_grpc->register_unary("/mypackage.MyService/MyMethod",
 ```
 
 gRPC status codes: `0` OK, `3` INVALID_ARGUMENT, `5` NOT_FOUND, `12` UNIMPLEMENTED, `13` INTERNAL.
+
+## License
+
+MIT — see [LICENSE](LICENSE).
