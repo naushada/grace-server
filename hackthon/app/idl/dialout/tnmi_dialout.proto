@@ -1,0 +1,71 @@
+syntax = "proto3";
+
+// tNMI management dial-out — the mgmt half of tnmi_dialout.proto (package tnmi).
+//
+// A device (target) dials out to the controller (TCC) and opens the bidi
+// DialTcc.Subscribe RPC: it streams DeviceResponse UP (command results and
+// unsolicited/proactive pushes) and receives DeviceRequest DOWN (commands to
+// run). rpc_id correlates a DeviceResponse to the DeviceRequest that triggered
+// it; a DeviceResponse with no matching outstanding rpc_id is a proactive push.
+//
+// This is a CLI-focused SUBSET of the upstream proto, vendored to keep the tree
+// self-contained (only google well-known types). Omitted vs upstream:
+//   * DeviceRequest.{GnoiSystemSetPackageRequest,GnoiFilePutRequest} (need gnoi)
+//   * DeviceResponse.status (common.Status, field 3) — skipped on parse
+//   * DialTarget / RegisterDialout control plane (register/unregister)
+// Field numbers match upstream so the wire format is compatible.
+
+package tnmi;
+
+import "google/protobuf/any.proto";
+import "google/protobuf/duration.proto";
+
+// Empty message used in IsAlive rpc.
+message Empty {}
+
+// Acknowledgement for PushSubscriptionUpdates (kept for parity).
+message UpdateAck {}
+
+// A command / operation sent by the controller to the device.
+message DeviceRequest {
+  // Run a CLI command on the device.
+  message CliRequest {
+    string cmd = 1;                        // required CLI command
+    repeated string args = 2;              // each argument as a separate string
+    bool cec_cli = 3;                      // if true, prefix "cec_cli"
+    bool json = 4;                         // if true, append "--json" (cec_cli)
+    google.protobuf.Duration timeout = 5;  // run timeout (default 30s)
+  }
+
+  string rpc_id = 1;    // unique per RPC so the device matches response↔request
+  string device_id = 2; // target device; empty => execute on the BN
+  google.protobuf.Any request = 3; // the operation (e.g. a CliRequest)
+}
+
+// A result / proactive push sent by the device to the controller.
+message DeviceResponse {
+  message CliResponse {
+    DeviceRequest.CliRequest cmd = 1;
+    string stdout_op = 2;   // stdout (a JSON string if cmd.json = true)
+    string stderr_op = 3;   // stderr
+    int32 exit_code = 4;    // command exit code
+    bool timeout = 5;       // did the command time out?
+    bool truncated = 6;     // output too long (>256KB) and truncated?
+    int32 duration_ms = 7;  // execution time
+  }
+
+  string rpc_id = 1;    // same rpc_id as the DeviceRequest (empty => proactive)
+  string device_id = 2; // device the result came from
+  // field 3 = common.Status status (upstream) — omitted here, skipped on parse
+  google.protobuf.Any response = 4; // the result (e.g. a CliResponse)
+  bool fake = 9999;     // heartbeat / debug only — carries no real data
+}
+
+// Hosted by the controller (TCC); the device (target) is the streaming client.
+service DialTcc {
+  // Bidi: device pushes DeviceResponse up; TCC pushes DeviceRequest down.
+  rpc Subscribe(stream DeviceResponse) returns (stream DeviceRequest);
+
+  // Liveness probe.
+  rpc IsAlive(Empty) returns (Empty);
+}

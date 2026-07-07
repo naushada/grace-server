@@ -4,6 +4,7 @@
 #include "client_app.hpp"
 #include "framework.hpp"
 #include "gnmi_util.hpp"
+#include "mgmt_hub.hpp"
 #include "server_app.hpp"
 #include "sub_hub.hpp"
 #include "tunnel_hub.hpp"
@@ -13,6 +14,7 @@
 // ${CMAKE_BINARY_DIR}/app/proto_gen/).
 #include "gnmi/gnmi.pb.h"
 #include "tunnel/tunnel.pb.h"
+#include "dialout/tnmi_dialout.pb.h"
 
 #include <cstdint>
 #include <cstdio>
@@ -389,6 +391,53 @@ void connected_client::register_gnmi_handlers() {
         if (!d.data().empty())
           tunnel_hub::instance().from_device(tag, d.data());
       });
+
+  // ----- tNMI mgmt dial-out: DialTcc.Subscribe (bidi) -----------------------
+  // Device streams DeviceResponse UP (command results + proactive/unsolicited
+  // pushes); the operator's typed commands go DOWN as DeviceRequest (sent via
+  // mgmt_hub). Track the session so commands can reach it; render each response,
+  // correlating rpc_id back to the command that produced it.
+  m_grpc->register_bidi_stream(
+      "/tnmi.DialTcc/Subscribe",
+      [this](std::int32_t sid) {
+        const int id = mgmt_hub::instance().add_session(m_grpc.get(), sid,
+                                                        std::time(nullptr));
+        tunnel_log("[mgmt] session #" + std::to_string(id) +
+                   " opened (stream=" + std::to_string(sid) + ")");
+      },
+      [](std::int32_t /*sid*/, const std::string &msg_pb) {
+        tnmi::DeviceResponse resp;
+        if (!resp.ParseFromString(msg_pb)) {
+          tunnel_log("[mgmt] unparsable DeviceResponse (" +
+                     std::to_string(msg_pb.size()) + " bytes)");
+          return;
+        }
+        if (resp.fake())
+          return; // heartbeat — carries no real data
+
+        const std::string cmd = mgmt_hub::instance().command_for(resp.rpc_id());
+        std::string hdr = "[mgmt] " + (cmd.empty() ? std::string("push")
+                                                   : "reply '" + cmd + "'");
+        if (!resp.rpc_id().empty()) hdr += "  rpc=" + resp.rpc_id();
+        if (!resp.device_id().empty()) hdr += "  dev=" + resp.device_id();
+        tunnel_log(hdr);
+
+        // Unpack a CliResponse if that is what the Any carries.
+        if (resp.response().Is<tnmi::DeviceResponse::CliResponse>()) {
+          tnmi::DeviceResponse::CliResponse cli;
+          resp.response().UnpackTo(&cli);
+          tunnel_log("    exit=" + std::to_string(cli.exit_code()) +
+                     (cli.timeout() ? " (timeout)" : "") +
+                     (cli.truncated() ? " (truncated)" : "") + "  " +
+                     std::to_string(cli.duration_ms()) + "ms");
+          if (!cli.stdout_op().empty())
+            tunnel_log(cli.stdout_op());
+          if (!cli.stderr_op().empty())
+            tunnel_log("[stderr] " + cli.stderr_op());
+        } else if (!resp.response().type_url().empty()) {
+          tunnel_log("    response: " + resp.response().type_url());
+        }
+      });
 }
 
 // ---------------------------------------------------------------------------
@@ -451,6 +500,9 @@ std::int32_t connected_client::handle_close(const std::int32_t &channel) {
   // stream so the registry never holds a dangling grpc_session pointer.
   for (const auto &id : tunnel_hub::instance().remove_by_stream(m_grpc.get()))
     tunnel_log("[reg] -target '" + id + "' (disconnected)");
+  // Drop any mgmt dial-out (DialTcc.Subscribe) session on this connection.
+  for (const int id : mgmt_hub::instance().remove_by_stream(m_grpc.get()))
+    tunnel_log("[mgmt] session #" + std::to_string(id) + " closed");
   // Tell the server to remove this connection from its client map.
   // server::handle_close erases the unique_ptr<connected_client>, destroying
   // this object — no member access is safe after this call returns.

@@ -10,6 +10,7 @@
 #include "server_app.hpp"
 #include "tls_config.hpp"
 
+#include "mgmt_tui.hpp"
 #include "mqtt_io.hpp"
 #include "server_tui.hpp"
 #include "tunnel_config.hpp"
@@ -163,6 +164,14 @@ static void print_usage(const char *prog) {
     << "    --local-port=<port>      Local gNMI listener that byte-proxies to a\n"
     << "                             target over the tunnel  (0 = off)\n"
     << "    --target=<id>            Target the local listener fronts\n"
+    << "\n"
+    << "  " << prog << " --mode=mgmt-dialout [options]\n"
+    << "       tNMI mgmt dial-out: a device opens the bidi /tnmi.DialTcc/Subscribe\n"
+    << "       stream; type CLI commands to send, results/pushes stream back.\n"
+    << "       Interactive → command TUI; --headless=true for stdout.\n"
+    << "    --port=<port>            Dial-in listen port         (default: 58989)\n"
+    << "    --tls=true               Enable TLS (--cert/--key/--ca)\n"
+    << "    --log-file=<path>        Append every received response to a file\n"
     << "\n"
     << "  gnmi-mqtt-client options:\n"
     << "    --mqtt-host=<host>       MQTT broker address       (default: localhost)\n"
@@ -388,6 +397,58 @@ int main(int argc, const char *argv[]) {
         std::cout << std::unitbuf;
       }
       tunnel_tui tui(tcfg.port);
+      run_evt_loop{}();
+    }
+    return 0;
+  }
+
+  // ── mgmt-dialout ───────────────────────────────────────────────────────────
+  // tNMI mgmt dial-out: a device dials in and opens the bidi /tnmi.DialTcc/
+  // Subscribe stream. The operator types CLI commands (sent down as
+  // DeviceRequest); the device streams DeviceResponse up (results + proactive
+  // pushes). Interactive → mgmt_tui (sessions pane + transcript + input line);
+  // --headless logs to stdout. --log-file / --out-file tees responses to a file.
+  if (mode == "mgmt-dialout") {
+    const uint16_t port = get_port_flag(argc, argv, "port", 58989);
+    const tls_config tls_cfg{
+      get_flag(argc, argv, "tls", "false") == "true",
+      get_flag(argc, argv, "cert", ""),
+      get_flag(argc, argv, "key",  ""),
+      get_flag(argc, argv, "ca",   ""),
+    };
+    const std::string log_file = get_flag(argc, argv, "log-file", "");
+    const std::string hl = get_flag(argc, argv, "headless", "");
+    const bool headless = (hl == "true") ||
+                          (hl != "false" &&
+                           (!isatty(STDIN_FILENO) || !isatty(STDOUT_FILENO)));
+
+    server mgmt_svc("0.0.0.0", port, tls_cfg);
+
+    std::ofstream logf;
+    if (!log_file.empty()) {
+      logf.open(log_file, std::ios::app);
+      if (logf)
+        update_sink::instance().add([&logf](const std::string &l) {
+          logf << l << '\n';
+          logf.flush();
+        });
+      else
+        std::cerr << "[main] cannot open --log-file " << log_file << '\n';
+    }
+
+    if (headless) {
+      std::cout << "[main] mode=mgmt-dialout port=" << port
+                << " tls=" << (tls_cfg.enabled ? "ON" : "OFF")
+                << (log_file.empty() ? "" : " log=" + log_file) << '\n';
+      run_evt_loop{}();
+    } else {
+      static std::ofstream tlog("/tmp/mgmt_dialout.log", std::ios::app);
+      if (tlog) {
+        std::cout.rdbuf(tlog.rdbuf());
+        std::cerr.rdbuf(tlog.rdbuf());
+        std::cout << std::unitbuf;
+      }
+      mgmt_tui tui(port, log_file);
       run_evt_loop{}();
     }
     return 0;

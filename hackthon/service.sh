@@ -17,6 +17,9 @@
 #   ./service.sh get <path>         One-shot gNMI Get over the tunnel (scriptable)
 #   ./service.sh set <path>:<val>   One-shot gNMI Set
 #   ./service.sh subscribe <path>   Stream telemetry over the tunnel (Ctrl-C to stop)
+#   ./service.sh mgmt [--out-file <path>]   tNMI mgmt dial-out server + command
+#                                   TUI (device dials in; type CLI commands).
+#                                   --out-file also saves responses to a file.
 #   ./service.sh logs [svc]         Tail logs (default: tunnel — target registrations)
 #   ./service.sh ps                 Show service status
 #   ./service.sh down               Stop and remove the stack
@@ -106,8 +109,36 @@ case "$cmd" in
     echo "[service] attaching to gnmi_peer — detach with Ctrl-P Ctrl-Q, quit the shell with 'quit'"
     exec $COMPOSE -f "$COMPOSE_FILE" attach peer
     ;;
+  mgmt)
+    # tNMI mgmt dial-out: a single-container server + command TUI (not compose).
+    # A device dials :58989 and opens DialTcc.Subscribe; type CLI commands in the
+    # TUI to send, results/pushes stream back. --out-file <path> also saves every
+    # received response to a host file.
+    out=""
+    while [ $# -gt 0 ]; do
+      case "$1" in
+        --out-file) out="$2"; shift 2 ;;
+        *) die "mgmt: unknown option '$1' (only --out-file <path>)" ;;
+      esac
+    done
+    eng="$(engine_bin)"
+    if ! "$eng" image inspect "$IMAGE" >/dev/null 2>&1; then
+      echo "[service] image '$IMAGE' not found — building …"
+      "$here/build.sh" -t "$IMAGE"
+    fi
+    runargs=(-it --rm -p 58989:58989)
+    binargs=(/app/app --mode=mgmt-dialout)
+    if [ -n "$out" ]; then
+      od="$(dirname "$out")"; mkdir -p "$od" || die "cannot create dir: $od"
+      oa="$(cd "$od" && pwd)"
+      runargs+=(-v "$oa:/out")
+      binargs+=("--log-file=/out/$(basename "$out")")
+    fi
+    echo "[service] mgmt dial-out on :58989 — device dials in, type commands in the TUI (^D to quit)"
+    exec "$eng" run "${runargs[@]}" "$IMAGE" "${binargs[@]}"
+    ;;
   -h|--help|help)
     awk 'NR==1{next} /^set -e/{exit} {sub(/^# ?/,""); print}' "$0"
     ;;
-  *) die "unknown command '$cmd' (up|attach|get|set|subscribe|logs|ps|down|restart|build; --help)" ;;
+  *) die "unknown command '$cmd' (up|attach|get|set|subscribe|mgmt|logs|ps|down|restart|build; --help)" ;;
 esac
