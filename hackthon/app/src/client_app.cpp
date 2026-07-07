@@ -405,7 +405,7 @@ void connected_client::register_gnmi_handlers() {
         tunnel_log("[mgmt] session #" + std::to_string(id) +
                    " opened (stream=" + std::to_string(sid) + ")");
       },
-      [](std::int32_t /*sid*/, const std::string &msg_pb) {
+      [this](std::int32_t sid, const std::string &msg_pb) {
         tnmi::DeviceResponse resp;
         if (!resp.ParseFromString(msg_pb)) {
           tunnel_log("[mgmt] unparsable DeviceResponse (" +
@@ -414,6 +414,7 @@ void connected_client::register_gnmi_handlers() {
         }
         if (resp.fake())
           return; // heartbeat — carries no real data
+        mgmt_hub::instance().note_device(m_grpc.get(), sid, resp.device_id());
 
         const std::string cmd = mgmt_hub::instance().command_for(resp.rpc_id());
         std::string hdr = "[mgmt] " + (cmd.empty() ? std::string("push")

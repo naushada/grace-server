@@ -27,6 +27,7 @@ public:
   struct session_info {
     int id{0};
     std::time_t since{0};
+    std::string device; // device_id last seen on this session ("" until a reply)
   };
 
   static mgmt_hub &instance() {
@@ -60,8 +61,18 @@ public:
     std::vector<session_info> out;
     out.reserve(m_sessions.size());
     for (const auto &s : m_sessions)
-      out.push_back({s.id, s.since});
+      out.push_back({s.id, s.since, s.device});
     return out;
+  }
+
+  // Record the device_id seen on a session's stream (from a DeviceResponse).
+  void note_device(grpc_session *g, std::int32_t sid,
+                   const std::string &device_id) {
+    if (device_id.empty())
+      return;
+    for (auto &s : m_sessions)
+      if (s.grpc == g && s.sid == sid)
+        s.device = device_id;
   }
 
   // Pack any operation message into a DeviceRequest{rpc_id, device_id, request}
@@ -150,6 +161,7 @@ private:
     std::int32_t sid{0};
     int id{0};
     std::time_t since{0};
+    std::string device; // last device_id seen on this stream
   };
   std::vector<sess> m_sessions;
   int m_next_id{0};
