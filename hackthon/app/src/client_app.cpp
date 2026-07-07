@@ -256,27 +256,45 @@ void connected_client::register_gnmi_handlers() {
         if (resp.response_case() != gnmi::SubscribeResponse::kUpdate)
           return;
 
-        // Emit one readable "path = value" per leaf (full path = prefix + path)
-        // instead of a single minified-JSON blob. Far easier to read/scroll/grep.
-        // A header line carries the notification's timestamp (the sample time,
-        // shared by every leaf in this notification) and the update count.
+        // Compact rendering so a 200+-leaf notification doesn't wall the screen:
+        // one header line (stream · ts · prefix · counts) then the leaves packed
+        // as "relpath=val" tokens into wrapped, indented lines (values truncated).
+        // Full path = prefix + relpath; prefix is on the header, so leaves show
+        // the short relative path. Goes to both stdout and the TUI sink.
         const gnmi::Notification &n = resp.update();
         const std::string prefix = gnmi_util::path_to_string(n.prefix());
         const std::string ts = format_ns_timestamp(n.timestamp());
-        update_sink::instance().emit("── " + ts + " · " +
-                                     std::to_string(n.update_size()) +
-                                     " update(s) ──");
-        std::cout << "[PushSub] stream=" << sid << " " << ts << " " << prefix
-                  << " (" << n.update_size() << " updates, " << n.delete__size()
-                  << " deletes)\n";
-        for (const auto &u : n.update())
-          update_sink::instance().emit(prefix +
-                                       gnmi_util::path_to_string(u.path()) +
-                                       " = " +
-                                       gnmi_util::typed_value_to_json(u.val()));
+
+        auto out = [](const std::string &s) {
+          std::cout << s << "\n";
+          update_sink::instance().emit(s);
+        };
+
+        out("[PushSub] s" + std::to_string(sid) + " " + ts + " " + prefix +
+            "  " + std::to_string(n.update_size()) + "u " +
+            std::to_string(n.delete__size()) + "d");
+
+        // Pack tokens into lines no wider than kWidth (indented by 4).
+        constexpr std::size_t kWidth = 118;
+        constexpr std::size_t kValMax = 28; // truncate long values (e.g. messages)
+        std::string line = "    ";
+        auto pack = [&](const std::string &tok) {
+          if (line.size() > 4 && line.size() + tok.size() + 2 > kWidth) {
+            out(line);
+            line = "    ";
+          }
+          line += tok + "  ";
+        };
+        for (const auto &u : n.update()) {
+          std::string v = gnmi_util::typed_value_to_json(u.val());
+          if (v.size() > kValMax)
+            v = v.substr(0, kValMax) + "..";
+          pack(gnmi_util::path_to_string(u.path()) + "=" + v);
+        }
         for (int i = 0; i < n.delete__size(); ++i)
-          update_sink::instance().emit(
-              prefix + gnmi_util::path_to_string(n.delete_(i)) + " = (deleted)");
+          pack("-" + gnmi_util::path_to_string(n.delete_(i)));
+        if (line.size() > 4)
+          out(line);
       });
 
   // ----- grpctunnel Register (server side, increment A) ---------------------
