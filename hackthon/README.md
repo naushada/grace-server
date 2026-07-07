@@ -102,15 +102,30 @@ cd hackthon
 ./run.sh --config ./my.lua gnmi-peer
 echo 'gnmi get /a/b' | ./run.sh --headless gnmi-peer
 ./run.sh --build gnmi-server -- --gnmi-port=9339   # build, then run
+./run.sh gnmi-server --out-file ./u.txt            # monitor TUI + log updates
+./run.sh grpc-tunnel-server      # accept dial-out tunnel sessions (NATed devices)
 ./run.sh shell                   # open a bash shell inside the image
 ./run.sh exec <name>             # bash into an already-running container
 ./run.sh --help                  # every command + option
 ```
 
-`run.sh` covers every binary: `gnmi-peer`, `gnmi-server`, `cli`, `app`,
-`vpn-server`, `vpn-client`, `openvpn-server`, `openvpn-client`, plus `shell`,
-`exec`, and `raw`. The manual `docker`/`podman` commands below still work if you
-prefer them.
+`run.sh` covers every binary: `gnmi-peer`, `gnmi-server`, `grpc-tunnel-server`,
+`cli`, `app`, `vpn-server`, `vpn-client`, `openvpn-server`, `openvpn-client`,
+plus `shell`, `exec`, and `raw`. The manual `docker`/`podman` commands below
+still work if you prefer them.
+
+### Dial-out server modes (devices behind NAT)
+
+For devices that dial *out* to a controller, `app` has two dial-out server modes,
+each with a monitor TUI and optional file logging — see their runbooks:
+
+- **`--mode=grpc-tunnel-server`** — openconfig/grpctunnel byte-proxy; reach a
+  device's real gNMI (Get/Set/Subscribe) through the tunnel. One command:
+  `./service.sh up` then `./service.sh get/subscribe …`.
+  [docs/grpc-tunnel-server.md](docs/grpc-tunnel-server.md)
+- **`--mode=mgmt-dialout`** — tNMI `DialTcc.Subscribe` command console; type CLI
+  or gNMI (or `send <file.lua>`) and see results + proactive pushes.
+  `./service.sh mgmt`. [docs/mgmt-dialout.md](docs/mgmt-dialout.md)
 
 > **Every command and flag** — scripts, `gnmi_peer`, `app` modes, `cli_app`,
 > and the VPN binaries — is catalogued in

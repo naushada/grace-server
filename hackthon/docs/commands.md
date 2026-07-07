@@ -59,9 +59,10 @@ Runs any binary in a container, or opens a shell in one.
 | Command | Runs | Notes |
 |---------|------|-------|
 | `gnmi-peer` | `/app/gnmi_peer` | Two-pane TUI (interactive). `--headless` = line-mode. Default port 58989. |
-| `gnmi-server` | `/app/app --mode=gnmi-server` | Plain gNMI server. Default port 58989. |
+| `gnmi-server` | `/app/app --mode=gnmi-server` | Plain gNMI server + monitor TUI. `--out-file <path>` logs updates. Default port 58989. |
+| `grpc-tunnel-server` | `/app/app --mode=grpc-tunnel-server` | Dial-out tunnel for NATed devices ([grpc-tunnel-server.md](grpc-tunnel-server.md)). |
 | `cli` | `/app/cli_app` | Interactive readline REPL. |
-| `app` | `/app/app` | Pass the mode yourself, e.g. `-- --mode=client`. |
+| `app` | `/app/app` | Pass the mode yourself, e.g. `-- --mode=client` or `--mode=mgmt-dialout`. |
 | `vpn-server` | `/app/vpn_server` | Auto: `--root` + TUN, port 1194. |
 | `vpn-client` | `/app/vpn_client` | Auto: `--root` + TUN. |
 | `openvpn-server` | `/app/openvpn_server` | Auto: `--root` + TUN, port 1194. |
@@ -145,7 +146,8 @@ peer pushes into this process's local server appear in the bottom pane as
 
 ## `app` (multi-mode binary)
 
-`/app/app --mode=<server|client|gnmi-server|gnmi-mqtt-client>` (default `server`).
+`/app/app --mode=<server|client|gnmi-server|grpc-tunnel-server|mgmt-dialout|gnmi-mqtt-client>`
+(default `server`).
 
 ### `--mode=gnmi-server` (standalone gNMI target — no VPN/TUN)
 
@@ -155,6 +157,23 @@ peer pushes into this process's local server appear in the bottom pane as
 | `--gnmi-tls-port <port>` | `0` | If set, run plain **and** TLS listeners simultaneously |
 | `--gnmi-tls <bool>` | `false` | Single-port TLS mode (ignored when `--gnmi-tls-port` is set) |
 | `--gnmi-cert/--gnmi-key/--gnmi-ca <path>` | — | PEM files for TLS |
+| `--log-file <path>` | — | Append every update line to a file |
+| `--headless <bool>` | auto | `true` = stdout; default = monitor TUI on a TTY |
+
+### `--mode=grpc-tunnel-server` (dial-out tunnel for NATed devices)
+
+openconfig/grpctunnel byte-proxy — reach a device's real gNMI through the
+tunnel. `--config <lua>` maps local-port → target; `--local-port`/`--target`,
+`--tls/--cert/--key/--ca`, `--headless`. Full runbook +
+`service.sh up/get/set/subscribe`: **[grpc-tunnel-server.md](grpc-tunnel-server.md)**.
+
+### `--mode=mgmt-dialout` (tNMI mgmt command console)
+
+Device opens the bidi `DialTcc.Subscribe`; type CLI or `gnmi get|set|subscribe`,
+or `send <file.lua>`, and see results + proactive pushes. `--port` (58989),
+`--tls/--cert/--key/--ca`, `--log-file <path>`, `--headless`. Command TUI when
+interactive. Full runbook + `service.sh mgmt`:
+**[mgmt-dialout.md](mgmt-dialout.md)**.
 
 ### `--mode=server` (custom VPN tunnel server + gNMI)
 
