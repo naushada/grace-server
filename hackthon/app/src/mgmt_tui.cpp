@@ -1,6 +1,9 @@
 #include "mgmt_tui.hpp"
+#include "gnmi_util.hpp"
 #include "mgmt_hub.hpp"
 #include "update_sink.hpp"
+
+#include "gnmi/gnmi.pb.h"
 
 #include <ncurses.h>
 #include <sys/ioctl.h> // ioctl, TIOCGWINSZ, winsize
@@ -112,9 +115,9 @@ mgmt_tui::mgmt_tui(std::uint16_t port, const std::string &log_file)
   update_sink::instance().add(
       [this](const std::string &line) { this->println(line); });
   println("Ready. Waiting for a device to open DialTcc.Subscribe …");
-  println("Type a command + Enter to send.  @<id> cmd targets a device.");
-  println(":set cec on | :set json on | :set timeout 20s | :show | :reset.  "
-          "quit/exit or ^D to leave.");
+  println("CLI:  <cmd> [args]   ·   gNMI:  gnmi get|set|subscribe <spec>");
+  println("@<id> … targets a device.  :set cec on|json on|timeout 20s · :show "
+          "· :reset.  quit/exit/^D to leave.");
 
   m_winch_ev = evsignal_new(evt_base::instance().get(), SIGWINCH, on_winch, this);
   if (m_winch_ev) event_add(m_winch_ev, nullptr);
@@ -357,6 +360,20 @@ void mgmt_tui::submit_input() {
   while (ss >> a) args.push_back(a);
   if (cmd.empty()) { println("[mgmt] no command after @" + device_id); return; }
 
+  // `gnmi <verb> <spec>` builds a gNMI request (Get/Set/Subscribe) instead of a
+  // CliRequest; the device unpacks it from DeviceRequest.request.
+  if (cmd == "gnmi") {
+    if (args.empty()) { println("[mgmt] usage: gnmi get|set|subscribe <spec>"); return; }
+    const std::string verb = args[0];
+    std::string spec;
+    for (std::size_t i = 1; i < args.size(); ++i) {
+      if (i > 1) spec += " ";
+      spec += args[i];
+    }
+    send_gnmi(verb, spec, device_id);
+    return;
+  }
+
   const std::string rpc_id = mgmt_hub::instance().send_cli(
       cmd, args, device_id, m_cec, m_json, m_timeout_ns);
   if (rpc_id.empty())
@@ -364,6 +381,93 @@ void mgmt_tui::submit_input() {
   else
     println("[mgmt] \xE2\x86\x92 " + (device_id.empty() ? "" : "@" + device_id + " ") +
             "'" + cmd + "'  rpc=" + rpc_id); // →
+}
+
+void mgmt_tui::send_gnmi(const std::string &verb, const std::string &spec,
+                         const std::string &device_id) {
+  std::string rpc_id, label;
+  auto send = [&](const google::protobuf::Message &m) {
+    rpc_id = mgmt_hub::instance().send_request(m, device_id, label);
+  };
+
+  if (verb == "get") {
+    if (spec.empty()) { println("[mgmt] usage: gnmi get <xpath>[,<xpath>...]"); return; }
+    gnmi::GetRequest g;
+    std::istringstream ps(spec);
+    std::string p;
+    int n = 0;
+    while (std::getline(ps, p, ',')) {
+      p = trim(p);
+      if (p.empty()) continue;
+      *g.add_path() = gnmi_util::parse_yang_path(p);
+      ++n;
+    }
+    if (n == 0) { println("[mgmt] no valid xpaths"); return; }
+    g.set_encoding(gnmi::JSON);
+    label = "gnmi get " + spec;
+    send(g);
+  } else if (verb == "set") {
+    if (spec.empty()) { println("[mgmt] usage: gnmi set <xpath>:<val>[,...]"); return; }
+    gnmi::SetRequest s;
+    std::istringstream ps(spec);
+    std::string pair;
+    int n = 0;
+    while (std::getline(ps, pair, ',')) {
+      pair = trim(pair);
+      const auto colon = pair.find(':');
+      if (colon == std::string::npos) continue;
+      auto *u = s.add_update();
+      *u->mutable_path() = gnmi_util::parse_yang_path(trim(pair.substr(0, colon)));
+      gnmi_util::set_typed_value(u->mutable_val(), pair.substr(colon + 1));
+      ++n;
+    }
+    if (n == 0) { println("[mgmt] no valid <xpath>:<value> pairs"); return; }
+    label = "gnmi set " + spec;
+    send(s);
+  } else if (verb == "subscribe" || verb == "sub") {
+    if (spec.empty()) { println("[mgmt] usage: gnmi subscribe <xpath>[,...] [interval]"); return; }
+    // Optional trailing interval token => SAMPLE.
+    std::string paths = spec;
+    std::uint64_t interval_ns = 0;
+    if (const auto ws = spec.find_last_of(" \t"); ws != std::string::npos) {
+      const std::string tail = trim(spec.substr(ws + 1));
+      if (!tail.empty() && std::isdigit((unsigned char)tail[0])) {
+        interval_ns = parse_duration_ns(tail);
+        if (interval_ns) paths = spec.substr(0, ws);
+      }
+    }
+    gnmi::SubscribeRequest sub;
+    auto *sl = sub.mutable_subscribe();
+    sl->set_mode(gnmi::SubscriptionList::STREAM);
+    sl->set_encoding(gnmi::JSON);
+    std::istringstream ps(paths);
+    std::string p;
+    int n = 0;
+    while (std::getline(ps, p, ',')) {
+      p = trim(p);
+      if (p.empty()) continue;
+      auto *su = sl->add_subscription();
+      *su->mutable_path() = gnmi_util::parse_yang_path(p);
+      if (interval_ns) {
+        su->set_mode(gnmi::SAMPLE);
+        su->set_sample_interval(interval_ns);
+      }
+      ++n;
+    }
+    if (n == 0) { println("[mgmt] no valid xpaths"); return; }
+    label = "gnmi subscribe " + paths;
+    send(sub);
+  } else {
+    println("[mgmt] unknown gnmi verb '" + verb + "' (get|set|subscribe)");
+    return;
+  }
+
+  if (rpc_id.empty())
+    println("[mgmt] no session connected — not sent: " + label);
+  else
+    println("[mgmt] \xE2\x86\x92 " +
+            (device_id.empty() ? "" : "@" + device_id + " ") + label +
+            "  rpc=" + rpc_id);
 }
 
 void mgmt_tui::relayout() {
