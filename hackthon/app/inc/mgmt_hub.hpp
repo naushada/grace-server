@@ -89,6 +89,22 @@ public:
     return rpc_id;
   }
 
+  // Send a fully-built DeviceRequest (e.g. from a .lua file): stamp a fresh
+  // rpc_id (overriding any in the message) and send on every session.
+  std::string send_device_request(tnmi::DeviceRequest &req,
+                                  const std::string &label) {
+    if (m_sessions.empty())
+      return "";
+    const std::string rpc_id = gen_rpc_id();
+    req.set_rpc_id(rpc_id);
+    std::string pb;
+    req.SerializeToString(&pb);
+    for (auto &s : m_sessions)
+      s.grpc->stream_send(s.sid, pb);
+    m_pending[rpc_id] = label;
+    return rpc_id;
+  }
+
   // Convenience: build a CliRequest from the sticky settings and send it.
   std::string send_cli(const std::string &cmd,
                        const std::vector<std::string> &args,

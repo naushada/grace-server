@@ -1,9 +1,12 @@
 #include "mgmt_tui.hpp"
 #include "gnmi_util.hpp"
+#include "lua_engine.hpp"
+#include "lua_proto.hpp"
 #include "mgmt_hub.hpp"
 #include "update_sink.hpp"
 
 #include "gnmi/gnmi.pb.h"
+#include "dialout/tnmi_dialout.pb.h"
 
 #include <ncurses.h>
 #include <sys/ioctl.h> // ioctl, TIOCGWINSZ, winsize
@@ -116,6 +119,7 @@ mgmt_tui::mgmt_tui(std::uint16_t port, const std::string &log_file)
       [this](const std::string &line) { this->println(line); });
   println("Ready. Waiting for a device to open DialTcc.Subscribe …");
   println("CLI:  <cmd> [args]   ·   gNMI:  gnmi get|set|subscribe <spec>");
+  println("From file:  send <file.lua>  (a DeviceRequest described in Lua)");
   println("@<id> … targets a device.  :set cec on|json on|timeout 20s · :show "
           "· :reset.  quit/exit/^D to leave.");
 
@@ -346,6 +350,12 @@ void mgmt_tui::submit_input() {
     return;
   }
 
+  // `send <file.lua>` builds a whole DeviceRequest from a Lua file via reflection.
+  if (line.rfind("send ", 0) == 0) {
+    send_file(trim(line.substr(5)));
+    return;
+  }
+
   // Optional leading @<device_id> targets a specific device (empty => the BN).
   std::istringstream ss(line);
   std::string tok, device_id;
@@ -467,6 +477,31 @@ void mgmt_tui::send_gnmi(const std::string &verb, const std::string &spec,
   else
     println("[mgmt] \xE2\x86\x92 " +
             (device_id.empty() ? "" : "@" + device_id + " ") + label +
+            "  rpc=" + rpc_id);
+}
+
+void mgmt_tui::send_file(const std::string &path) {
+  if (path.empty()) { println("[mgmt] usage: send <file.lua>"); return; }
+  lua_file lf;
+  lf.process_create_luafile(path);
+  auto it = lf.commands().find(path);
+  if (it == lf.commands().end()) {
+    println("[mgmt] cannot load '" + path + "' (not found or not a table)");
+    return;
+  }
+  tnmi::DeviceRequest req;
+  std::string err;
+  if (!lua_proto::populate(it->second, &req, err)) {
+    println("[mgmt] " + path + ": " + err);
+    return;
+  }
+  const std::string label = "send " + path;
+  const std::string rpc_id = mgmt_hub::instance().send_device_request(req, label);
+  if (rpc_id.empty())
+    println("[mgmt] no session connected — not sent: " + path);
+  else
+    println("[mgmt] \xE2\x86\x92 " + label +
+            (req.device_id().empty() ? "" : "  dev=" + req.device_id()) +
             "  rpc=" + rpc_id);
 }
 

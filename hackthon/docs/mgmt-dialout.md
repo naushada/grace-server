@@ -68,6 +68,44 @@ Example: `:set cec on` then `show interfaces` → runs `cec_cli show interfaces`
 
 `quit` / `exit` / `Ctrl-D` leaves. `PgUp/PgDn/Home/End` scroll the transcript.
 
+## Request files (Lua → proto)
+
+For canned or complex requests, describe the whole `DeviceRequest` in a `.lua`
+file and send it with **`send <file.lua>`** — the table is serialized straight
+into the proto by reflection (no per-type code). `rpc_id` is stamped for you.
+
+Rules:
+- The top table **is** the `tnmi.DeviceRequest` (`device_id` + `request`).
+- The `request` field is a `google.protobuf.Any` — name its message with
+  **`["@type"] = "<proto full name>"`** (e.g. `gnmi.GetRequest`,
+  `tnmi.DeviceRequest.CliRequest`); it's built, populated, and packed.
+- Scalars, arrays, nested tables, and arrays-of-tables map to scalar / repeated /
+  nested-message / repeated-message fields. **Enums** are given by name
+  (`encoding = "JSON"`). **Maps** (e.g. `PathElem.key`) are a nested `k = v` table.
+- **Path sugar**: a string assigned to a `gnmi.Path` field is parsed as a YANG
+  path, so **keys** work inline: `"/interfaces/interface[name=eth0]/state"`.
+
+```lua
+-- gnmi_get.lua  →  send docs/mgmt-requests/gnmi_get.lua
+return {
+  device_id = "RN-147",
+  request = {
+    ["@type"] = "gnmi.GetRequest",
+    encoding  = "JSON",
+    path = { "/system/state", "/interfaces/interface[name=eth0]/state" },
+  },
+}
+```
+Samples in **`docs/mgmt-requests/`**: `cli.lua`, `gnmi_get.lua`,
+`gnmi_get_key.lua` (explicit key map), `gnmi_subscribe.lua`.
+
+Mount a request dir into the container and `send` from there:
+```bash
+docker run -it --rm -p 58989:58989 -v "$PWD/docs/mgmt-requests:/req:ro" \
+  marvel:dev /app/app --mode=mgmt-dialout
+#   in the TUI:  send /req/gnmi_get.lua
+```
+
 ## Reading responses
 
 Responses stream into the transcript, colour-coded:
