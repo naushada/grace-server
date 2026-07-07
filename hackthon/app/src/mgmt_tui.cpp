@@ -126,7 +126,7 @@ mgmt_tui::mgmt_tui(std::uint16_t port, const std::string &log_file)
   m_attr_head = color_id(COLOR_CYAN, have_color, &next);
   m_attr_reply = color_id(COLOR_GREEN, have_color, &next);
   m_attr_push = color_id(COLOR_MAGENTA, have_color, &next);
-  m_attr_leaf = color_id(COLOR_WHITE, have_color, &next);
+  m_attr_leaf = 0; // plain leaf lines, matching the tunnel transcript
   m_attr_warn = color_id(COLOR_YELLOW, have_color, &next);
 
   // Mouse-wheel scrolling of the transcript. Important inside tmux, where the
@@ -175,12 +175,6 @@ void mgmt_tui::draw_header() {
   werase(m_head);
   std::string s = " Marvel gNMI Mgmt · :" + std::to_string(m_port) + " · " +
                   std::to_string(mgmt_hub::instance().size()) + " session(s)";
-  // Sticky CliRequest settings (:set cec|json|timeout).
-  std::string set;
-  if (m_cec) set += " cec";
-  if (m_json) set += " json";
-  if (!m_timeout_disp.empty()) set += " " + m_timeout_disp;
-  s += " ·" + (set.empty() ? std::string(" defaults") : set);
   if (!m_log_path.empty()) s += " · log " + m_log_path;
   s += "      PgUp/PgDn·End scroll · ^D quit";
   wattron(m_head, A_DIM);
@@ -195,7 +189,8 @@ void mgmt_tui::draw_sessions() {
   getmaxyx(m_sessions, th, w);
   werase(m_sessions);
   wattron(m_sessions, A_DIM);
-  const char *hdr = " SESSION   UPTIME";
+  char hdr[96];
+  std::snprintf(hdr, sizeof(hdr), " %-8s %-22s %s", "SESSION", "DEVICE", "UPTIME");
   mvwaddnstr(m_sessions, 0, 0, hdr, utf8_clip(hdr, w));
   wattroff(m_sessions, A_DIM);
 
@@ -203,8 +198,11 @@ void mgmt_tui::draw_sessions() {
   const std::time_t now = std::time(nullptr);
   const int rows = th - 1;
   for (int i = 0; i < static_cast<int>(snap.size()) && i < rows; ++i) {
-    char line[128];
-    std::snprintf(line, sizeof(line), " #%-7d %s", snap[i].id,
+    char sess[16];
+    std::snprintf(sess, sizeof(sess), "#%d", snap[i].id);
+    char line[192];
+    std::snprintf(line, sizeof(line), " %-8s %-22.22s %s", sess,
+                  snap[i].device.empty() ? "-" : snap[i].device.c_str(),
                   fmt_uptime(now - snap[i].since).c_str());
     std::string ls(line);
     if (m_attr_reply) wattron(m_sessions, m_attr_reply);
@@ -238,13 +236,22 @@ void mgmt_tui::draw_foot() {
   if (snap.empty()) {
     s = " (no sessions — waiting for a device to open DialTcc.Subscribe)";
   } else {
-    s = " session: ";
+    s = " identity: ";
     for (std::size_t i = 0; i < snap.size(); ++i) {
       if (i) s += "   ·   ";
-      s += "#" + std::to_string(snap[i].id) + "  \xE2\x86\x92  " +
-           (snap[i].device.empty() ? "?" : snap[i].device); // →
+      const auto &t = snap[i];
+      if (!t.role.empty() && !t.hostname.empty()) s += t.role + "(" + t.hostname + ")";
+      else if (!t.hostname.empty()) s += t.hostname;
+      else if (!t.role.empty()) s += t.role;
+      else s += "#" + std::to_string(t.id);
     }
   }
+  // Sticky CliRequest settings moved off the header live here.
+  std::string set;
+  if (m_cec) set += " cec";
+  if (m_json) set += " json";
+  if (!m_timeout_disp.empty()) set += " " + m_timeout_disp;
+  s += "      · " + (set.empty() ? std::string("defaults") : set);
   const int attr = (m_attr_reply ? m_attr_reply : A_NORMAL) | A_BOLD;
   wattron(m_foot, attr);
   mvwaddnstr(m_foot, 0, 0, s.c_str(), utf8_clip(s, w));
@@ -579,9 +586,9 @@ void mgmt_tui::relayout() {
   getmaxyx(stdscr, H, W);
   if (H < 7 || W < 4) return;
 
-  int th = H / 4;
-  if (th < 3) th = 3;
-  if (th > 8) th = 8;
+  int th = H / 3; // match the tunnel targets pane
+  if (th < 4) th = 4;
+  if (th > 10) th = 10;
   if (th > H - 6) th = H - 6; // header + sep + >=1 transcript + foot + input
   if (th < 1) th = 1;
   const int out_top = 1 + th + 1;
