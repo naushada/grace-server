@@ -481,7 +481,8 @@ void mgmt_tui::submit_input() {
     println("  send <file.lua>                 DeviceRequest described in Lua");
     println("  @<device_id> <cmd> …            target a specific device");
     println("  :set cec|json on|off · :set timeout 20s · :show · :reset");
-    println("  Up/Down history · PgUp/PgDn/Home & ←/→ scroll · quit/^D leave");
+    println("  Up/Down history · PgUp/PgDn/Home, Shift+Up/Down (1 line), ←/→ "
+            "scroll · quit/^D leave");
     return;
   }
 
@@ -747,6 +748,10 @@ std::int32_t mgmt_tui::handle_read(const std::int32_t & /*channel*/,
     } else if (ch == KEY_NPAGE) {
       int h = 0, w = 0; getmaxyx(m_out, h, w); (void)w;
       scroll_by(-(h > 1 ? h - 1 : 1));
+    } else if (ch == KEY_SR) {     // Shift+Up → scroll up one line
+      scroll_by(1);
+    } else if (ch == KEY_SF) {     // Shift+Down → scroll down one line
+      scroll_by(-1);
     } else if (ch == KEY_UP) {
       // Recall the previous command from history into the input line.
       if (!m_history.empty() && m_hist_idx > 0) {
