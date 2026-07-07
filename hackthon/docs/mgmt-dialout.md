@@ -58,8 +58,14 @@ A grpc-tunnel-style monitor plus a command input line:
  [mgmt] → gnmi get /system/state  rpc=r-8f3a…
      /system/state/hostname = "bn-1"  …
  identity: bn(S147F2223907369)      · defaults          ← footer
- bn(S147F2223907369)>                                   ← input line
+ ╭────────────────────────────────────────────╮
+ │ bn(S147F2223907369)> gnmi get /system/state │        ← Claude-style input box
+ ╰────────────────────────────────────────────╯
 ```
+Same UI family as the other TUIs: the grpc-tunnel monitor chrome (header +
+`SESSION/DEVICE/UPTIME` pane + separator + `identity:` footer) plus the
+gnmi_peer's **Claude-style rounded input box**.
+
 - On session-open the server auto-probes `gnmi Get /system/state` and prints a
   **banner** (`▸ role(hostname) connected …`); the **prompt** becomes
   `role(hostname)> `.
@@ -74,6 +80,7 @@ A grpc-tunnel-style monitor plus a command input line:
 | Type this | Sends |
 |---|---|
 | `show version` | CLI `show version` on the BN |
+| `:set cec on` then `connections_show` | `cec_cli connections_show` (cec_cli prefix; add `:set json on` for `--json`) |
 | `@RN-147 show version` | CLI on device **RN-147** (inline `@<device_id>`) |
 | `gnmi get /system/state,/interfaces` | gNMI Get |
 | `gnmi set /a/b/config/enabled:true` | gNMI Set |
@@ -126,9 +133,9 @@ return {
   },
 }
 ```
-Samples in **`docs/mgmt-requests/`**: `cli.lua`, `gnmi_get.lua`,
-`gnmi_get_key.lua` (explicit key map), `gnmi_set.lua` (TypedValue oneof),
-`gnmi_subscribe.lua`.
+Samples in **`docs/mgmt-requests/`**: `cli.lua`, `cec_connections.lua`
+(cec_cli command), `gnmi_get.lua`, `gnmi_get_key.lua` (explicit key map),
+`gnmi_set.lua` (TypedValue oneof), `gnmi_subscribe.lua`.
 
 `./service.sh mgmt` auto-mounts `docs/mgmt-requests` at **`/req`** (override with
 `--req-dir <dir>`), so `send /req/gnmi_get.lua` works out of the box. With a bare
