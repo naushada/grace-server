@@ -261,28 +261,51 @@ void mgmt_tui::draw_foot() {
 
 void mgmt_tui::draw_input() {
   if (!m_inp) return;
-  int h = 0, w = 0;
-  getmaxyx(m_inp, h, w);
-  (void)h;
+  int bh = 0, bw = 0;
+  getmaxyx(m_inp, bh, bw);
+  (void)bh;
   werase(m_inp);
+
+  // Claude-style rounded input box (matches the gnmi_peer TUI), softly dimmed.
+  wattron(m_inp, A_DIM);
+  mvwaddstr(m_inp, 0, 0, "\xE2\x95\xAD");      // ╭
+  mvwaddstr(m_inp, 0, bw - 1, "\xE2\x95\xAE"); // ╮
+  mvwaddstr(m_inp, 2, 0, "\xE2\x95\xB0");      // ╰
+  mvwaddstr(m_inp, 2, bw - 1, "\xE2\x95\xAF"); // ╯
+  for (int x = 1; x < bw - 1; ++x) {
+    mvwaddstr(m_inp, 0, x, "\xE2\x94\x80"); // ─
+    mvwaddstr(m_inp, 2, x, "\xE2\x94\x80");
+  }
+  mvwaddstr(m_inp, 1, 0, "\xE2\x94\x82");      // │
+  mvwaddstr(m_inp, 1, bw - 1, "\xE2\x94\x82");
+  wattroff(m_inp, A_DIM);
+
   // Prompt reflects the first identified session: "role(hostname)> ", falling
   // back to "hostname> ", "role> ", or the default "❯ " before the probe.
-  std::string prompt = " \xE2\x9D\xAF "; // " ❯ "
+  std::string prompt = "\xE2\x9D\xAF "; // "❯ "
   for (const auto &s : mgmt_hub::instance().snapshot()) {
     std::string who;
     if (!s.role.empty() && !s.hostname.empty()) who = s.role + "(" + s.hostname + ")";
     else if (!s.hostname.empty()) who = s.hostname;
     else if (!s.role.empty()) who = s.role;
-    if (!who.empty()) { prompt = " " + who + "> "; break; }
+    if (!who.empty()) { prompt = who + "> "; break; }
   }
-  const int px = utf8_cols(prompt);
-  const int attr = (m_attr_head ? m_attr_head : A_NORMAL) | A_BOLD;
+  const int text_col = 2; // inside the border, one space of padding
+  const int pcols = utf8_cols(prompt);
+  int avail = bw - text_col - pcols - 2; // keep a right margin inside the box
+  if (avail < 0) avail = 0;
+  std::string shown = m_input;
+  if (static_cast<int>(shown.size()) > avail)
+    shown = shown.substr(shown.size() - avail); // show the tail
+
+  const int attr = (m_attr_reply ? m_attr_reply : A_NORMAL) | A_BOLD;
   wattron(m_inp, attr);
-  mvwaddnstr(m_inp, 0, 0, prompt.c_str(), utf8_clip(prompt, w));
+  mvwaddnstr(m_inp, 1, text_col, prompt.c_str(), utf8_clip(prompt, bw - text_col - 1));
   wattroff(m_inp, attr);
-  if (w > px)
-    mvwaddnstr(m_inp, 0, px, m_input.c_str(), utf8_clip(m_input, w - px));
-  wmove(m_inp, 0, px + static_cast<int>(m_input.size())); // caret at end
+  mvwaddstr(m_inp, 1, text_col + pcols, shown.c_str());
+  int cursx = text_col + pcols + static_cast<int>(shown.size());
+  if (cursx > bw - 2) cursx = bw - 2;
+  wmove(m_inp, 1, cursx);
   wnoutrefresh(m_inp);
 }
 
@@ -584,15 +607,15 @@ void mgmt_tui::send_file(const std::string &path) {
 void mgmt_tui::relayout() {
   int H = 0, W = 0;
   getmaxyx(stdscr, H, W);
-  if (H < 7 || W < 4) return;
+  if (H < 9 || W < 10) return;
 
   int th = H / 3; // match the tunnel targets pane
-  if (th < 4) th = 4;
+  if (th < 3) th = 3;
   if (th > 10) th = 10;
-  if (th > H - 6) th = H - 6; // header + sep + >=1 transcript + foot + input
+  if (th > H - 8) th = H - 8; // header + sep + >=1 transcript + foot + 3-row box
   if (th < 1) th = 1;
   const int out_top = 1 + th + 1;
-  int out_h = H - out_top - 2; // footer at H-2, input line at H-1
+  int out_h = H - out_top - 4; // footer (H-4) + 3-row input box (H-3..H-1)
   if (out_h < 1) out_h = 1;
 
   if (m_head) { delwin(m_head); m_head = nullptr; }
@@ -606,8 +629,8 @@ void mgmt_tui::relayout() {
   m_sessions = newwin(th, W, 1, 0);
   m_sep = newwin(1, W, 1 + th, 0);
   m_out = newwin(out_h, W, out_top, 0);
-  m_foot = newwin(1, W, H - 2, 0);
-  m_inp = newwin(1, W, H - 1, 0);
+  m_foot = newwin(1, W, H - 4, 0);
+  m_inp = newwin(3, W, H - 3, 0);
   scrollok(m_out, FALSE);
   keypad(m_inp, TRUE);
   nodelay(m_inp, TRUE);
