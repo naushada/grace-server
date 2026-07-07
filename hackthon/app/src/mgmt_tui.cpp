@@ -6,7 +6,10 @@
 #include <sys/ioctl.h> // ioctl, TIOCGWINSZ, winsize
 #include <unistd.h>    // STDIN_FILENO
 
+#include <cctype>  // isdigit
 #include <csignal> // SIGWINCH
+#include <cstdint>
+#include <cstdlib> // strtod
 #include <ctime>
 #include <sstream>
 #include <string>
@@ -52,6 +55,24 @@ static std::string trim(const std::string &s) {
   return s.substr(b, e - b + 1);
 }
 
+// "10s"/"500ms"/"250us"/"1m"/"2h"/bare-number(seconds) -> nanoseconds; 0 on error.
+static std::uint64_t parse_duration_ns(const std::string &s) {
+  std::size_t i = 0;
+  while (i < s.size() && (std::isdigit((unsigned char)s[i]) || s[i] == '.')) ++i;
+  if (i == 0) return 0;
+  const double val = std::strtod(s.substr(0, i).c_str(), nullptr);
+  const std::string u = s.substr(i);
+  double mult;
+  if (u.empty() || u == "s") mult = 1e9;
+  else if (u == "ms") mult = 1e6;
+  else if (u == "us") mult = 1e3;
+  else if (u == "ns") mult = 1.0;
+  else if (u == "m") mult = 60e9;
+  else if (u == "h") mult = 3600e9;
+  else return 0;
+  return static_cast<std::uint64_t>(val * mult);
+}
+
 static short color_id(short fg, bool have_color, short *next) {
   if (!have_color) return 0;
   const short pair = (*next)++;
@@ -91,7 +112,9 @@ mgmt_tui::mgmt_tui(std::uint16_t port, const std::string &log_file)
   update_sink::instance().add(
       [this](const std::string &line) { this->println(line); });
   println("Ready. Waiting for a device to open DialTcc.Subscribe …");
-  println("Type a CLI command + Enter to send it; quit/exit or ^D to leave.");
+  println("Type a command + Enter to send.  @<id> cmd targets a device.");
+  println(":set cec on | :set json on | :set timeout 20s | :show | :reset.  "
+          "quit/exit or ^D to leave.");
 
   m_winch_ev = evsignal_new(evt_base::instance().get(), SIGWINCH, on_winch, this);
   if (m_winch_ev) event_add(m_winch_ev, nullptr);
@@ -127,8 +150,14 @@ void mgmt_tui::draw_header() {
   werase(m_head);
   std::string s = " Marvel gNMI Mgmt · :" + std::to_string(m_port) + " · " +
                   std::to_string(mgmt_hub::instance().size()) + " session(s)";
+  // Sticky CliRequest settings (:set cec|json|timeout).
+  std::string set;
+  if (m_cec) set += " cec";
+  if (m_json) set += " json";
+  if (!m_timeout_disp.empty()) set += " " + m_timeout_disp;
+  s += " ·" + (set.empty() ? std::string(" defaults") : set);
   if (!m_log_path.empty()) s += " · log " + m_log_path;
-  s += "      PgUp/PgDn·End scroll · ^D quit";
+  s += "      @dev · :set · ^D quit";
   wattron(m_head, A_DIM);
   mvwaddnstr(m_head, 0, 0, s.c_str(), utf8_clip(s, w > 0 ? w : 0));
   wattroff(m_head, A_DIM);
@@ -284,19 +313,57 @@ void mgmt_tui::submit_input() {
     event_base_loopbreak(evt_base::instance().get());
     return;
   }
-  // Split into command + args (whitespace-separated).
+
+  // ':' commands manage sticky settings (cec/json/timeout) — device_id is
+  // inline per command via a leading @<id>.
+  if (line[0] == ':') {
+    std::istringstream ms(line.substr(1));
+    std::string verb, key, val;
+    ms >> verb >> key >> val;
+    auto on_off = [&](bool &flag) {
+      flag = (val == "on" || val == "1" || val == "true" || val == "yes");
+    };
+    if (verb == "set" && key == "cec") { on_off(m_cec); }
+    else if (verb == "set" && key == "json") { on_off(m_json); }
+    else if (verb == "set" && key == "timeout") {
+      const std::uint64_t ns = parse_duration_ns(val);
+      if (ns == 0 && val != "0") { println("[mgmt] bad timeout '" + val + "'"); return; }
+      m_timeout_ns = ns; m_timeout_disp = (ns ? val : "");
+    }
+    else if (verb == "reset") {
+      m_cec = m_json = false; m_timeout_ns = 0; m_timeout_disp.clear();
+    }
+    else if (verb == "show") { /* fall through to the summary below */ }
+    else { println("[mgmt] unknown ':' command (set cec|json|timeout, show, reset)"); return; }
+    println(std::string("[mgmt] settings: cec=") + (m_cec ? "on" : "off") +
+            " json=" + (m_json ? "on" : "off") + " timeout=" +
+            (m_timeout_disp.empty() ? "default" : m_timeout_disp));
+    draw_header();
+    doupdate();
+    return;
+  }
+
+  // Optional leading @<device_id> targets a specific device (empty => the BN).
   std::istringstream ss(line);
-  std::string cmd;
-  ss >> cmd;
+  std::string tok, device_id;
+  ss >> tok;
+  if (!tok.empty() && tok[0] == '@') {
+    device_id = tok.substr(1);
+    ss >> tok; // the command itself
+  }
+  const std::string cmd = tok;
   std::vector<std::string> args;
   std::string a;
   while (ss >> a) args.push_back(a);
+  if (cmd.empty()) { println("[mgmt] no command after @" + device_id); return; }
 
-  const std::string rpc_id = mgmt_hub::instance().send_cli(cmd, args, "");
+  const std::string rpc_id = mgmt_hub::instance().send_cli(
+      cmd, args, device_id, m_cec, m_json, m_timeout_ns);
   if (rpc_id.empty())
     println("[mgmt] no session connected — not sent: '" + line + "'");
   else
-    println("[mgmt] \xE2\x86\x92 '" + line + "'  rpc=" + rpc_id); // →
+    println("[mgmt] \xE2\x86\x92 " + (device_id.empty() ? "" : "@" + device_id + " ") +
+            "'" + cmd + "'  rpc=" + rpc_id); // →
 }
 
 void mgmt_tui::relayout() {

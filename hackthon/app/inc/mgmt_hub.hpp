@@ -63,10 +63,12 @@ public:
   }
 
   // Build a DeviceRequest{rpc_id, CliRequest} and send it on every open session.
+  // device_id/cec_cli/json/timeout_ns come from the TUI's sticky settings.
   // Returns the generated rpc_id (empty if no session is connected).
   std::string send_cli(const std::string &cmd,
                        const std::vector<std::string> &args,
-                       const std::string &device_id) {
+                       const std::string &device_id, bool cec_cli, bool json,
+                       std::uint64_t timeout_ns) {
     if (m_sessions.empty())
       return "";
     const std::string rpc_id = gen_rpc_id();
@@ -79,6 +81,16 @@ public:
     cli.set_cmd(cmd);
     for (const auto &a : args)
       cli.add_args(a);
+    if (cec_cli)
+      cli.set_cec_cli(true);
+    if (json)
+      cli.set_json(true);
+    if (timeout_ns > 0) {
+      cli.mutable_timeout()->set_seconds(
+          static_cast<std::int64_t>(timeout_ns / 1000000000ULL));
+      cli.mutable_timeout()->set_nanos(
+          static_cast<std::int32_t>(timeout_ns % 1000000000ULL));
+    }
     req.mutable_request()->PackFrom(cli);
 
     std::string pb;

@@ -13,11 +13,17 @@
 //   {"sw":"SYS.A3…"}
 //   ❯ show interfaces_                              <- command input line
 //
-// Grpc-tunnel-style, with a bottom input line: type a CLI command + Enter to
-// send it (mgmt_hub packs a DeviceRequest with a random rpc_id); DeviceResponse
-// replies and unsolicited pushes stream into the transcript. Optional file
-// logging is a separate update_sink subscriber; the input line reflects nothing
-// about it. Type quit/exit or ^D to leave.
+// Grpc-tunnel-style, with a bottom input line: type a command + Enter to send
+// it (mgmt_hub packs a DeviceRequest with a random rpc_id); replies + proactive
+// pushes stream into the transcript. Input model:
+//   <cmd> [args...]            run on the BN
+//   @<device_id> <cmd> ...     run on a specific device (inline, per command)
+//   :set cec on|off            sticky CliRequest.cec_cli
+//   :set json on|off           sticky CliRequest.json
+//   :set timeout <dur>         sticky CliRequest.timeout (10s/500ms/1m…)
+//   :show / :reset             list / clear sticky settings (shown in header)
+//   quit / exit / ^D           leave
+// Optional file logging is a separate update_sink subscriber.
 
 #include "framework.hpp"
 
@@ -55,6 +61,11 @@ private:
   std::uint16_t m_port;
   std::string m_log_path;
   std::string m_input; // current command being typed
+  // Sticky CliRequest settings (device_id is inline, per command, via @<id>).
+  bool m_cec{false};
+  bool m_json{false};
+  std::uint64_t m_timeout_ns{0};
+  std::string m_timeout_disp;
   int m_attr_head{0};
   int m_attr_reply{0};
   int m_attr_push{0};
