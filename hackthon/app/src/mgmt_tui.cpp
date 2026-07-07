@@ -140,6 +140,7 @@ mgmt_tui::~mgmt_tui() {
   if (m_sessions) delwin(m_sessions);
   if (m_sep) delwin(m_sep);
   if (m_out) delwin(m_out);
+  if (m_foot) delwin(m_foot);
   if (m_inp) delwin(m_inp);
   curs_set(1);
   endwin();
@@ -206,6 +207,32 @@ void mgmt_tui::draw_sep() {
   mvwhline(m_sep, 0, 0, ACS_HLINE, w);
   wattroff(m_sep, A_DIM);
   wnoutrefresh(m_sep);
+}
+
+// Session → device summary (the mgmt analogue of the tunnel's target footer).
+void mgmt_tui::draw_foot() {
+  if (!m_foot) return;
+  int h = 0, w = 0;
+  getmaxyx(m_foot, h, w);
+  (void)h;
+  werase(m_foot);
+  auto snap = mgmt_hub::instance().snapshot();
+  std::string s;
+  if (snap.empty()) {
+    s = " (no sessions — waiting for a device to open DialTcc.Subscribe)";
+  } else {
+    s = " ";
+    for (std::size_t i = 0; i < snap.size(); ++i) {
+      if (i) s += "   ·   ";
+      s += "#" + std::to_string(snap[i].id) + " ";
+      s += snap[i].device.empty() ? "device ?" : snap[i].device;
+    }
+  }
+  const int attr = (m_attr_reply ? m_attr_reply : A_NORMAL) | A_BOLD;
+  wattron(m_foot, attr);
+  mvwaddnstr(m_foot, 0, 0, s.c_str(), utf8_clip(s, w));
+  wattroff(m_foot, attr);
+  wnoutrefresh(m_foot);
 }
 
 void mgmt_tui::draw_input() {
@@ -299,6 +326,7 @@ void mgmt_tui::println(const std::string &line) {
   if (m_scroll > 0) m_scroll += added; // hold view when scrolled up
   draw_header();
   redraw_out();
+  draw_foot();
   draw_input(); // keep the caret on the input line
   doupdate();
 }
@@ -316,6 +344,10 @@ void mgmt_tui::submit_input() {
   m_input.clear();
   draw_input();
   if (line.empty()) { doupdate(); return; }
+  // Record in command history (skip consecutive duplicates); reset the cursor.
+  if (m_history.empty() || m_history.back() != line)
+    m_history.push_back(line);
+  m_hist_idx = static_cast<int>(m_history.size());
   if (line == "quit" || line == "exit") {
     event_base_loopbreak(evt_base::instance().get());
     return;
@@ -508,27 +540,29 @@ void mgmt_tui::send_file(const std::string &path) {
 void mgmt_tui::relayout() {
   int H = 0, W = 0;
   getmaxyx(stdscr, H, W);
-  if (H < 6 || W < 4) return;
+  if (H < 7 || W < 4) return;
 
   int th = H / 4;
   if (th < 3) th = 3;
   if (th > 8) th = 8;
-  if (th > H - 5) th = H - 5;
+  if (th > H - 6) th = H - 6; // header + sep + >=1 transcript + foot + input
   if (th < 1) th = 1;
   const int out_top = 1 + th + 1;
-  int out_h = H - out_top - 1; // -1 for the input line at H-1
+  int out_h = H - out_top - 2; // footer at H-2, input line at H-1
   if (out_h < 1) out_h = 1;
 
   if (m_head) { delwin(m_head); m_head = nullptr; }
   if (m_sessions) { delwin(m_sessions); m_sessions = nullptr; }
   if (m_sep) { delwin(m_sep); m_sep = nullptr; }
   if (m_out) { delwin(m_out); m_out = nullptr; }
+  if (m_foot) { delwin(m_foot); m_foot = nullptr; }
   if (m_inp) { delwin(m_inp); m_inp = nullptr; }
 
   m_head = newwin(1, W, 0, 0);
   m_sessions = newwin(th, W, 1, 0);
   m_sep = newwin(1, W, 1 + th, 0);
   m_out = newwin(out_h, W, out_top, 0);
+  m_foot = newwin(1, W, H - 2, 0);
   m_inp = newwin(1, W, H - 1, 0);
   scrollok(m_out, FALSE);
   keypad(m_inp, TRUE);
@@ -540,6 +574,7 @@ void mgmt_tui::relayout() {
   draw_sessions();
   draw_sep();
   redraw_out();
+  draw_foot();
   draw_input();
   doupdate();
 }
@@ -557,6 +592,7 @@ void mgmt_tui::on_tick(int, short, void *arg) {
   auto *self = static_cast<mgmt_tui *>(arg);
   self->draw_header();
   self->draw_sessions();
+  self->draw_foot();
   self->draw_input();
   doupdate();
 }
@@ -588,6 +624,24 @@ std::int32_t mgmt_tui::handle_read(const std::int32_t & /*channel*/,
     } else if (ch == KEY_NPAGE) {
       int h = 0, w = 0; getmaxyx(m_out, h, w); (void)w;
       scroll_by(-(h > 1 ? h - 1 : 1));
+    } else if (ch == KEY_UP) {
+      // Recall the previous command from history into the input line.
+      if (!m_history.empty() && m_hist_idx > 0) {
+        --m_hist_idx;
+        m_input = m_history[m_hist_idx];
+        draw_input();
+        doupdate();
+      }
+    } else if (ch == KEY_DOWN) {
+      // Move forward in history; past the newest entry clears the line.
+      if (m_hist_idx < static_cast<int>(m_history.size())) {
+        ++m_hist_idx;
+        m_input = (m_hist_idx < static_cast<int>(m_history.size()))
+                      ? m_history[m_hist_idx]
+                      : std::string();
+        draw_input();
+        doupdate();
+      }
     } else if (ch == KEY_HOME) {
       m_scroll = static_cast<int>(m_lines.size());
       redraw_out(); draw_input(); doupdate();

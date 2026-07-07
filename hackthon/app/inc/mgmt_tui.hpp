@@ -27,13 +27,16 @@
 //   :set timeout <dur>         sticky CliRequest.timeout (10s/500ms/1m…)
 //   :show / :reset             list / clear sticky settings (shown in header)
 //   quit / exit / ^D           leave
-// Optional file logging is a separate update_sink subscriber.
+// Up/Down recall command history; a footer above the input line shows each
+// session and the device_id it's talking to. Optional file logging is a
+// separate update_sink subscriber.
 
 #include "framework.hpp"
 
 #include <cstdint>
 #include <deque>
 #include <string>
+#include <vector>
 
 struct _win_st; // ncurses WINDOW
 struct event;   // libevent
@@ -52,6 +55,7 @@ private:
   void draw_header();
   void draw_sessions();
   void draw_sep();
+  void draw_foot(); // session → device summary (above the input line)
   void draw_input();
   void redraw_out();
   void push_history(const std::string &part);
@@ -67,7 +71,9 @@ private:
 
   std::uint16_t m_port;
   std::string m_log_path;
-  std::string m_input; // current command being typed
+  std::string m_input;               // current command being typed
+  std::vector<std::string> m_history; // submitted commands (Up/Down recall)
+  int m_hist_idx{0};                  // cursor into m_history (== size => new)
   // Sticky CliRequest settings (device_id is inline, per command, via @<id>).
   bool m_cec{false};
   bool m_json{false};
@@ -82,6 +88,7 @@ private:
   struct _win_st *m_sessions{nullptr};
   struct _win_st *m_sep{nullptr};
   struct _win_st *m_out{nullptr};
+  struct _win_st *m_foot{nullptr};
   struct _win_st *m_inp{nullptr};
   struct event *m_winch_ev{nullptr};
   struct event *m_tick_ev{nullptr};
