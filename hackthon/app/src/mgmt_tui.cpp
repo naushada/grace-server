@@ -292,7 +292,7 @@ int mgmt_tui::attr_for(const std::string &s) const {
 
 void mgmt_tui::push_history(const std::string &part) {
   m_lines.push_back(part);
-  if (m_lines.size() > 8000) m_lines.pop_front();
+  if (m_lines.size() > 200000) m_lines.pop_front(); // deep scrollback
 }
 
 void mgmt_tui::redraw_out() {
