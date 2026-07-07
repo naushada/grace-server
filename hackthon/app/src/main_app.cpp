@@ -21,9 +21,11 @@
 #include "gnmi/gnmi.pb.h"
 
 #include <iomanip>
+#include <clocale>   // setlocale
 #include <cstdint>
 #include <cstring>
 #include <fstream>
+#include <langinfo.h> // nl_langinfo, CODESET
 #include <iostream>
 #include <memory>
 #include <sstream>
@@ -235,6 +237,17 @@ int main(int argc, const char *argv[]) {
   // Docker pipes stdout through a non-TTY, making it block-buffered by default.
   // Force unit (per-write) flushing so log lines appear immediately.
   std::cout << std::unitbuf;
+
+  // Use a UTF-8 locale so the ncurses TUIs (mgmt/tunnel/gnmi-server) render
+  // multibyte glyphs (·, …, ❯, →, box-drawing) correctly rather than mangling
+  // them. Fall back to C.UTF-8 when the container's env locale is bare C.
+  std::setlocale(LC_ALL, "");
+  if (const char *cs = nl_langinfo(CODESET);
+      !cs || (!std::strstr(cs, "UTF-8") && !std::strstr(cs, "utf8") &&
+              !std::strstr(cs, "UTF8"))) {
+    if (!std::setlocale(LC_ALL, "C.UTF-8"))
+      std::setlocale(LC_ALL, "C.utf8");
+  }
 
   const std::string mode = get_flag(argc, argv, "mode", "server");
 
