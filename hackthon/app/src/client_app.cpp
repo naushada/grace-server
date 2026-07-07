@@ -462,12 +462,10 @@ void connected_client::register_gnmi_handlers() {
           else if (!hostname.empty()) who = hostname;
           else if (!role.empty()) who = role;
           else who = resp.device_id().empty() ? "device" : resp.device_id();
-          std::string rule;
-          for (int i = 0; i < 46; ++i) rule += "\xE2\x94\x80"; // ─
-          tunnel_log(rule);
-          tunnel_log("  \xE2\x96\xB8 " + who + " connected" +
-                     (resp.device_id().empty() ? "" : "   device " + resp.device_id()));
-          tunnel_log(rule);
+          tunnel_log("\xE2\x96\xB8 " + who + " connected" +
+                     (resp.device_id().empty()
+                          ? ""
+                          : "  \xC2\xB7  device " + resp.device_id())); // ▸ ·
           return;
         }
 

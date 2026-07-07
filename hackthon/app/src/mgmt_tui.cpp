@@ -138,11 +138,7 @@ mgmt_tui::mgmt_tui(std::uint16_t port, const std::string &log_file)
 
   update_sink::instance().add(
       [this](const std::string &line) { this->println(line); });
-  println("Ready. Waiting for a device to open DialTcc.Subscribe …");
-  println("CLI:  <cmd> [args]   ·   gNMI:  gnmi get|set|subscribe <spec>");
-  println("From file:  send <file.lua>  (a DeviceRequest described in Lua)");
-  println("@<id> … targets a device.  :set cec on|json on|timeout 20s · :show "
-          "· :reset.  quit/exit/^D to leave.");
+  println("Ready. Waiting for a device to open DialTcc.Subscribe …  (type 'help')");
 
   m_winch_ev = evsignal_new(evt_base::instance().get(), SIGWINCH, on_winch, this);
   if (m_winch_ev) event_add(m_winch_ev, nullptr);
@@ -186,7 +182,7 @@ void mgmt_tui::draw_header() {
   if (!m_timeout_disp.empty()) set += " " + m_timeout_disp;
   s += " ·" + (set.empty() ? std::string(" defaults") : set);
   if (!m_log_path.empty()) s += " · log " + m_log_path;
-  s += "      @dev · :set · ^D quit";
+  s += "      PgUp/PgDn·End scroll · ^D quit";
   wattron(m_head, A_DIM);
   mvwaddnstr(m_head, 0, 0, s.c_str(), utf8_clip(s, w > 0 ? w : 0));
   wattroff(m_head, A_DIM);
@@ -242,11 +238,11 @@ void mgmt_tui::draw_foot() {
   if (snap.empty()) {
     s = " (no sessions — waiting for a device to open DialTcc.Subscribe)";
   } else {
-    s = " ";
+    s = " session: ";
     for (std::size_t i = 0; i < snap.size(); ++i) {
       if (i) s += "   ·   ";
-      s += "#" + std::to_string(snap[i].id) + " ";
-      s += snap[i].device.empty() ? "device ?" : snap[i].device;
+      s += "#" + std::to_string(snap[i].id) + "  \xE2\x86\x92  " +
+           (snap[i].device.empty() ? "?" : snap[i].device); // →
     }
   }
   const int attr = (m_attr_reply ? m_attr_reply : A_NORMAL) | A_BOLD;
@@ -381,6 +377,16 @@ void mgmt_tui::submit_input() {
   m_hist_idx = static_cast<int>(m_history.size());
   if (line == "quit" || line == "exit") {
     event_base_loopbreak(evt_base::instance().get());
+    return;
+  }
+  if (line == "help" || line == "?") {
+    println("commands:");
+    println("  <cmd> [args]                    CLI command on the BN");
+    println("  gnmi get|set|subscribe <spec>   gNMI over the dial-out");
+    println("  send <file.lua>                 DeviceRequest described in Lua");
+    println("  @<device_id> <cmd> …            target a specific device");
+    println("  :set cec|json on|off · :set timeout 20s · :show · :reset");
+    println("  Up/Down history · PgUp/PgDn/Home scroll · quit/^D leave");
     return;
   }
 
