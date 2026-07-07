@@ -48,30 +48,28 @@ logs `[mgmt] session #1 opened`.
 
 ## The console (TUI)
 
-A grpc-tunnel-style monitor plus a command input line:
+A full-height transcript with a compact bottom (session line + input box):
 ```
- Marvel gNMI Mgmt · :58989 · 1 session(s)      PgUp/PgDn·End scroll · ^D quit
- SESSION   DEVICE                 UPTIME
- #1        S147F2223907369        31s
-──────────────────────────────────────────────
- ▸ bn(S147F2223907369) connected · device S147F2223907369
- [mgmt] → gnmi get /system/state  rpc=r-8f3a…
-     /system/state/hostname = "bn-1"  …
- identity: bn(S147F2223907369)      · defaults          ← footer
+ Marvel gNMI Mgmt · :58989 · 1 session(s)      PgUp/PgDn·End scroll · ^D quit  ← header
+ ▸ bn(S147F2223907369) connected · device S147F2223907369                      ← transcript
+ [mgmt] → gnmi get /system/state  rpc=r-8f3a…                                     (fills the
+     /system/state/hostname = "bn-1"  …                                          whole area)
+ #1 bn(S147F2223907369)  3m      · defaults                                    ← session + settings
  ╭────────────────────────────────────────────╮
- │ bn(S147F2223907369)> gnmi get /system/state │        ← Claude-style input box
+ │ bn(S147F2223907369)> gnmi get /system/state │                               ← Claude-style box
  ╰────────────────────────────────────────────╯
 ```
-Same UI family as the other TUIs: the grpc-tunnel monitor chrome (header +
-`SESSION/DEVICE/UPTIME` pane + separator + `identity:` footer) plus the
-gnmi_peer's **Claude-style rounded input box**.
+Same UI family as the other TUIs: the grpc-tunnel monitor colours/chrome plus the
+gnmi_peer's **Claude-style rounded input box**. There's no top pane — the
+transcript fills the height; the session summary (`#id role(hostname) uptime`)
+and sticky settings sit in the footer next to the box.
 
 - On session-open the server auto-probes `gnmi Get /system/state` and prints a
   **banner** (`▸ role(hostname) connected …`); the **prompt** becomes
   `role(hostname)> `.
 - **Keys:** `Up`/`Down` recall command history; `PgUp`/`PgDn`/`Home`/`End` and
-  the **mouse wheel** scroll the transcript; `help` (or `?`) lists commands;
-  `quit`/`exit`/`^D` leaves.
+  the **mouse wheel** scroll the transcript (`Home` jumps to the top); `help`
+  (or `?`) lists commands; `quit`/`exit`/`^D` leaves.
 - Colours: cyan `[mgmt]` headers, green replies, magenta proactive pushes, yellow
   errors.
 
