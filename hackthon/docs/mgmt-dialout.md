@@ -67,9 +67,10 @@ and sticky settings sit in the footer next to the box.
 - On session-open the server auto-probes `gnmi Get /system/state` and prints a
   **banner** (`▸ role(hostname) connected …`); the **prompt** becomes
   `role(hostname)> `.
-- **Keys:** `Up`/`Down` recall command history; `PgUp`/`PgDn`/`Home`/`End` +
-  **mouse wheel** scroll vertically (`Home` = top); **`←`/`→` scroll horizontally**
-  for wide output (a bottom h-scrollbar shows the position); `help` (or `?`) lists
+- **Keys:** `Up`/`Down` recall command history; scroll vertically with
+  **`Shift+↑`/`Shift+↓` (one line)**, `PgUp`/`PgDn` (page), `Home`/`End`
+  (top/bottom), or the mouse wheel; **`←`/`→` scroll horizontally** for wide
+  output (a bottom h-scrollbar shows the position); `help` (or `?`) lists
   commands; `quit`/`exit`/`^D` leaves.
 - Colours: cyan `[mgmt]` headers, green replies, magenta proactive pushes, yellow
   errors.
