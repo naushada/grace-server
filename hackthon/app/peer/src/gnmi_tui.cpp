@@ -138,6 +138,10 @@ gnmi_tui::gnmi_tui(const endpoint &local, const endpoint &remote,
   m_attr_ok = resolve_attr(colors.ok, have_color, &next_pair);
   m_attr_warn = resolve_attr(colors.error, have_color, &next_pair);
   m_attr_echo = resolve_attr(colors.echo, have_color, &next_pair);
+  // Distinct colours per gNMI verb result (get / set / subscribe).
+  m_attr_get = resolve_attr("cyan", have_color, &next_pair);
+  m_attr_set = resolve_attr("green", have_color, &next_pair);
+  m_attr_sub = resolve_attr("magenta", have_color, &next_pair);
 
   int H = 0, W = 0;
   getmaxyx(stdscr, H, W);
@@ -251,12 +255,22 @@ void gnmi_tui::draw_box() {
 // Classify an output line by its leading tag and return its resolved attribute.
 int gnmi_tui::attr_for(const std::string &s) const {
   auto starts = [&](const char *p) { return s.rfind(p, 0) == 0; };
-  if (starts("[remote]") || starts("[sub] {") || starts("[sub #"))
-    return m_attr_remote;
-  if (starts("[set] OK") || starts("[get] OK"))
-    return m_attr_ok;
   if (starts("❯"))
     return m_attr_echo;
+  if (starts("[remote]"))
+    return m_attr_remote;
+  if (starts("[notif ") || starts("[sub]")) // subscribe lifecycle + notifications
+    return m_attr_sub;
+  if (starts("[set]"))
+    return m_attr_set;
+  if (starts("[get]"))
+    return m_attr_get;
+  // gnmi get leaf lines are bare (indented) JSON objects → tint like the get result.
+  {
+    const std::size_t i = s.find_first_not_of(' ');
+    if (i != std::string::npos && s[i] == '{')
+      return m_attr_get;
+  }
   if (s.find("error") != std::string::npos ||
       s.find("denied") != std::string::npos ||
       s.find("FAIL") != std::string::npos || starts("unknown command") ||

@@ -66,9 +66,12 @@ private:
   std::string m_header; // dim header text (endpoints)
   // Resolved terminal attributes per line category (0 = terminal default).
   int m_attr_remote{0};
-  int m_attr_ok{0};
+  int m_attr_ok{0};   // prompt glyph
   int m_attr_warn{0};
   int m_attr_echo{0};
+  int m_attr_get{0};  // gnmi get result (cyan)
+  int m_attr_set{0};  // gnmi set result (green)
+  int m_attr_sub{0};  // gnmi subscribe / notif (magenta)
   struct _win_st *m_head{nullptr}; // header row
   struct _win_st *m_out{nullptr};  // scrolling transcript
   struct _win_st *m_box{nullptr};  // bordered input box (3 rows)

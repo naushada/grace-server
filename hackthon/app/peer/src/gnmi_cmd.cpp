@@ -270,12 +270,18 @@ void gnmi_cmd::do_subscribe(const std::string &spec) {
           return;
         }
         std::string tag = "[sub]";
-        if (r.has_update()) // count data updates, not sync markers
-          tag = "[sub #" + std::to_string(++*count) + "]";
+        if (r.has_update()) { // one notification; count it + the leaves it carries
+          const auto &notif = r.update();
+          tag = "[notif #" + std::to_string(++*count) +
+                ", updates:" + std::to_string(notif.update_size());
+          if (notif.delete__size() > 0)
+            tag += ", del:" + std::to_string(notif.delete__size());
+          tag += "]";
+        }
         m_out(tag + " " + gnmi_util::subscribe_response_to_json(r));
       },
       [this, count](const gnmi_client::response &r) {
-        const std::string total = std::to_string(*count) + " update(s)";
+        const std::string total = std::to_string(*count) + " notification(s)";
         if (r.grpc_status > 0)
           m_out("[sub] stream ended — " + total +
                 ", status=" + std::to_string(r.grpc_status) +
