@@ -202,8 +202,16 @@ case "$cmd" in
     "$eng" rm -f mgmt-svc >/dev/null 2>&1 || true
     # -d -it: detached with a TTY so the ncurses TUI runs and we can attach.
     # TERM forced (tmux's tmux-256color may be absent from the container terminfo).
-    runargs=(-d -it --name mgmt-svc -e "TERM=${MGMT_TERM:-xterm-256color}" -p 58989:58989)
+    # -p 9339: the gNMI tunnel data-plane rides the same bidi dial-out.
+    runargs=(-d -it --name mgmt-svc -e "TERM=${MGMT_TERM:-xterm-256color}" \
+             -p 58989:58989 -p 9339:9339)
     binargs=(/app/app --mode=mgmt-dialout)
+    # Also expose the gNMI tunnel (:9339) from the same dial-out — mount tunnel.lua
+    # (port->target map) so external gNMI clients reach the device byte-for-byte.
+    if [ -f "$here/docs/tunnel.lua" ]; then
+      runargs+=(-v "$here/docs/tunnel.lua:/app/tunnel.lua:ro")
+      binargs+=(--config=/app/tunnel.lua)
+    fi
     if [ -d "$reqdir" ]; then
       ra="$(cd "$reqdir" && pwd)"; runargs+=(-v "$ra:/req:ro")
     fi
@@ -213,7 +221,8 @@ case "$cmd" in
       runargs+=(-v "$oa:/out"); binargs+=("--log-file=/out/$(basename "$out")")
     fi
     "$eng" run "${runargs[@]}" "$IMAGE" "${binargs[@]}" >/dev/null
-    echo "[service] mgmt-svc up on :58989 — attaching (detach: Ctrl-P Ctrl-Q; quit: ^D)"
+    echo "[service] mgmt-svc up — console on :58989, gNMI tunnel on :9339"
+    echo "          attaching (detach: Ctrl-P Ctrl-Q; quit: ^D)"
     exec "$eng" attach mgmt-svc
     ;;
   -h|--help|help)

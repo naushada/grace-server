@@ -178,6 +178,9 @@ static void print_usage(const char *prog) {
     << "    --port=<port>            Dial-in listen port         (default: 58989)\n"
     << "    --tls=true               Enable TLS (--cert/--key/--ca)\n"
     << "    --log-file=<path>        Append every received response to a file\n"
+    << "    --config=<tunnel.lua>    Also run the gNMI tunnel data-plane on the\n"
+    << "                             same dial-out (port->target map); or\n"
+    << "    --local-port=<p> --target=<t>   a single tunnel listener\n"
     << "\n"
     << "  gnmi-mqtt-client options:\n"
     << "    --mqtt-host=<host>       MQTT broker address       (default: localhost)\n"
@@ -426,7 +429,6 @@ int main(int argc, const char *argv[]) {
   // pushes). Interactive → mgmt_tui (sessions pane + transcript + input line);
   // --headless logs to stdout. --log-file / --out-file tees responses to a file.
   if (mode == "mgmt-dialout") {
-    g_mgmt_dialout_mode = true; // hide grpctunnel [reg]/[tun] noise from the console
     const uint16_t port = get_port_flag(argc, argv, "port", 58989);
     const tls_config tls_cfg{
       get_flag(argc, argv, "tls", "false") == "true",
@@ -441,6 +443,34 @@ int main(int argc, const char *argv[]) {
                            (!isatty(STDIN_FILENO) || !isatty(STDOUT_FILENO)));
 
     server mgmt_svc("0.0.0.0", port, tls_cfg);
+
+    // Tunnel data-plane on the SAME bidi dial-out: the device also opens
+    // grpctunnel Register/Tunnel over this connection, so expose local gNMI
+    // listeners (:9339…) that byte-proxy external gNMI clients to the device's
+    // registered target. Configured just like grpc-tunnel-server: --config
+    // <tunnel.lua> (port→target map) or --local-port/--target.
+    tunnel_config tcfg;
+    const std::string cfg_path = get_flag(argc, argv, "config", "");
+    if (!cfg_path.empty()) {
+      std::string cerr_msg;
+      if (!load_tunnel_config(cfg_path, tcfg, cerr_msg))
+        std::cerr << "[main] tunnel config error: " << cerr_msg
+                  << " (tunnel disabled)\n";
+    } else {
+      const uint16_t lp = get_port_flag(argc, argv, "local-port", 0);
+      if (lp != 0)
+        tcfg.listeners.push_back({lp, get_flag(argc, argv, "target", "")});
+    }
+    std::vector<std::unique_ptr<tunnel_gnmi_listener>> locals;
+    for (const auto &l : tcfg.listeners) {
+      locals.push_back(
+          std::make_unique<tunnel_gnmi_listener>("0.0.0.0", l.port, l.target));
+      tunnel_hub::instance().set_listener_port(l.target, l.port);
+    }
+    // Show grpctunnel [reg]/[tun] activity in the mgmt console only when the
+    // tunnel is actually active here (so you can map the target); otherwise it is
+    // just noise from a device that dials the tunnel — suppress it.
+    g_mgmt_dialout_mode = tcfg.listeners.empty();
 
     std::ofstream logf;
     if (!log_file.empty()) {
@@ -457,7 +487,10 @@ int main(int argc, const char *argv[]) {
     if (headless) {
       std::cout << "[main] mode=mgmt-dialout port=" << port
                 << " tls=" << (tls_cfg.enabled ? "ON" : "OFF")
+                << " tunnel-listeners=" << tcfg.listeners.size()
                 << (log_file.empty() ? "" : " log=" + log_file) << '\n';
+      for (const auto &l : tcfg.listeners)
+        std::cout << "[main]   :" << l.port << " -> '" << l.target << "'\n";
       run_evt_loop{}();
     } else {
       static std::ofstream tlog("/tmp/mgmt_dialout.log", std::ios::app);
