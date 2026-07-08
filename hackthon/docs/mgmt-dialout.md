@@ -202,10 +202,37 @@ Responses stream into the transcript, colour-coded:
 `--out-file` / `--log-file` appends every one of these lines to a host file
 (works with the TUI or `--headless`), so you get a full transcript on disk.
 
+## Also serves the gNMI tunnel (:9339)
+
+The device dials `:58989` **once** and opens *both* `DialTcc.Subscribe` (this
+console) **and** grpctunnel `Register`/`Tunnel` on that single bidi connection. So
+`service.sh mgmt` also brings up the **tunnel data-plane on `:9339`** — external
+gNMI clients (gnmic, gnmi_peer) reach the device byte-for-byte over the same
+dial-out, while the console runs:
+
+```bash
+./service.sh mgmt                 # console on :58989 + gNMI tunnel on :9339
+# from anywhere:
+gnmic -a <host>:9339 --insecure get --path /system/state
+```
+
+It mounts `docs/tunnel.lua` (the same port→target map as `grpc-tunnel`) and
+publishes `:9339`. When the tunnel is active here, the console shows the
+`[reg] +target …` line and the map hint (edit `docs/tunnel.lua`, `./service.sh
+restart`) — exactly like the tunnel runbook. Directly:
+```bash
+docker run -it --rm -p 58989:58989 -p 9339:9339 \
+  -v "$PWD/docs/tunnel.lua:/app/tunnel.lua:ro" \
+  marvel:dev /app/app --mode=mgmt-dialout --config=/app/tunnel.lua
+#   or a single listener:  --local-port=9339 --target='<device published target>'
+```
+
 ## Notes
 
-- CLI + gNMI ride the **same** dial-out; the grpc-tunnel byte-proxy (`:9339`)
-  remains a separate, native-h2 gNMI path (see `grpc-tunnel-server.md`).
+- Two ways to reach the device's gNMI from one dial-out: **wrapped** in a
+  `DeviceRequest` over `DialTcc` (in this console), or **transparent** over the
+  `:9339` byte-proxy (any external gNMI client). See `grpc-tunnel-server.md` for
+  the tunnel details and `dialout-overview.md` for the socket/stream model.
 - The same server also serves `DialTcc.IsAlive` and `PushSubscriptionUpdates`
   (telemetry) on the dial-in connection.
 - Omitted from the vendored proto vs upstream: gNOI request types,
