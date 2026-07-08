@@ -329,6 +329,18 @@ void connected_client::register_gnmi_handlers() {
             tunnel_log("[reg] +target '" + t.target() + "' (" +
                        t.target_type() + ") — " +
                        std::to_string(tunnel_hub::instance().size()) + " total");
+            // If no local listener fronts this target, tell the operator exactly
+            // what to add to the tunnel config (and to restart) so gNMI can reach
+            // it. The device's published name must be copied verbatim.
+            if (tunnel_hub::instance().listener_port(t.target()) == 0) {
+              const std::uint16_t p = tunnel_hub::instance().suggest_port();
+              tunnel_log("[reg]   \xE2\x9A\xA0 no local port maps to this target."); // ⚠
+              tunnel_log("[reg]   Add it to the tunnel config (host docs/tunnel.lua"
+                         " -> /app/tunnel.lua):");
+              tunnel_log("[reg]       listeners = { [\"" + std::to_string(p) +
+                         "\"] = \"" + t.target() + "\" }");
+              tunnel_log("[reg]   then restart:  ./service.sh restart");
+            }
           } else if (t.op() == grpctunnel::Target::REMOVE) {
             tunnel_hub::instance().remove_target(t.target());
             tunnel_log("[reg] -target '" + t.target() + "'");

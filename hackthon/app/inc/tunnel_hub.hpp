@@ -84,6 +84,17 @@ public:
   void set_listener_port(const std::string &target, std::uint16_t port) {
     m_ports[target] = port;
   }
+  // Local listener port mapped to a target, or 0 if none is configured.
+  std::uint16_t listener_port(const std::string &target) const {
+    auto it = m_ports.find(target);
+    return it == m_ports.end() ? 0 : it->second;
+  }
+  // Suggested port for a new mapping. With exactly one listener configured
+  // (the common "placeholder" case), reuse it so the operator just corrects the
+  // target on that port; otherwise 9339.
+  std::uint16_t suggest_port() const {
+    return m_ports.size() == 1 ? m_ports.begin()->second : 9339;
+  }
 
   std::vector<target_info> snapshot() const {
     std::vector<target_info> out;
