@@ -35,6 +35,7 @@
 
 networks:
   tunnel-net:
+    name: tunnel-net     # exact name (else compose prefixes the project dir → docs_tunnel-net)
     driver: bridge
 
 services:
