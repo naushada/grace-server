@@ -166,13 +166,16 @@ case "$cmd" in
       echo "[service] attaching to mgmt-svc — detach: Ctrl-P Ctrl-Q, quit: ^D"
       exec "$eng" attach mgmt-svc
     else
+      # 'quit' inside the peer TUI exits gnmi_peer, which stops peer-svc; bring it
+      # back so re-attach works (no-op if it's already running).
+      dc up -d peer >/dev/null 2>&1 || true
       if tunnel_status; then
         sleep 1   # let the green "UP" line show before the peer TUI clears the screen
       else
         read -t 8 -r -p "  ↳ attaching anyway (Enter now · Ctrl-C to fix first) …" _ || true
         echo
       fi
-      echo "[service] attaching to gnmi_peer — detach: Ctrl-P Ctrl-Q, quit the shell with 'quit'"
+      echo "[service] attaching to gnmi_peer — Ctrl-P Ctrl-Q detaches (keeps it up); 'quit' closes it"
       exec $COMPOSE -f "$COMPOSE_FILE" attach peer
     fi
     ;;
