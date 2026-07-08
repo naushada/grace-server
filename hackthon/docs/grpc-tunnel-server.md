@@ -219,7 +219,7 @@ touching the internals:
 
 ```bash
 # 1. set your device's published target in docs/tunnel.lua (listeners["9339"])
-./service.sh up                       # builds marvel:dev if needed, starts both services
+./service.sh grpc-tunnel                       # builds marvel:dev if needed, starts both services
 ./service.sh logs | grep '+target'    # confirm the device registered
 ```
 
@@ -231,7 +231,7 @@ Then drive gNMI either interactively or one-shot (scriptable):
 ./service.sh set /interfaces/interface[name=eth0]/config/enabled:true
 ./service.sh subscribe /interfaces 10s # SAMPLE every 10s (omit interval => on-change); Ctrl-C to stop
 ```
-`./service.sh down` tears it down; `ps`, `restart`, `build`, `--help` also exist.
+`./service.sh stop` tears it down; `ps`, `restart`, `build`, `--help` also exist.
 The one-shot commands run an ephemeral gnmi_peer against `tunnel:9339` — the
 stack must be `up` first so the device is registered. For several devices, add
 ports to `tunnel.lua` and run a peer per target.
@@ -244,7 +244,7 @@ ports to `tunnel.lua` and run a peer per target.
 | No `[reg] +target '…'` ever appears | The device isn't reaching `:58989`. Confirm it's dialing this host in **plaintext** (`tls=OFF`). A `-903` / `[tls] handshake error` means the device is doing **mTLS** against a plaintext tunnel — enable TLS in `tunnel.lua` + mount certs, or point the device at plaintext. Re-trigger the device's dial-out if it dropped (e.g. after the server was restarted). |
 | `gnmi subscribe /x` dumps state once then goes quiet | That's `TARGET_DEFINED` (no interval). For periodic updates add a **SAMPLE interval**: `gnmi subscribe /x 10s`. Omit it and the device decides (usually on-change). |
 | `gnmi get /x → error status=3 …` (e.g. "empty after filtering with sensor:…") | This is the **device's own gNMI response**, round-tripped cleanly through the tunnel — not a tunnel fault. Try a narrower leaf, or subscribe instead; some subtrees are only served on-change/sample. |
-| compose: `all predefined address pools have been fully subnetted` | Too many Docker networks on the host. `docker network prune -f`, then `./service.sh up`. Or expand `default-address-pools` in `/etc/docker/daemon.json`. |
+| compose: `all predefined address pools have been fully subnetted` | Too many Docker networks on the host. `docker network prune -f`, then `./service.sh grpc-tunnel`. Or expand `default-address-pools` in `/etc/docker/daemon.json`. |
 
 The golden rule: **`gnmi get`/`set`/`subscribe` only work once `[reg] +target '…'` is in the tunnel log and the listener target matches it exactly.**
 

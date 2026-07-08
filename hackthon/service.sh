@@ -11,27 +11,27 @@
 # (listeners["9339"] = "<published target>"). For mTLS, set docs/tunnel.lua's
 # tls table and mount the certs (see the compose file).
 #
-# Usage:
-#   ./service.sh up                 Build if needed, then bring up both services
-#   ./service.sh attach             Attach to the gnmi_peer shell (interactive)
-#   ./service.sh get <path>         One-shot gNMI Get over the tunnel (scriptable)
-#   ./service.sh set <path>:<val>   One-shot gNMI Set
-#   ./service.sh subscribe <path>   Stream telemetry over the tunnel (Ctrl-C to stop)
+# Two "start" verbs; they share :58989, so starting one stops the other:
+#   ./service.sh grpc-tunnel        Bring up the tunnel stack (tunnel-svc + peer-svc)
 #   ./service.sh mgmt [--out-file <path>] [--req-dir <dir>]
 #                                   tNMI mgmt dial-out server + command TUI
-#                                   (device dials in; type commands or
-#                                   `send /req/<file>.lua`). --out-file saves
-#                                   responses; --req-dir mounts a request-.lua
-#                                   dir at /req (default: docs/mgmt-requests).
-#   ./service.sh logs [svc]         Tail logs (default: tunnel — target registrations)
-#   ./service.sh ps                 Show service status
-#   ./service.sh down               Stop and remove the stack
-#   ./service.sh restart            down + up
+#                                   (mgmt-svc). --out-file saves responses;
+#                                   --req-dir mounts a request-.lua dir at /req.
+#
+# Lifecycle verbs act on whichever is running (tunnel or mgmt):
+#   ./service.sh attach             Attach to the running console (peer or mgmt)
+#   ./service.sh logs [svc]         Tail logs of the running service
+#   ./service.sh stop               Stop + remove whatever is up
+#   ./service.sh restart            Restart whatever is up (re-attaches mgmt)
+#   ./service.sh ps                 Show status
 #   ./service.sh build              Build the marvel:dev image (./build.sh)
 #
-# get/set/subscribe run an ephemeral gnmi_peer against the tunnel — the stack
-# must be up first (./service.sh up) so the device is registered.
+# Tunnel-only one-shots (need `grpc-tunnel` up first):
+#   ./service.sh get <path>         One-shot gNMI Get over the tunnel
+#   ./service.sh set <path>:<val>   One-shot gNMI Set
+#   ./service.sh subscribe <path>   Stream telemetry (Ctrl-C to stop)
 #
+# `up` is a deprecated alias for `grpc-tunnel`; `down` for `stop`.
 # Env: ENGINE=docker|podman (default: auto).
 set -euo pipefail
 
@@ -68,33 +68,55 @@ COMPOSE="$(detect_compose)"
 [ -f "$COMPOSE_FILE" ] || die "compose file not found: $COMPOSE_FILE"
 
 dc() { $COMPOSE -f "$COMPOSE_FILE" "$@"; }
+eng="$(engine_bin)"
+ensure_image() {
+  "$eng" image inspect "$IMAGE" >/dev/null 2>&1 && return 0
+  echo "[service] image '$IMAGE' not found — building …"
+  "$here/build.sh" -t "$IMAGE"
+}
+mgmt_exists() { "$eng" container inspect mgmt-svc >/dev/null 2>&1; }
 
-cmd="${1:-up}"
+cmd="${1:-help}"
 [ $# -gt 0 ] && shift || true
 
 case "$cmd" in
   build)
     "$here/build.sh" -t "$IMAGE"
     ;;
-  up)
-    # Build the image if it isn't present yet.
-    if ! "$(engine_bin)" image inspect "$IMAGE" >/dev/null 2>&1; then
-      echo "[service] image '$IMAGE' not found — building …"
-      "$here/build.sh" -t "$IMAGE"
-    fi
+  grpc-tunnel|tunnel|up)
+    ensure_image
+    "$eng" rm -f mgmt-svc >/dev/null 2>&1 || true   # free :58989 if mgmt was up
     dc up -d "$@"
     echo
-    echo "[service] stack up (tunnel-svc + peer-svc). Next:"
+    echo "[service] tunnel up (tunnel-svc + peer-svc). Next:"
     echo "  1. ./service.sh logs        # wait for '[reg] +target …' — the server prints the"
     echo "                              #   exact device target and the docs/tunnel.lua line to add"
     echo "  2. put that target in docs/tunnel.lua listeners[\"9339\"], then: ./service.sh restart"
     echo "  3. ./service.sh attach      # gnmi get /system/state | set /a/b:5 | subscribe /..."
     echo "     (or one-shot: ./service.sh get /system/state)"
     ;;
-  down)      dc down "$@" ;;
-  restart)   dc down; dc up -d ;;
-  ps|status) dc ps "$@" ;;
-  logs)      dc logs -f "${1:-tunnel}" ;;
+  stop|down)
+    dc down 2>/dev/null || true
+    "$eng" rm -f mgmt-svc >/dev/null 2>&1 || true
+    ;;
+  restart)
+    if mgmt_exists; then
+      "$eng" restart mgmt-svc >/dev/null
+      echo "[service] mgmt-svc restarted — attaching (detach: Ctrl-P Ctrl-Q; quit: ^D)"
+      exec "$eng" attach mgmt-svc
+    else
+      dc down; dc up -d
+      echo "[service] tunnel restarted — ./service.sh logs to grab the target"
+    fi
+    ;;
+  ps|status)
+    dc ps
+    mgmt_exists && "$eng" ps -a --filter name=mgmt-svc || true
+    ;;
+  logs)
+    if mgmt_exists; then exec "$eng" logs -f mgmt-svc
+    else dc logs -f "${1:-tunnel}"; fi
+    ;;
   get|set|subscribe|sub)
     # One-shot headless gNMI over the tunnel (no attach; good for scripting).
     # Runs an ephemeral gnmi_peer that connects to tunnel:9339, sends the
@@ -111,14 +133,19 @@ case "$cmd" in
     fi
     ;;
   attach|peer)
-    echo "[service] attaching to gnmi_peer — detach with Ctrl-P Ctrl-Q, quit the shell with 'quit'"
-    exec $COMPOSE -f "$COMPOSE_FILE" attach peer
+    if mgmt_exists; then
+      "$eng" start mgmt-svc >/dev/null 2>&1 || true
+      echo "[service] attaching to mgmt-svc — detach: Ctrl-P Ctrl-Q, quit: ^D"
+      exec "$eng" attach mgmt-svc
+    else
+      echo "[service] attaching to gnmi_peer — detach: Ctrl-P Ctrl-Q, quit the shell with 'quit'"
+      exec $COMPOSE -f "$COMPOSE_FILE" attach peer
+    fi
     ;;
   mgmt)
-    # tNMI mgmt dial-out: a single-container server + command TUI (not compose).
-    # A device dials :58989 and opens DialTcc.Subscribe; type CLI commands in the
-    # TUI to send, results/pushes stream back. --out-file <path> also saves every
-    # received response to a host file.
+    # tNMI mgmt dial-out: a detached, named container (mgmt-svc) you attach to,
+    # so stop/restart/logs work like the tunnel. Shares :58989, so the tunnel is
+    # stopped first. --out-file saves responses; --req-dir mounts the request dir.
     out=""; reqdir="$here/docs/mgmt-requests"
     while [ $# -gt 0 ]; do
       case "$1" in
@@ -127,32 +154,27 @@ case "$cmd" in
         *) die "mgmt: unknown option '$1' (--out-file <path> | --req-dir <path>)" ;;
       esac
     done
-    eng="$(engine_bin)"
-    if ! "$eng" image inspect "$IMAGE" >/dev/null 2>&1; then
-      echo "[service] image '$IMAGE' not found — building …"
-      "$here/build.sh" -t "$IMAGE"
-    fi
-    # Force a widely-available TERM: inside tmux, TERM=tmux-256color may be
-    # missing from the container's terminfo DB, breaking key/wheel handling.
-    runargs=(-it --rm -e "TERM=${MGMT_TERM:-xterm-256color}" -p 58989:58989)
+    ensure_image
+    dc down >/dev/null 2>&1 || true                 # free :58989 if the tunnel was up
+    "$eng" rm -f mgmt-svc >/dev/null 2>&1 || true
+    # -d -it: detached with a TTY so the ncurses TUI runs and we can attach.
+    # TERM forced (tmux's tmux-256color may be absent from the container terminfo).
+    runargs=(-d -it --name mgmt-svc -e "TERM=${MGMT_TERM:-xterm-256color}" -p 58989:58989)
     binargs=(/app/app --mode=mgmt-dialout)
-    # Mount the request .lua dir at /req so `send /req/<file>.lua` works.
     if [ -d "$reqdir" ]; then
-      ra="$(cd "$reqdir" && pwd)"
-      runargs+=(-v "$ra:/req:ro")
+      ra="$(cd "$reqdir" && pwd)"; runargs+=(-v "$ra:/req:ro")
     fi
     if [ -n "$out" ]; then
       od="$(dirname "$out")"; mkdir -p "$od" || die "cannot create dir: $od"
       oa="$(cd "$od" && pwd)"
-      runargs+=(-v "$oa:/out")
-      binargs+=("--log-file=/out/$(basename "$out")")
+      runargs+=(-v "$oa:/out"); binargs+=("--log-file=/out/$(basename "$out")")
     fi
-    echo "[service] mgmt dial-out on :58989 — device dials in; type commands or"
-    echo "          'send /req/<file>.lua' in the TUI (^D to quit)"
-    exec "$eng" run "${runargs[@]}" "$IMAGE" "${binargs[@]}"
+    "$eng" run "${runargs[@]}" "$IMAGE" "${binargs[@]}" >/dev/null
+    echo "[service] mgmt-svc up on :58989 — attaching (detach: Ctrl-P Ctrl-Q; quit: ^D)"
+    exec "$eng" attach mgmt-svc
     ;;
   -h|--help|help)
     awk 'NR==1{next} /^set -e/{exit} {sub(/^# ?/,""); print}' "$0"
     ;;
-  *) die "unknown command '$cmd' (up|attach|get|set|subscribe|mgmt|logs|ps|down|restart|build; --help)" ;;
+  *) die "unknown command '$cmd' (grpc-tunnel|mgmt|attach|get|set|subscribe|logs|ps|stop|restart|build; --help)" ;;
 esac

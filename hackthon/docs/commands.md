@@ -165,7 +165,7 @@ peer pushes into this process's local server appear in the bottom pane as
 openconfig/grpctunnel byte-proxy — reach a device's real gNMI through the
 tunnel. `--config <lua>` maps local-port → target; `--local-port`/`--target`,
 `--tls/--cert/--key/--ca`, `--headless`. Full runbook +
-`service.sh up/get/set/subscribe`: **[grpc-tunnel-server.md](grpc-tunnel-server.md)**.
+`service.sh grpc-tunnel/get/set/subscribe`: **[grpc-tunnel-server.md](grpc-tunnel-server.md)**.
 
 ### `--mode=mgmt-dialout` (tNMI mgmt command console)
 

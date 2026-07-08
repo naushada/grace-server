@@ -122,7 +122,7 @@ each with a monitor TUI and optional file logging. Start with the
 
 - **`--mode=grpc-tunnel-server`** — openconfig/grpctunnel byte-proxy; reach a
   device's real gNMI (Get/Set/Subscribe) through the tunnel. One command:
-  `./service.sh up` then `./service.sh get/subscribe …`.
+  `./service.sh grpc-tunnel` then `./service.sh get/subscribe …`.
   [docs/grpc-tunnel-server.md](docs/grpc-tunnel-server.md)
 - **`--mode=mgmt-dialout`** — tNMI `DialTcc.Subscribe` command console; type CLI
   or gNMI (or `send <file.lua>`) and see results + proactive pushes.
