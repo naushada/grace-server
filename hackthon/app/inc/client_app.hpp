@@ -14,6 +14,10 @@
 
 class server;
 
+// Set true by main_app in --mode=mgmt-dialout so the shared server binary hides
+// grpctunnel [reg]/[tun] activity from the mgmt console (same :58989 port).
+extern bool g_mgmt_dialout_mode;
+
 class connected_client : public evt_io {
 public:
   // Constructor wires the grpc_session tx callback to this socket's tx() and

@@ -426,6 +426,7 @@ int main(int argc, const char *argv[]) {
   // pushes). Interactive → mgmt_tui (sessions pane + transcript + input line);
   // --headless logs to stdout. --log-file / --out-file tees responses to a file.
   if (mode == "mgmt-dialout") {
+    g_mgmt_dialout_mode = true; // hide grpctunnel [reg]/[tun] noise from the console
     const uint16_t port = get_port_flag(argc, argv, "port", 58989);
     const tls_config tls_cfg{
       get_flag(argc, argv, "tls", "false") == "true",

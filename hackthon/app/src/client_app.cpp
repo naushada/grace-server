@@ -25,10 +25,18 @@
 #include <ctime>
 #include <iostream>
 
+// Set by main_app in --mode=mgmt-dialout. When true, grpctunnel Register/Tunnel
+// activity ([reg]/[tun]) is not echoed — a device that dials the tunnel on the
+// same :58989 must not pollute the mgmt console (which only shows DialTcc/gNMI).
+bool g_mgmt_dialout_mode = false;
+
 // Emit a tunnel event to the console AND the update_sink (so the monitor TUI can
 // render it). In TUI mode std::cout is redirected to a logfile; in headless it
 // is the log and the sink has no subscriber.
 static void tunnel_log(const std::string &line) {
+  if (g_mgmt_dialout_mode &&
+      (line.rfind("[reg]", 0) == 0 || line.rfind("[tun]", 0) == 0))
+    return; // tunnel registration noise — not for the mgmt console
   std::cout << line << "\n";
   update_sink::instance().emit(line);
 }
