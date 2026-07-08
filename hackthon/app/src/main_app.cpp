@@ -20,6 +20,7 @@
 #include "tunnel_hub.hpp"
 #include "tunnel_proxy.hpp"
 #include "tunnel_tui.hpp"
+#include "ansi_util.hpp"
 #include "update_sink.hpp"
 #include "gnmi/gnmi.pb.h"
 
@@ -324,7 +325,7 @@ int main(int argc, const char *argv[]) {
       logf.open(log_file, std::ios::app);
       if (logf)
         update_sink::instance().add([&logf](const std::string &l) {
-          logf << l << '\n';
+          logf << strip_ansi(l) << '\n';
           logf.flush();
         });
       else
@@ -445,7 +446,7 @@ int main(int argc, const char *argv[]) {
       logf.open(log_file, std::ios::app);
       if (logf)
         update_sink::instance().add([&logf](const std::string &l) {
-          logf << l << '\n';
+          logf << strip_ansi(l) << '\n';
           logf.flush();
         });
       else
