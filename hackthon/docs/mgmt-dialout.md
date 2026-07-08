@@ -22,6 +22,36 @@ Supported request types (packed into `DeviceRequest.request`):
 (The vendored proto is a CLI+gNMI-focused subset of upstream `tnmi_dialout.proto`
 at `app/idl/dialout/tnmi_dialout.proto`, package `tnmi`.)
 
+## Sequence flow
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant Op as Operator<br/>(mgmt TUI, in-process)
+    participant Srv as mgmt server<br/>:58989
+    participant Dev as Device<br/>(DialTcc client)
+
+    Note over Dev,Srv: TCP #1 (HTTP/2) — device dials OUT
+    Dev->>Srv: opens DialTcc.Subscribe (bidi stream)
+    Srv->>Dev: DeviceRequest{rpc_id=probe, gnmi Get /system/state}
+    Dev-->>Srv: DeviceResponse{rpc_id=probe, GetResponse}
+    Note over Op,Srv: prompt → role(hostname)>, banner printed
+
+    Op->>Srv: types "cec_cli connections_show"
+    Srv->>Dev: DeviceRequest{rpc_id=r-8f3a, CliRequest}
+    Dev-->>Srv: DeviceResponse{rpc_id=r-8f3a, CliResponse}
+    Note over Op: green reply (correlated by rpc_id)
+
+    Dev-->>Srv: DeviceResponse{rpc_id="", unsolicited}
+    Note over Op: magenta proactive push (anytime)
+```
+
+**TCP/streams:** a single device dial-out socket (`:58989`, HTTP/2) carries **one
+long-lived `DialTcc.Subscribe` stream** that carries *all* commands, results, and
+proactive pushes (plus `IsAlive` / `PushSubscriptionUpdates`). There is **no
+operator socket** — the mgmt TUI runs inside the server process. Full breakdown:
+[dialout-overview.md](dialout-overview.md#tcp-sockets--streams).
+
 ## Run it
 
 Easiest — the wrapper (builds `marvel:dev` if needed, single-container TUI). It

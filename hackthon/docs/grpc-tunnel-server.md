@@ -46,6 +46,39 @@ service Tunnel {
 
 `endpoint.lua` is not used — CLI-flag configured, like `--mode=gnmi-server`.
 
+### Sequence flow — gNMI Get over the tunnel
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant Op as Operator<br/>(gnmic / gnmi_peer)
+    participant Srv as Tunnel server<br/>:58989 ctrl · :9339 data
+    participant Dev as Device<br/>(grpctunnel client)
+    participant G as Device local gNMI
+
+    Note over Dev,Srv: TCP #1 (HTTP/2) — device dials OUT
+    Dev->>Srv: Register: Target{ADD, "S147F…", GNMI_GNOI}
+    Srv-->>Dev: Target{accept=true}
+    Note over Srv: admin maps :9339 → "S147F…" (tunnel.lua)
+
+    Note over Op,Srv: TCP #2 — operator connects to :9339
+    Op->>Srv: TCP connect :9339
+    Srv->>Dev: Register: Session{tag=1, target="S147F…"}
+    Dev->>Srv: opens Tunnel stream (Data{tag=1})
+    Op->>Srv: gNMI GetRequest (raw bytes)
+    Srv->>Dev: Data{tag=1, bytes}
+    Dev->>G: bytes (TCP #3, device-local)
+    G-->>Dev: gNMI GetResponse (bytes)
+    Dev-->>Srv: Data{tag=1, bytes}
+    Srv-->>Op: gNMI GetResponse (bytes)
+```
+
+**TCP/streams:** one device dial-out socket (`:58989`, HTTP/2) carries
+`1 Register + N Tunnel` streams (one `Tunnel` per operator session/tag); each
+operator `:9339` connection is a separate raw TCP socket relayed byte-for-byte to
+the device's real gNMI socket. Full breakdown:
+[dialout-overview.md](dialout-overview.md#tcp-sockets--streams).
+
 ---
 
 ## Status
