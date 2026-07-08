@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: MIT
+// Copyright (c) 2026 Naushad
+
 #ifndef __update_sink_hpp__
 #define __update_sink_hpp__
 

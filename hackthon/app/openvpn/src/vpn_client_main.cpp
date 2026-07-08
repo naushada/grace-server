@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: MIT
+// Copyright (c) 2026 Naushad
+
 // vpn_client — standalone VPN tunnel client.
 //
 // Responsibility: VPN tunnel management + iptables NAT forwarding only.

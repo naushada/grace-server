@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: MIT
+// Copyright (c) 2026 Naushad
+
 #include "gnmi_tui.hpp"
 
 #include <ncurses.h>

@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: MIT
+// Copyright (c) 2026 Naushad
+
 #include "mgmt_tui.hpp"
 #include "gnmi_util.hpp"
 #include "lua_engine.hpp"

@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: MIT
+// Copyright (c) 2026 Naushad
+
 // Tests for server. The server's listening socket is bound to
 // 127.0.0.1:0 so the OS picks a free ephemeral port — this avoids
 // port collisions in CI. We never dispatch the event loop, so

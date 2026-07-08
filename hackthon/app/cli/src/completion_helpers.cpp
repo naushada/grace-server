@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: MIT
+// Copyright (c) 2026 Naushad
+
 #include "completion_helpers.hpp"
 
 #include <variant>

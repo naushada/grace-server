@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: MIT
+// Copyright (c) 2026 Naushad
+
 #ifndef __cli_help_hpp__
 #define __cli_help_hpp__
 

@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: MIT
+// Copyright (c) 2026 Naushad
+
 // Tests for fs_app. The class constructor calls inotify_init() and
 // iterates the watched directory via on_boot(), so each test creates
 // a fresh temp dir with mkdtemp() and optionally drops a .lua file

@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: MIT
+// Copyright (c) 2026 Naushad
+
 #ifndef __lua_engine_cpp__
 #define __lua_engine_cpp__
 

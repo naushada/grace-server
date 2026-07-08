@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: MIT
+// Copyright (c) 2026 Naushad
+
 // gnmi_peer — a two-pane, config-driven peer-to-peer gNMI shell.
 //
 //   * Reads local/remote gRPC endpoints from a Lua config (--config).

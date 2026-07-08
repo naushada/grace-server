@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: MIT
+// Copyright (c) 2026 Naushad
+
 #ifndef __vpn_types_hpp__
 #define __vpn_types_hpp__
 

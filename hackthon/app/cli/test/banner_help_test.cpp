@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: MIT
+// Copyright (c) 2026 Naushad
+
 // Tests for the CLI banner string and the `help` built-in output.
 // These deliberately go through help.hpp (not readline.cpp), so the test
 // binary does not need to link against readline / protobuf / mosquitto.

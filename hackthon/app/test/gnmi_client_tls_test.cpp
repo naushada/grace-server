@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: MIT
+// Copyright (c) 2026 Naushad
+
 // Tests for gnmi_client TLS configuration.
 //
 // These tests do NOT run the event loop — they verify that the tls_config

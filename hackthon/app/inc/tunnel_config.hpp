@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: MIT
+// Copyright (c) 2026 Naushad
+
 #ifndef __tunnel_config_hpp__
 #define __tunnel_config_hpp__
 

@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: MIT
+// Copyright (c) 2026 Naushad
+
 #ifndef __vpn_peer_cpp__
 #define __vpn_peer_cpp__
 

@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: MIT
+// Copyright (c) 2026 Naushad
+
 // Tests for connected_client.
 //
 // The handle_read path now feeds raw bytes into a grpc_session (which wraps

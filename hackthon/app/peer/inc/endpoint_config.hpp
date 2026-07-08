@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: MIT
+// Copyright (c) 2026 Naushad
+
 #ifndef __endpoint_config_hpp__
 #define __endpoint_config_hpp__
 

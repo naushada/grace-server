@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: MIT
+// Copyright (c) 2026 Naushad
+
 // openvpn_client — wraps the system openvpn binary as a VPN client.
 //
 // Responsibility: spawn openvpn --client, detect tunnel-up and assigned VIP,

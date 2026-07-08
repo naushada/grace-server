@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: MIT
+// Copyright (c) 2026 Naushad
+
 #ifndef __mgmt_hub_hpp__
 #define __mgmt_hub_hpp__
 

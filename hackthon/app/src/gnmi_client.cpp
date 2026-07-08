@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: MIT
+// Copyright (c) 2026 Naushad
+
 #ifndef __gnmi_client_cpp__
 #define __gnmi_client_cpp__
 

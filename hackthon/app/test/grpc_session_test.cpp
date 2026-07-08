@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: MIT
+// Copyright (c) 2026 Naushad
+
 // Unit tests for grpc_session.
 //
 // Two sessions are wired in memory: a grpc_session (server) and a raw

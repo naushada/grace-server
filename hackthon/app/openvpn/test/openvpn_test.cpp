@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: MIT
+// Copyright (c) 2026 Naushad
+
 // Unit tests for openvpn_client and openvpn_server subsystems.
 //
 // ParseHelpersTest    — token_after / looks_like_ipv4 / parse_routing_row

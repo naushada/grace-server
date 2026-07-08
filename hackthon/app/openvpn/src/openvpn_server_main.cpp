@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: MIT
+// Copyright (c) 2026 Naushad
+
 // openvpn_server — wraps the system openvpn binary as a VPN server.
 //
 // Responsibility: spawn openvpn --server, monitor connected clients via the

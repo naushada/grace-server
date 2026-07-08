@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: MIT
+// Copyright (c) 2026 Naushad
+
 // Unit tests for the openvpn subsystem.
 //
 // IpPoolTest     — full-IPv4 range pool (assign / release / exhaust / large)

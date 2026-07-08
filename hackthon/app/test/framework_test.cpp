@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: MIT
+// Copyright (c) 2026 Naushad
+
 // Tests for the base framework — evt_base singleton and the default virtual
 // implementations on evt_io. We construct evt_io with a real fd obtained
 // via socketpair() so libevent's bufferevent_socket_new() succeeds; we

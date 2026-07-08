@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: MIT
+// Copyright (c) 2026 Naushad
+
 // Unit tests for the lua_file class declared in app/inc/lua_engine.hpp.
 //
 // These tests build a temporary directory, drop .lua files into it, and

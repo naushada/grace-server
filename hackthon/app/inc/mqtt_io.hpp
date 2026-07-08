@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: MIT
+// Copyright (c) 2026 Naushad
+
 #ifndef __mqtt_io_hpp__
 #define __mqtt_io_hpp__
 

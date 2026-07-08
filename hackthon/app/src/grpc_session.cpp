@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: MIT
+// Copyright (c) 2026 Naushad
+
 #ifndef __grpc_session_cpp__
 #define __grpc_session_cpp__
 

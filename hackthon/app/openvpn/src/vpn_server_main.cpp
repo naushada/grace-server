@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: MIT
+// Copyright (c) 2026 Naushad
+
 // vpn_server — standalone VPN tunnel server.
 //
 // When a client connects, the assigned vpn_peer subscribes to the MQTT

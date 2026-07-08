@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: MIT
+// Copyright (c) 2026 Naushad
+
 // Unit tests for the Tab-completion helper functions declared in
 // app/cli/inc/completion_helpers.hpp.
 //

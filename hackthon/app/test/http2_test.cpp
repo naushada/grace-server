@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: MIT
+// Copyright (c) 2026 Naushad
+
 // Unit tests for http2_session. Two sessions are wired together in memory:
 // the client's drain_send_buf() output is fed into the server's recv() and
 // vice versa. This lets us verify the full request/response cycle without
