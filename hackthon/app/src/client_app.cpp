@@ -516,7 +516,18 @@ void connected_client::register_gnmi_handlers() {
         } else if (resp.response().Is<gnmi::SubscribeResponse>()) {
           gnmi::SubscribeResponse sr;
           resp.response().UnpackTo(&sr);
-          tunnel_log("    " + gnmi_util::subscribe_response_to_json(sr));
+          std::string tag = "    ";
+          if (sr.response_case() == gnmi::SubscribeResponse::kUpdate) {
+            const auto &notif = sr.update();
+            const std::size_t n =
+                mgmt_hub::instance().next_notif(resp.rpc_id());
+            tag = "    [notif #" + std::to_string(n) +
+                  ", updates:" + std::to_string(notif.update_size());
+            if (notif.delete__size() > 0)
+              tag += ", del:" + std::to_string(notif.delete__size());
+            tag += "] ";
+          }
+          tunnel_log(tag + gnmi_util::subscribe_response_to_json(sr));
         } else if (resp.response().Is<gnmi::SetResponse>()) {
           gnmi::SetResponse sr;
           resp.response().UnpackTo(&sr);

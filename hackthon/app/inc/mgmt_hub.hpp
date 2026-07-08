@@ -160,6 +160,12 @@ public:
     return it == m_pending.end() ? std::string() : it->second;
   }
 
+  // Per-subscription running notification count: each SubscribeResponse for a
+  // given rpc_id arrives as a separate DeviceResponse, so the count is kept here.
+  std::size_t next_notif(const std::string &rpc_id) {
+    return ++m_notif[rpc_id];
+  }
+
 private:
   mgmt_hub() : m_rng(std::random_device{}()) {}
 
@@ -183,6 +189,7 @@ private:
   std::vector<sess> m_sessions;
   int m_next_id{0};
   std::map<std::string, std::string> m_pending; // rpc_id -> command text
+  std::map<std::string, std::size_t> m_notif;    // rpc_id -> notifications seen
   std::mt19937 m_rng;
   std::uniform_int_distribution<int> m_dist{0, 255};
 };

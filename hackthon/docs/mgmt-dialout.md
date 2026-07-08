@@ -193,9 +193,11 @@ Responses stream into the transcript, colour-coded:
 - **green** `[mgmt] reply '<cmd>'  rpc=…` — a reply to a command you sent
 - **magenta** `[mgmt] push …` — an unsolicited/proactive push from the device
 - CLI result → `    exit=<n>  <ms>ms` then stdout (and `[stderr] …`)
-- gNMI Get → `    /path = value` per leaf
-- gNMI Subscribe → one JSON line per `SubscribeResponse` (streams over time)
-- gNMI Set → `    set OK, <n> result(s)`
+- gNMI Get → `    /path = value` per leaf (cyan)
+- gNMI Subscribe → `    [notif #N, updates:M] <json>` per notification (magenta) —
+  `N` is the running notification count, `M` the leaves it carries (`, del:D` when
+  it deletes paths)
+- gNMI Set → `    set OK, <n> result(s)` (green)
 
 `--out-file` / `--log-file` appends every one of these lines to a host file
 (works with the TUI or `--headless`), so you get a full transcript on disk.

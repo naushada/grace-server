@@ -159,6 +159,7 @@ mgmt_tui::mgmt_tui(std::uint16_t port, const std::string &log_file)
   m_attr_push = color_id(COLOR_MAGENTA, have_color, &next);
   m_attr_leaf = 0; // plain leaf lines, matching the tunnel transcript
   m_attr_warn = color_id(COLOR_YELLOW, have_color, &next);
+  m_attr_get = color_id(COLOR_CYAN, have_color, &next); // gnmi get leaves
   // ANSI SGR fg colours (30-37) for interpreting device CLI output (cec_cli).
   for (short c = 0; c < 8; ++c)
     m_ansi_fg[c] = color_id(c, have_color, &next);
@@ -361,7 +362,12 @@ int mgmt_tui::attr_for(const std::string &s) const {
   if (s.rfind("[mgmt] reply", 0) == 0) return m_attr_reply;
   if (s.rfind("[mgmt] push", 0) == 0) return m_attr_push;
   if (s.rfind("[mgmt]", 0) == 0) return m_attr_head;
-  if (s.rfind("    ", 0) == 0) return m_attr_leaf;
+  // gNMI result leaves (indented): distinct colour per verb, matching the peer.
+  if (s.rfind("    [notif ", 0) == 0) return m_attr_push;  // subscribe → magenta
+  if (s.rfind("    set OK", 0) == 0) return m_attr_reply;   // set → green
+  if (s.rfind("    ", 0) == 0)
+    return s.find(" = ") != std::string::npos ? m_attr_get  // get leaf → cyan
+                                              : m_attr_leaf;
   return 0;
 }
 

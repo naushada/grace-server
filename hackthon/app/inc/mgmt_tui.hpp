@@ -95,6 +95,7 @@ private:
   int m_attr_push{0};
   int m_attr_leaf{0};
   int m_attr_warn{0};
+  int m_attr_get{0}; // gnmi get leaf lines (cyan; set reuses reply-green, sub push-magenta)
   int m_ansi_fg[8]{}; // ANSI SGR 30-37 → ncurses colour pairs (device CLI colours)
   struct _win_st *m_head{nullptr};
   struct _win_st *m_sessions{nullptr};
