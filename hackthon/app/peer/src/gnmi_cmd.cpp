@@ -9,6 +9,7 @@
 #include <cctype>
 #include <cstdint>
 #include <cstdlib>
+#include <memory>
 #include <sstream>
 #include <utility>
 
@@ -257,21 +258,30 @@ void gnmi_cmd::do_subscribe(const std::string &spec) {
         " (" + std::to_string(n) + " path(s), STREAM" +
         (interval_ns ? ", SAMPLE @" + interval_disp : ", on-change") + ")");
 
+  // Running update count for this subscription (shared across both callbacks so
+  // concurrent subscriptions keep independent counters).
+  auto count = std::make_shared<std::size_t>(0);
   gnmi_client::subscribe_async(
       m_remote.host, m_remote.port, pb, m_tls,
-      [this](const std::string &resp_pb) {
+      [this, count](const std::string &resp_pb) {
         gnmi::SubscribeResponse r;
-        if (r.ParseFromString(resp_pb))
-          m_out("[sub] " + gnmi_util::subscribe_response_to_json(r));
-        else
+        if (!r.ParseFromString(resp_pb)) {
           m_out("[sub] (unparsable response)");
+          return;
+        }
+        std::string tag = "[sub]";
+        if (r.has_update()) // count data updates, not sync markers
+          tag = "[sub #" + std::to_string(++*count) + "]";
+        m_out(tag + " " + gnmi_util::subscribe_response_to_json(r));
       },
-      [this](const gnmi_client::response &r) {
+      [this, count](const gnmi_client::response &r) {
+        const std::string total = std::to_string(*count) + " update(s)";
         if (r.grpc_status > 0)
-          m_out("[sub] stream ended, status=" + std::to_string(r.grpc_status) +
+          m_out("[sub] stream ended — " + total +
+                ", status=" + std::to_string(r.grpc_status) +
                 (r.grpc_message.empty() ? "" : " msg=" + r.grpc_message));
         else
-          m_out("[sub] stream ended");
+          m_out("[sub] stream ended — " + total);
       });
 }
 

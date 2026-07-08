@@ -251,7 +251,7 @@ void gnmi_tui::draw_box() {
 // Classify an output line by its leading tag and return its resolved attribute.
 int gnmi_tui::attr_for(const std::string &s) const {
   auto starts = [&](const char *p) { return s.rfind(p, 0) == 0; };
-  if (starts("[remote]") || starts("[sub] {"))
+  if (starts("[remote]") || starts("[sub] {") || starts("[sub #"))
     return m_attr_remote;
   if (starts("[set] OK") || starts("[get] OK"))
     return m_attr_ok;
