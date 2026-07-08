@@ -162,8 +162,8 @@ case "$cmd" in
     ;;
   attach|peer)
     if mgmt_exists; then
-      "$eng" start mgmt-svc >/dev/null 2>&1 || true
-      echo "[service] attaching to mgmt-svc — detach: Ctrl-P Ctrl-Q, quit: ^D"
+      "$eng" start mgmt-svc >/dev/null 2>&1 || true # restart if ^D stopped it
+      echo "[service] attaching to mgmt-svc — Ctrl-P Ctrl-Q detaches (keeps it up); ^D closes it"
       exec "$eng" attach mgmt-svc
     else
       # 'quit' inside the peer TUI exits gnmi_peer, which stops peer-svc; bring it
