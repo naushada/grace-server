@@ -23,25 +23,40 @@ static std::string trim(const std::string &s) {
   return s.substr(b, e - b + 1);
 }
 
-// Number of bytes of `s` that fit within `cols` display columns, counting each
-// UTF-8 code point as one column (fine for our content: ASCII paths/values plus
-// a few 1-column box-drawing glyphs) and never splitting a multibyte sequence.
-// Used to clip transcript lines to the window width without wrapping.
-static int utf8_clip(const std::string &s, int cols) {
-  int bytes = 0, shown = 0;
+// Total display columns of a UTF-8 string (each sequence = 1 column here).
+static int utf8_cols(const std::string &s) {
+  int bytes = 0, cols = 0;
   const int n = static_cast<int>(s.size());
-  while (bytes < n && shown < cols) {
+  while (bytes < n) {
     const unsigned char c = static_cast<unsigned char>(s[bytes]);
-    int len = 1;
-    if ((c & 0x80) == 0) len = 1;
-    else if ((c & 0xE0) == 0xC0) len = 2;
-    else if ((c & 0xF0) == 0xE0) len = 3;
-    else if ((c & 0xF8) == 0xF0) len = 4;
+    int len = (c & 0x80) == 0 ? 1 : (c & 0xE0) == 0xC0 ? 2 : (c & 0xF0) == 0xE0 ? 3
+              : (c & 0xF8) == 0xF0 ? 4 : 1;
+    bytes += (bytes + len <= n) ? len : 1;
+    ++cols;
+  }
+  return cols;
+}
+
+// UTF-8 substring covering display columns [start_col, start_col+max_cols),
+// never splitting a multibyte sequence (for horizontal scrolling).
+static std::string utf8_window(const std::string &s, int start_col, int max_cols) {
+  const int n = static_cast<int>(s.size());
+  auto clen = [&](int b) {
+    const unsigned char c = static_cast<unsigned char>(s[b]);
+    return (c & 0x80) == 0 ? 1 : (c & 0xE0) == 0xC0 ? 2 : (c & 0xF0) == 0xE0 ? 3
+           : (c & 0xF8) == 0xF0 ? 4 : 1;
+  };
+  int bytes = 0, col = 0;
+  while (bytes < n && col < start_col) { bytes += clen(bytes); ++col; }
+  const int b0 = bytes;
+  int shown = 0;
+  while (bytes < n && shown < max_cols) {
+    const int len = clen(bytes);
     if (bytes + len > n) break;
     bytes += len;
     ++shown;
   }
-  return bytes;
+  return s.substr(b0, bytes - b0);
 }
 
 // Map a base colour name to its ncurses COLOR_* id, or -1 if unknown.
@@ -178,8 +193,9 @@ void gnmi_tui::draw_chrome() {
 
   werase(m_hint);
   wattron(m_hint, A_DIM);
-  mvwaddstr(m_hint, 0, 3,
-            "set · get · help · quit  ·  ↑↓ history · PgUp/PgDn·Shift+↑↓ scroll");
+  mvwaddstr(
+      m_hint, 0, 3,
+      "set · get · help · quit  ·  ↑↓ history · PgUp/PgDn·Shift+↑↓·←→ scroll");
   wattroff(m_hint, A_DIM);
   wnoutrefresh(m_hint);
   doupdate();
@@ -268,7 +284,7 @@ void gnmi_tui::redraw_out() {
   werase(m_out);
 
   const int total = static_cast<int>(m_lines.size());
-  const int view_h = H;
+  const int view_h = H - 1; // bottom row is the horizontal scrollbar
 
   int maxscroll = total - view_h;
   if (maxscroll < 0)
@@ -282,8 +298,26 @@ void gnmi_tui::redraw_out() {
   if (first < 0)
     first = 0;
 
-  const bool bar = (W > 2 && total > view_h);
-  const int text_w = bar ? W - 1 : W; // reserve the last column for the scrollbar
+  const bool vbar = (W > 2 && total > view_h);
+  const int text_w = vbar ? W - 1 : W; // reserve the last column for the v-scrollbar
+
+  // Widest visible line → bound horizontal scroll + size the h-scrollbar.
+  int maxw = 0;
+  for (int row = 0; row < view_h; ++row) {
+    const int idx = first + row;
+    if (idx < 0 || idx >= total)
+      break;
+    const int lw = utf8_cols(m_lines[idx]);
+    if (lw > maxw)
+      maxw = lw;
+  }
+  int maxh = maxw - text_w;
+  if (maxh < 0)
+    maxh = 0;
+  if (m_hscroll > maxh)
+    m_hscroll = maxh;
+  if (m_hscroll < 0)
+    m_hscroll = 0;
 
   for (int row = 0; row < view_h; ++row) {
     const int idx = first + row;
@@ -293,12 +327,13 @@ void gnmi_tui::redraw_out() {
     const int attr = attr_for(l);
     if (attr)
       wattron(m_out, attr);
-    mvwaddnstr(m_out, row, 0, l.c_str(), utf8_clip(l, text_w));
+    const std::string win = utf8_window(l, m_hscroll, text_w);
+    mvwaddnstr(m_out, row, 0, win.c_str(), static_cast<int>(win.size()));
     if (attr)
       wattroff(m_out, attr);
   }
 
-  if (bar) {
+  if (vbar) {
     int thumb = view_h * view_h / total; // thumb height ∝ visible fraction
     if (thumb < 1)
       thumb = 1;
@@ -316,6 +351,27 @@ void gnmi_tui::redraw_out() {
       const bool on = (row >= thumb_top && row < thumb_top + thumb);
       mvwaddstr(m_out, row, W - 1, on ? "█" : "░");
     }
+    wattroff(m_out, A_DIM);
+  }
+
+  // Horizontal scrollbar on the bottom row (thumb fills the track if it fits).
+  {
+    int thumb = maxw > 0 ? text_w * text_w / maxw : text_w;
+    if (thumb < 1)
+      thumb = 1;
+    if (thumb > text_w)
+      thumb = text_w;
+    const int track = text_w - thumb;
+    int thumb_left = maxh > 0 ? track * m_hscroll / maxh : 0;
+    if (thumb_left < 0)
+      thumb_left = 0;
+    if (thumb_left > track)
+      thumb_left = track;
+    wattron(m_out, A_DIM);
+    for (int x = 0; x < text_w; ++x)
+      mvwaddstr(m_out, view_h, x,
+                (x >= thumb_left && x < thumb_left + thumb) ? "\xE2\x96\x84"   // ▄
+                                                            : "\xE2\x94\x80"); // ─
     wattroff(m_out, A_DIM);
   }
 
@@ -456,6 +512,16 @@ std::int32_t gnmi_tui::handle_read(const std::int32_t & /*channel*/,
                      : std::string();
         draw_box();
       }
+    } else if (ch == KEY_LEFT) { // pan left (wide output)
+      m_hscroll -= 8;
+      if (m_hscroll < 0)
+        m_hscroll = 0;
+      redraw_out();
+      draw_box();
+    } else if (ch == KEY_RIGHT) { // pan right (clamped to content width)
+      m_hscroll += 8;
+      redraw_out();
+      draw_box();
     } else if (ch == KEY_HOME) { // jump to the oldest buffered line
       m_scroll = static_cast<int>(m_lines.size());
       redraw_out();
