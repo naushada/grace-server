@@ -30,6 +30,7 @@
 #include <cstdint>
 #include <deque>
 #include <string>
+#include <vector>
 
 // ncurses WINDOW without pulling <ncurses.h> (and its macros) into this header.
 struct _win_st;
@@ -75,6 +76,8 @@ private:
   struct event *m_winch_ev{nullptr};    // SIGWINCH (terminal resize) watcher
   std::deque<std::string> m_lines;      // transcript history (scrollback buffer)
   int m_scroll{0};                      // viewport offset from bottom (0 = follow newest)
+  std::vector<std::string> m_history;   // entered commands (Up/Down recall)
+  int m_hist_idx{0};                    // cursor into m_history (== size => new line)
 };
 
 #endif // __gnmi_tui_hpp__

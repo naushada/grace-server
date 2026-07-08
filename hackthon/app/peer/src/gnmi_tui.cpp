@@ -178,7 +178,8 @@ void gnmi_tui::draw_chrome() {
 
   werase(m_hint);
   wattron(m_hint, A_DIM);
-  mvwaddstr(m_hint, 0, 3, "set · get · help · quit  ·  PgUp/PgDn·End scroll");
+  mvwaddstr(m_hint, 0, 3,
+            "set · get · help · quit  ·  ↑↓ history · PgUp/PgDn·Shift+↑↓ scroll");
   wattroff(m_hint, A_DIM);
   wnoutrefresh(m_hint);
   doupdate();
@@ -222,6 +223,11 @@ void gnmi_tui::draw_box() {
   int cursx = text_col + prompt_cols + static_cast<int>(shown.size());
   if (cursx > bw - 2)
     cursx = bw - 2;
+  // Visible block cursor — under tmux/MobaXterm the real cursor often doesn't
+  // blink, so draw a reverse-video cell where the next character will land.
+  wattron(m_box, A_REVERSE);
+  mvwaddch(m_box, 1, cursx, ' ');
+  wattroff(m_box, A_REVERSE);
   wmove(m_box, 1, cursx);
   wrefresh(m_box);
 }
@@ -406,8 +412,13 @@ std::int32_t gnmi_tui::handle_read(const std::int32_t & /*channel*/,
       const std::string cmd = m_line;
       m_line.clear();
       draw_box();
-      if (!trim(cmd).empty())
+      const std::string t = trim(cmd);
+      if (!t.empty()) {
+        if (m_history.empty() || m_history.back() != t)
+          m_history.push_back(t);
+        m_hist_idx = static_cast<int>(m_history.size());
         dispatch(cmd);
+      }
     } else if (ch == KEY_BACKSPACE || ch == 127 || ch == 8) {
       if (!m_line.empty())
         m_line.pop_back();
@@ -427,10 +438,24 @@ std::int32_t gnmi_tui::handle_read(const std::int32_t & /*channel*/,
       getmaxyx(m_out, h, w);
       (void)w;
       scroll_by(-(h > 1 ? h - 1 : 1));
-    } else if (ch == KEY_UP) {
+    } else if (ch == KEY_SR) { // Shift+Up — scroll output up one line
       scroll_by(1);
-    } else if (ch == KEY_DOWN) {
+    } else if (ch == KEY_SF) { // Shift+Down — scroll output down one line
       scroll_by(-1);
+    } else if (ch == KEY_UP) { // recall previous command
+      if (!m_history.empty() && m_hist_idx > 0) {
+        --m_hist_idx;
+        m_line = m_history[m_hist_idx];
+        draw_box();
+      }
+    } else if (ch == KEY_DOWN) { // recall next command (past newest clears)
+      if (m_hist_idx < static_cast<int>(m_history.size())) {
+        ++m_hist_idx;
+        m_line = (m_hist_idx < static_cast<int>(m_history.size()))
+                     ? m_history[m_hist_idx]
+                     : std::string();
+        draw_box();
+      }
     } else if (ch == KEY_HOME) { // jump to the oldest buffered line
       m_scroll = static_cast<int>(m_lines.size());
       redraw_out();

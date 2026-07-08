@@ -345,6 +345,10 @@ void mgmt_tui::draw_input() {
   mvwaddstr(m_inp, 1, text_col + pcols, shown.c_str());
   int cursx = text_col + pcols + static_cast<int>(shown.size());
   if (cursx > bw - 2) cursx = bw - 2;
+  // Visible block cursor (tmux/MobaXterm often don't blink the real cursor).
+  wattron(m_inp, A_REVERSE);
+  mvwaddch(m_inp, 1, cursx, ' ');
+  wattroff(m_inp, A_REVERSE);
   wmove(m_inp, 1, cursx);
   wnoutrefresh(m_inp);
 }
