@@ -109,7 +109,13 @@ case "$cmd" in
   grpc-tunnel|tunnel|up)
     ensure_image
     "$eng" rm -f mgmt-svc >/dev/null 2>&1 || true   # free :58989 if mgmt was up
-    dc up -d "$@"
+    if ! dc up -d "$@"; then
+      echo
+      echo "[service] compose up failed. If it said 'address pools … fully subnetted',"
+      echo "          Docker is out of network subnets — prune unused ones and retry:"
+      echo "              docker network prune -f && ./service.sh grpc-tunnel"
+      exit 1
+    fi
     echo
     echo "[service] tunnel up (tunnel-svc + peer-svc). Next:"
     echo "  1. ./service.sh logs        # wait for '[reg] +target …' — the server prints the"
