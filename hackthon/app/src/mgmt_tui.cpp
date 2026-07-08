@@ -288,7 +288,7 @@ void mgmt_tui::draw_foot() {
   }
   // Sticky CliRequest settings moved off the header live here.
   std::string set;
-  if (m_cec) set += " cec";
+  if (m_cec) set += " cec_cli";
   if (m_json) set += " json";
   if (!m_timeout_disp.empty()) set += " " + m_timeout_disp;
   s += "      · " + (set.empty() ? std::string("defaults") : set);
@@ -542,7 +542,7 @@ void mgmt_tui::submit_input() {
     println("  gnmi get|set|subscribe <spec>   gNMI over the dial-out");
     println("  send <file.lua>                 DeviceRequest described in Lua");
     println("  @<device_id> <cmd> …            target a specific device");
-    println("  :set cec|json on|off · :set timeout 20s · :show · :reset");
+    println("  :set cec_cli|json on|off · :set timeout 20s · :show · :reset");
     println("  Up/Down history · PgUp/PgDn/Home, Shift+Up/Down (1 line), ←/→ "
             "scroll · quit/^D leave");
     return;
@@ -557,7 +557,7 @@ void mgmt_tui::submit_input() {
     auto on_off = [&](bool &flag) {
       flag = (val == "on" || val == "1" || val == "true" || val == "yes");
     };
-    if (verb == "set" && key == "cec") { on_off(m_cec); }
+    if (verb == "set" && (key == "cec_cli" || key == "cec")) { on_off(m_cec); }
     else if (verb == "set" && key == "json") { on_off(m_json); }
     else if (verb == "set" && key == "timeout") {
       const std::uint64_t ns = parse_duration_ns(val);
@@ -568,8 +568,8 @@ void mgmt_tui::submit_input() {
       m_cec = m_json = false; m_timeout_ns = 0; m_timeout_disp.clear();
     }
     else if (verb == "show") { /* fall through to the summary below */ }
-    else { println("[mgmt] unknown ':' command (set cec|json|timeout, show, reset)"); return; }
-    println(std::string("[mgmt] settings: cec=") + (m_cec ? "on" : "off") +
+    else { println("[mgmt] unknown ':' command (set cec_cli|json|timeout, show, reset)"); return; }
+    println(std::string("[mgmt] settings: cec_cli=") + (m_cec ? "on" : "off") +
             " json=" + (m_json ? "on" : "off") + " timeout=" +
             (m_timeout_disp.empty() ? "default" : m_timeout_disp));
     draw_header();

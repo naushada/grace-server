@@ -28,7 +28,7 @@
 //   gnmi subscribe <xpath> [interval]   gNMI Subscribe (SAMPLE if interval given)
 //   send <file.lua>            build a whole DeviceRequest from a Lua file
 //   @<device_id> <cmd> ...     run on a specific device (inline, per command)
-//   :set cec on|off            sticky CliRequest.cec_cli
+//   :set cec_cli on|off        sticky CliRequest.cec_cli (alias: cec)
 //   :set json on|off           sticky CliRequest.json
 //   :set timeout <dur>         sticky CliRequest.timeout (10s/500ms/1m…)
 //   :show / :reset             list / clear sticky settings (shown in header)

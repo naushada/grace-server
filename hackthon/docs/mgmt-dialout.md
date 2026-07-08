@@ -80,7 +80,7 @@ and sticky settings sit in the footer next to the box.
 | Type this | Sends |
 |---|---|
 | `show version` | CLI `show version` on the BN |
-| `:set cec on` then `connections_show` | `cec_cli connections_show` (cec_cli prefix; add `:set json on` for `--json`) |
+| `:set cec_cli on` then `connections_show` | `cec_cli connections_show` (cec_cli prefix; add `:set json on` for `--json`) |
 | `@RN-147 show version` | CLI on device **RN-147** (inline `@<device_id>`) |
 | `gnmi get /system/state,/interfaces` | gNMI Get |
 | `gnmi set /a/b/config/enabled:true` | gNMI Set |
@@ -95,13 +95,13 @@ generated per request; the echo shows it: `[mgmt] → @RN-147 'show'  rpc=r-8f3a
 CLI-only knobs that apply to **every following** command until changed (shown in
 the header):
 ```
-:set cec on            # prefix cec_cli
+:set cec_cli on            # prefix cec_cli
 :set json on           # append --json (cec)
 :set timeout 20s       # CliRequest.timeout (10s / 500ms / 1m / 2h …)
 :show                  # list current settings
 :reset                 # clear them
 ```
-Example: `:set cec on` then `show interfaces` → runs `cec_cli show interfaces`.
+Example: `:set cec_cli on` then `show interfaces` → runs `cec_cli show interfaces`.
 
 `quit` / `exit` / `Ctrl-D` leaves. `PgUp/PgDn/Home/End` scroll the transcript.
 
