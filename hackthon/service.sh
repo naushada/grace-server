@@ -166,7 +166,9 @@ case "$cmd" in
       echo "[service] attaching to mgmt-svc — detach: Ctrl-P Ctrl-Q, quit: ^D"
       exec "$eng" attach mgmt-svc
     else
-      if ! tunnel_status; then
+      if tunnel_status; then
+        sleep 1   # let the green "UP" line show before the peer TUI clears the screen
+      else
         read -t 8 -r -p "  ↳ attaching anyway (Enter now · Ctrl-C to fix first) …" _ || true
         echo
       fi
