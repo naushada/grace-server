@@ -105,6 +105,15 @@ and sticky settings sit in the footer next to the box.
 - Colours: cyan `[mgmt]` headers, green replies, magenta proactive pushes, yellow
   errors.
 
+> **Keys under tmux:** the console runs with `TERM=xterm-256color`, so `PgUp`/`PgDn`,
+> `Home`/`End`, `←`/`→` (horizontal scroll) and `↑`/`↓` (history) pass straight
+> through. Two gotchas: **(1)** if the top-right shows `[N/M]` you're in tmux
+> **copy-mode** — press `q` to exit, otherwise the arrows scroll tmux, not the
+> console; **(2)** tap the arrow directly — pressing the tmux **prefix** (`Ctrl-B`)
+> first turns it into a tmux command. `Shift+↑`/`Shift+↓` (one-line scroll) also
+> need `set -g xterm-keys on` in `~/.tmux.conf` (default on in tmux ≥ 2.4); the
+> plain arrows don't.
+
 ## Sending requests (the input line)
 
 | Type this | Sends |

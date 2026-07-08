@@ -269,6 +269,19 @@ The one-shot commands run an ephemeral gnmi_peer against `tunnel:9339` — the
 stack must be `up` first so the device is registered. For several devices, add
 ports to `tunnel.lua` and run a peer per target.
 
+In the attached `gnmi_peer` console: `↑`/`↓` recall command history, `Shift+↑`/
+`Shift+↓` scroll one line, `PgUp`/`PgDn`/`Home`/`End` scroll pages, and `←`/`→`
+scroll horizontally for wide output (a bottom h-scrollbar shows the position).
+
+> **Keys under tmux:** the console runs with `TERM=xterm-256color`, so `PgUp`/`PgDn`,
+> `Home`/`End`, `←`/`→` (horizontal scroll) and `↑`/`↓` (history) pass straight
+> through. Two gotchas: **(1)** if the top-right shows `[N/M]` you're in tmux
+> **copy-mode** — press `q` to exit, otherwise the arrows scroll tmux, not the
+> console; **(2)** tap the arrow directly — pressing the tmux **prefix** (`Ctrl-B`)
+> first turns it into a tmux command. `Shift+↑`/`Shift+↓` (one-line scroll) also
+> need `set -g xterm-keys on` in `~/.tmux.conf` (default on in tmux ≥ 2.4); the
+> plain arrows don't.
+
 ## Troubleshooting
 
 | Symptom | Cause & fix |
