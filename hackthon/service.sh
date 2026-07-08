@@ -84,10 +84,12 @@ case "$cmd" in
     fi
     dc up -d "$@"
     echo
-    echo "[service] stack up. Confirm the device registered:"
-    echo "    ./service.sh logs | grep '+target'"
-    echo "[service] then drive gNMI (tunnel is invisible):"
-    echo "    ./service.sh attach     # gnmi get /system/state | gnmi set /a/b:5 | gnmi subscribe /..."
+    echo "[service] stack up (tunnel-svc + peer-svc). Next:"
+    echo "  1. ./service.sh logs        # wait for '[reg] +target …' — the server prints the"
+    echo "                              #   exact device target and the docs/tunnel.lua line to add"
+    echo "  2. put that target in docs/tunnel.lua listeners[\"9339\"], then: ./service.sh restart"
+    echo "  3. ./service.sh attach      # gnmi get /system/state | set /a/b:5 | subscribe /..."
+    echo "     (or one-shot: ./service.sh get /system/state)"
     ;;
   down)      dc down "$@" ;;
   restart)   dc down; dc up -d ;;

@@ -40,6 +40,7 @@ networks:
 services:
 
   tunnel:
+    container_name: tunnel-svc
     image: marvel:dev
     command:
       - /app/app
@@ -58,6 +59,7 @@ services:
     restart: unless-stopped
 
   peer:
+    container_name: peer-svc
     image: marvel:dev
     command:
       - /app/gnmi_peer
