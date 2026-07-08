@@ -60,29 +60,32 @@ static int utf8_cols(const std::string &s) {
   return cols;
 }
 
-// UTF-8 substring covering display columns [start_col, start_col+max_cols),
-// never splitting a multibyte sequence (for horizontal scrolling).
-static std::string utf8_window(const std::string &s, int start_col, int max_cols) {
-  const int n = static_cast<int>(s.size());
-  auto clen = [&](int b) {
-    const unsigned char c = static_cast<unsigned char>(s[b]);
-    if ((c & 0x80) == 0) return 1;
-    if ((c & 0xE0) == 0xC0) return 2;
-    if ((c & 0xF0) == 0xE0) return 3;
-    if ((c & 0xF8) == 0xF0) return 4;
-    return 1;
-  };
-  int bytes = 0, col = 0;
-  while (bytes < n && col < start_col) { bytes += clen(bytes); ++col; }
-  const int b0 = bytes;
-  int shown = 0;
-  while (bytes < n && shown < max_cols) {
-    const int len = clen(bytes);
-    if (bytes + len > n) break;
-    bytes += len;
-    ++shown;
+// Printable column width, ignoring ANSI escape sequences (for h-scroll bounds).
+static int visible_cols(const std::string &s) {
+  int cols = 0;
+  const std::size_t n = s.size();
+  for (std::size_t i = 0; i < n;) {
+    if (s[i] == '\x1b') {
+      if (i + 1 < n && s[i + 1] == '[') {
+        i += 2;
+        while (i < n && !std::isalpha((unsigned char)s[i])) ++i;
+        if (i < n) ++i;
+      } else if (i + 1 < n && s[i + 1] == ']') {
+        i += 2;
+        while (i < n && s[i] != '\x07') ++i;
+        if (i < n) ++i;
+      } else {
+        ++i;
+      }
+      continue;
+    }
+    const unsigned char c = static_cast<unsigned char>(s[i]);
+    int len = (c & 0x80) == 0 ? 1 : (c & 0xE0) == 0xC0 ? 2 : (c & 0xF0) == 0xE0 ? 3
+              : (c & 0xF8) == 0xF0 ? 4 : 1;
+    i += (i + len <= n) ? len : 1;
+    ++cols;
   }
-  return s.substr(b0, bytes - b0);
+  return cols;
 }
 
 static std::string fmt_uptime(std::time_t secs) {
@@ -156,6 +159,9 @@ mgmt_tui::mgmt_tui(std::uint16_t port, const std::string &log_file)
   m_attr_push = color_id(COLOR_MAGENTA, have_color, &next);
   m_attr_leaf = 0; // plain leaf lines, matching the tunnel transcript
   m_attr_warn = color_id(COLOR_YELLOW, have_color, &next);
+  // ANSI SGR fg colours (30-37) for interpreting device CLI output (cec_cli).
+  for (short c = 0; c < 8; ++c)
+    m_ansi_fg[c] = color_id(c, have_color, &next);
 
   // Mouse-wheel scrolling of the transcript. Important inside tmux, where the
   // wheel otherwise drives tmux copy-mode instead of this viewport.
@@ -360,6 +366,63 @@ void mgmt_tui::push_history(const std::string &part) {
   if (m_lines.size() > 200000) m_lines.pop_front(); // deep scrollback
 }
 
+// Update the current ncurses attribute from a ";"-separated SGR parameter list.
+// Reset (0 / empty) returns to base_attr (the line's own colour); 30-37/90-97
+// set the fg colour; 1/2 bold/dim. Backgrounds and unknown codes are ignored.
+void mgmt_tui::apply_sgr(const std::string &params, int &cur, int base) const {
+  if (params.empty()) { cur = base; return; }
+  std::istringstream ps(params);
+  std::string tok;
+  while (std::getline(ps, tok, ';')) {
+    const int code = tok.empty() ? 0 : std::atoi(tok.c_str());
+    if (code == 0) cur = base;
+    else if (code == 1) cur |= A_BOLD;
+    else if (code == 2) cur |= A_DIM;
+    else if (code == 22) cur &= ~(A_BOLD | A_DIM);
+    else if (code == 39) cur &= ~A_COLOR;
+    else if (code >= 30 && code <= 37) cur = (cur & ~A_COLOR) | m_ansi_fg[code - 30];
+    else if (code >= 90 && code <= 97)
+      cur = ((cur & ~A_COLOR) | m_ansi_fg[code - 90]) | A_BOLD;
+  }
+}
+
+void mgmt_tui::draw_ansi_line(int row, const std::string &s, int start_col,
+                              int max_cols, int base_attr) {
+  int cur = base_attr;
+  int col = 0, printed = 0;
+  const std::size_t n = s.size();
+  for (std::size_t i = 0; i < n && printed < max_cols;) {
+    if (s[i] == '\x1b') {
+      if (i + 1 < n && s[i + 1] == '[') { // CSI
+        std::size_t j = i + 2;
+        while (j < n && !std::isalpha((unsigned char)s[j])) ++j;
+        if (j < n && s[j] == 'm')
+          apply_sgr(s.substr(i + 2, j - (i + 2)), cur, base_attr);
+        i = (j < n) ? j + 1 : n;
+      } else if (i + 1 < n && s[i + 1] == ']') { // OSC
+        i += 2;
+        while (i < n && s[i] != '\x07') ++i;
+        if (i < n) ++i;
+      } else {
+        ++i;
+      }
+      continue;
+    }
+    const unsigned char c = static_cast<unsigned char>(s[i]);
+    int len = (c & 0x80) == 0 ? 1 : (c & 0xE0) == 0xC0 ? 2 : (c & 0xF0) == 0xE0 ? 3
+              : (c & 0xF8) == 0xF0 ? 4 : 1;
+    if (i + len > n) len = 1;
+    if (col >= start_col) {
+      if (cur) wattron(m_out, cur);
+      mvwaddnstr(m_out, row, printed, s.c_str() + i, len);
+      if (cur) wattroff(m_out, cur);
+      ++printed;
+    }
+    ++col;
+    i += len;
+  }
+}
+
 void mgmt_tui::redraw_out() {
   if (!m_out) return;
   int H = 0, W = 0;
@@ -381,7 +444,7 @@ void mgmt_tui::redraw_out() {
   for (int row = 0; row < view_h; ++row) {
     const int idx = first + row;
     if (idx < 0 || idx >= total) break;
-    const int lw = utf8_cols(m_lines[idx]);
+    const int lw = visible_cols(m_lines[idx]); // printable cols (ignore ANSI)
     if (lw > maxw) maxw = lw;
   }
   int maxh = maxw - text_w;
@@ -393,11 +456,7 @@ void mgmt_tui::redraw_out() {
     const int idx = first + row;
     if (idx < 0 || idx >= total) break;
     const std::string &l = m_lines[idx];
-    const int attr = attr_for(l);
-    if (attr) wattron(m_out, attr);
-    const std::string win = utf8_window(l, m_hscroll, text_w);
-    mvwaddnstr(m_out, row, 0, win.c_str(), static_cast<int>(win.size()));
-    if (attr) wattroff(m_out, attr);
+    draw_ansi_line(row, l, m_hscroll, text_w, attr_for(l));
   }
 
   // Vertical scrollbar (right column, content rows only).

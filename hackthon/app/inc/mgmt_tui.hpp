@@ -66,6 +66,11 @@ private:
   void redraw_out();
   void push_history(const std::string &part);
   void scroll_by(int lines);
+  // Render one transcript line, interpreting embedded ANSI SGR (ESC[..m) colours
+  // on top of base_attr, honouring the horizontal offset. Returns nothing.
+  void draw_ansi_line(int row, const std::string &s, int start_col, int max_cols,
+                      int base_attr);
+  void apply_sgr(const std::string &params, int &cur, int base) const;
   void submit_input();
   void send_gnmi(const std::string &verb, const std::string &spec,
                  const std::string &device_id);
@@ -90,6 +95,7 @@ private:
   int m_attr_push{0};
   int m_attr_leaf{0};
   int m_attr_warn{0};
+  int m_ansi_fg[8]{}; // ANSI SGR 30-37 → ncurses colour pairs (device CLI colours)
   struct _win_st *m_head{nullptr};
   struct _win_st *m_sessions{nullptr};
   struct _win_st *m_sep{nullptr};

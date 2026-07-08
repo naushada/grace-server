@@ -33,36 +33,6 @@ static void tunnel_log(const std::string &line) {
   update_sink::instance().emit(line);
 }
 
-// Strip ANSI/VT escape sequences (device CLI output — e.g. cec_cli — is often
-// colourised with ESC[..m; the ncurses TUI would otherwise print the raw
-// "^[[31m" bytes and mangle tables). Removes CSI (ESC[ … final-letter) and OSC
-// (ESC] … BEL/ST) sequences and stray ESC bytes.
-static std::string strip_ansi(const std::string &s) {
-  std::string out;
-  out.reserve(s.size());
-  for (std::size_t i = 0; i < s.size();) {
-    if (s[i] == '\x1b') {
-      if (i + 1 < s.size() && s[i + 1] == '[') { // CSI
-        i += 2;
-        while (i < s.size() && !std::isalpha((unsigned char)s[i])) ++i;
-        if (i < s.size()) ++i; // drop the final letter
-      } else if (i + 1 < s.size() && s[i + 1] == ']') { // OSC → until BEL/ST
-        i += 2;
-        while (i < s.size() && s[i] != '\x07' &&
-               !(s[i] == '\x1b' && i + 1 < s.size() && s[i + 1] == '\\'))
-          ++i;
-        if (i < s.size() && s[i] == '\x07') ++i;
-        else if (i + 1 < s.size()) i += 2;
-      } else {
-        ++i; // lone ESC
-      }
-    } else {
-      out += s[i++];
-    }
-  }
-  return out;
-}
-
 // Format a gNMI notification timestamp (nanoseconds since the Unix epoch) as a
 // human-readable UTC instant with millisecond precision.
 static std::string format_ns_timestamp(std::int64_t ts_ns) {
@@ -531,9 +501,9 @@ void connected_client::register_gnmi_handlers() {
                      (cli.truncated() ? " (truncated)" : "") + "  " +
                      std::to_string(cli.duration_ms()) + "ms");
           if (!cli.stdout_op().empty())
-            tunnel_log(strip_ansi(cli.stdout_op()));
+            tunnel_log(cli.stdout_op()); // raw ANSI — the mgmt TUI colourises it
           if (!cli.stderr_op().empty())
-            tunnel_log("[stderr] " + strip_ansi(cli.stderr_op()));
+            tunnel_log("[stderr] " + cli.stderr_op());
         } else if (resp.response().Is<gnmi::GetResponse>()) {
           gnmi::GetResponse gr;
           resp.response().UnpackTo(&gr);
