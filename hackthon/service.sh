@@ -76,6 +76,29 @@ ensure_image() {
 }
 mgmt_exists() { "$eng" container inspect mgmt-svc >/dev/null 2>&1; }
 
+# Colour-coded tunnel readiness from the tunnel-svc logs: green when the device's
+# registered target is the one mapped to :9339 (bridge ready), yellow otherwise.
+# Returns 0 if UP, 1 if not.
+tunnel_status() {
+  local log lst regs g=$'\033[1;32m' y=$'\033[1;33m' r=$'\033[0m'
+  log="$(dc logs tunnel 2>/dev/null)" || return 1
+  lst="$(printf '%s\n' "$log" | grep ':9339 ->' | tail -1 | sed "s/[^']*'//; s/'.*//")"
+  regs="$(printf '%s\n' "$log" | grep '+target' | sed "s/[^']*'//; s/'.*//" | sort -u)"
+  if [ -n "$lst" ] && printf '%s\n' "$regs" | grep -qxF "$lst"; then
+    printf '%s● tunnel UP — device mapped to :9339:%s %s\n' "$g" "$r" "$lst"
+    return 0
+  elif [ -n "$regs" ]; then
+    printf '%s○ tunnel NOT ready — :9339 maps a different/placeholder target%s\n' "$y" "$r"
+    printf '    listener  : %s\n' "${lst:-<none>}"
+    printf '    registered: %s\n' "$regs"
+    printf '    → set docs/tunnel.lua listeners["9339"] to the registered target, then ./service.sh restart\n'
+    return 1
+  else
+    printf '%s○ tunnel NOT ready — no device registered yet (no +target)%s\n' "$y" "$r"
+    return 1
+  fi
+}
+
 cmd="${1:-help}"
 [ $# -gt 0 ] && shift || true
 
@@ -110,8 +133,13 @@ case "$cmd" in
     fi
     ;;
   ps|status)
-    dc ps
-    mgmt_exists && "$eng" ps -a --filter name=mgmt-svc || true
+    if mgmt_exists; then
+      "$eng" ps -a --filter name=mgmt-svc
+    else
+      dc ps
+      echo
+      tunnel_status || true
+    fi
     ;;
   logs)
     if mgmt_exists; then exec "$eng" logs -f mgmt-svc
@@ -138,6 +166,10 @@ case "$cmd" in
       echo "[service] attaching to mgmt-svc — detach: Ctrl-P Ctrl-Q, quit: ^D"
       exec "$eng" attach mgmt-svc
     else
+      if ! tunnel_status; then
+        read -t 8 -r -p "  ↳ attaching anyway (Enter now · Ctrl-C to fix first) …" _ || true
+        echo
+      fi
       echo "[service] attaching to gnmi_peer — detach: Ctrl-P Ctrl-Q, quit the shell with 'quit'"
       exec $COMPOSE -f "$COMPOSE_FILE" attach peer
     fi
