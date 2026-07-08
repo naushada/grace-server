@@ -91,5 +91,88 @@ operator console rather than a raw gNMI socket.
 - Pick the tunnel for **transparent gNMI tooling**; pick mgmt dial-out for an
   **interactive CLI+gNMI console with proactive telemetry**.
 
+## Sequence flows
+
+### grpc-tunnel — gNMI Get over the tunnel
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant Op as Operator<br/>(gnmic / gnmi_peer)
+    participant Srv as Tunnel server<br/>:58989 ctrl · :9339 data
+    participant Dev as Device<br/>(grpctunnel client)
+    participant G as Device local gNMI
+
+    Note over Dev,Srv: TCP #1 (HTTP/2) — device dials OUT
+    Dev->>Srv: Register: Target{ADD, "S147F…", GNMI_GNOI}
+    Srv-->>Dev: Target{accept=true}
+    Note over Srv: admin maps :9339 → "S147F…" (tunnel.lua)
+
+    Note over Op,Srv: TCP #2 — operator connects to :9339
+    Op->>Srv: TCP connect :9339
+    Srv->>Dev: Register: Session{tag=1, target="S147F…"}
+    Dev->>Srv: opens Tunnel stream (Data{tag=1})
+    Op->>Srv: gNMI GetRequest (raw bytes)
+    Srv->>Dev: Data{tag=1, bytes}
+    Dev->>G: bytes (TCP #3, device-local)
+    G-->>Dev: gNMI GetResponse (bytes)
+    Dev-->>Srv: Data{tag=1, bytes}
+    Srv-->>Op: gNMI GetResponse (bytes)
+```
+
+### mgmt dial-out — command + response + proactive push
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant Op as Operator<br/>(mgmt TUI, in-process)
+    participant Srv as mgmt server<br/>:58989
+    participant Dev as Device<br/>(DialTcc client)
+
+    Note over Dev,Srv: TCP #1 (HTTP/2) — device dials OUT
+    Dev->>Srv: opens DialTcc.Subscribe (bidi stream)
+    Srv->>Dev: DeviceRequest{rpc_id=probe, gnmi Get /system/state}
+    Dev-->>Srv: DeviceResponse{rpc_id=probe, GetResponse}
+    Note over Op,Srv: prompt → role(hostname)>, banner printed
+
+    Op->>Srv: types "cec_cli connections_show"
+    Srv->>Dev: DeviceRequest{rpc_id=r-8f3a, CliRequest}
+    Dev-->>Srv: DeviceResponse{rpc_id=r-8f3a, CliResponse}
+    Note over Op: green reply (correlated by rpc_id)
+
+    Dev-->>Srv: DeviceResponse{rpc_id="" , unsolicited}
+    Note over Op: magenta proactive push (anytime)
+```
+
+## TCP sockets & streams
+
+Both dial-outs are **HTTP/2**, so a single TCP socket is multiplexed into many
+independent **streams** (one gRPC call = one stream).
+
+**grpc-tunnel**
+
+| Link | TCP sockets | Streams (per socket) |
+|---|---|---|
+| Device → Server `:58989` (dial-out) | **1** (HTTP/2) | `Register` (1, long-lived) **+ one `Tunnel` stream per session/tag** (data) + DialTcc `IsAlive` / `PushSubscriptionUpdates` |
+| Operator → Server `:9339` | **1 per operator gNMI session** (raw TCP) | opaque — the operator's own gNMI HTTP/2 streams ride *inside*; the tunnel never parses them |
+| Device → device-local gNMI | **1 per bridged session** (device-internal) | the real gNMI streams |
+
+So one device = **one** dial-out TCP socket carrying `1 Register + N Tunnel`
+streams (N = concurrent operator sessions), each `Tunnel` stream tag-matched to
+one `:9339` operator socket, which in turn maps to one device-local gNMI socket.
+
+**mgmt dial-out**
+
+| Link | TCP sockets | Streams (per socket) |
+|---|---|---|
+| Device → Server `:58989` (dial-out) | **1** (HTTP/2) | **`DialTcc.Subscribe` (1 bidi)** — carries *all* commands, results, and proactive pushes — + `IsAlive` + `PushSubscriptionUpdates` |
+| Operator ↔ Server | **0** | the operator is the mgmt TUI **in the same process** (in-memory via `update_sink` / `mgmt_hub`) — no socket |
+
+So mgmt is the simpler shape: **one TCP socket, one long-lived `Subscribe`
+stream** does everything (many `DeviceRequest`/`DeviceResponse` messages flow on
+that single stream, correlated by `rpc_id`). The tunnel adds a second (and third)
+socket because it must bridge an *external* operator to the device's *real* gNMI
+socket byte-for-byte.
+
 See the per-feature runbooks for setup, `service.sh` wrappers, TLS, and the TUI.
 Both are MIT-licensed (see `LICENSE`).
