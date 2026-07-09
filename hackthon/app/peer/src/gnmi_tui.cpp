@@ -124,6 +124,7 @@ gnmi_tui::gnmi_tui(const endpoint &local, const endpoint &remote,
   cbreak();
   noecho();
   curs_set(1);
+  mousemask(BUTTON4_PRESSED | BUTTON5_PRESSED, nullptr); // wheel up/down
 
   // Foreground colours on the terminal's own background (bg = -1), so lines are
   // tinted without any background fill. Palette names come from the Lua config.
@@ -498,6 +499,12 @@ std::int32_t gnmi_tui::handle_read(const std::int32_t & /*channel*/,
       return 0;
     } else if (ch == KEY_RESIZE) { // resize delivered via input path
       relayout();
+    } else if (ch == KEY_MOUSE) { // wheel up/down scrolls the transcript
+      MEVENT ev;
+      if (getmouse(&ev) == OK) {
+        if (ev.bstate & BUTTON4_PRESSED) scroll_by(3);
+        else if (ev.bstate & BUTTON5_PRESSED) scroll_by(-3);
+      }
     } else if (ch == KEY_PPAGE) { // Page Up — scroll into history
       int h = 0, w = 0;
       getmaxyx(m_out, h, w);
