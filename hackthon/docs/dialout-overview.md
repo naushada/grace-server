@@ -174,5 +174,40 @@ that single stream, correlated by `rpc_id`). The tunnel adds a second (and third
 socket because it must bridge an *external* operator to the device's *real* gNMI
 socket byte-for-byte.
 
+## Capturing the dial-out (tcpdump)
+
+To debug the dial-out, capture on the **device** (it initiates the connection to
+the server). `<server>` is the dial-out server's IP; `58989` is the control/dial
+port, `9339` the tunnel data-plane (only if you use the tunnel).
+
+```sh
+# Capture the dial-out to a file (Ctrl-C to stop):
+tcpdump -i any -n -s 0 -w /tmp/cap.pcap host <server> and port 58989
+
+# Time-bounded — auto-stops after 60s (no Ctrl-C needed):
+timeout 60 tcpdump -i any -n -s 0 -w /tmp/cap.pcap host <server> and port 58989
+
+# Packet-count bounded — stops after 2000 packets:
+tcpdump -i any -n -s 0 -c 2000 -w /tmp/cap.pcap host <server>
+
+# Include the tunnel gNMI port (:9339) too:
+tcpdump -i any -n -s 0 -w /tmp/cap.pcap host <server> and \(port 58989 or port 9339\)
+```
+
+Flags: `-i any` all interfaces · `-n` no DNS · `-s 0` full (untruncated) packets ·
+`-w` write pcap · `-c` count · `host`/`port` filter to keep it small.
+
+```sh
+# Read it back on the device:
+tcpdump -r /tmp/cap.pcap -n           # summary
+tcpdump -r /tmp/cap.pcap -n -A | less # with ASCII payload
+```
+
+Tips: `tcpdump -D` (or `ip -br a`) lists interfaces — capturing on the uplink
+(e.g. `-i eth0`) is lighter than `any`. Pull the file off with
+`scp /tmp/cap.pcap you@host:` and open it in Wireshark. Traffic is HTTP/2 (gRPC);
+if the dial-out is TLS, payloads are encrypted — the pcap still shows the TCP/TLS
+handshake, retransmits, RSTs, and timing, which is what dial-out debugging needs.
+
 See the per-feature runbooks for setup, `service.sh` wrappers, TLS, and the TUI.
 Both are MIT-licensed (see `LICENSE`).
