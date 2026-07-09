@@ -58,7 +58,7 @@ Runs any binary in a container, or opens a shell in one.
 
 | Command | Runs | Notes |
 |---------|------|-------|
-| `gnmi-peer` | `/app/gnmi_peer` | Two-pane TUI (interactive). `--headless` = line-mode. Default port 58989. |
+| `gnmi-cli` | `/app/gnmi_peer` | Interactive gNMI client TUI (get/set/subscribe). `--headless` = line-mode. Default port 58989. (alias: `gnmi-peer`) |
 | `gnmi-server` | `/app/app --mode=gnmi-server` | Plain gNMI server + monitor TUI. `--out-file <path>` logs updates. Default port 58989. |
 | `grpc-tunnel-server` | `/app/app --mode=grpc-tunnel-server` | Dial-out tunnel for NATed devices ([grpc-tunnel-server.md](grpc-tunnel-server.md)). |
 | `cli` | `/app/cli_app` | Interactive readline REPL. |
@@ -81,8 +81,8 @@ Runs any binary in a container, or opens a shell in one.
 | `--name <name>` | — | Container name |
 | `--network <net>` | — | Attach to a network |
 | `-p, --port <spec>` | per-command | Publish a port (repeatable), e.g. `58989:58989` |
-| `--config <path>` | — | Host `endpoint.lua` to mount (gnmi-peer) |
-| `--headless` | — | gnmi-peer line-mode (no TTY; adds `--headless=true`) |
+| `--config <path>` | — | Host `endpoint.lua` to mount (gnmi-cli) |
+| `--headless` | — | gnmi-cli line-mode (no TTY; adds `--headless=true`) |
 | `-E, --env <K=V>` | — | Set an env var (repeatable) |
 | `-d, --detach` | — | Run detached (background) |
 | `--root` | — | Run as root user |
@@ -93,14 +93,14 @@ Runs any binary in a container, or opens a shell in one.
 | `-h, --help` | — | Show help |
 
 TTY selection: `-d` → detached; `--headless`/`--no-tty` → `-i`; interactive
-commands (`gnmi-peer`, `cli`, `shell`) → `-it`; server commands → attached, no TTY.
+commands (`gnmi-cli`, `cli`, `shell`) → `-it`; server commands → attached, no TTY.
 
 ```bash
-./run.sh gnmi-peer                          # interactive TUI, port 58989
-./run.sh --config ./my.lua gnmi-peer        # mount a custom config
-echo 'gnmi get /a/b' | ./run.sh --headless gnmi-peer
+./run.sh gnmi-cli                          # interactive TUI, port 58989
+./run.sh --config ./my.lua gnmi-cli        # mount a custom config
+echo 'gnmi get /a/b' | ./run.sh --headless gnmi-cli
 ./run.sh --build gnmi-server -- --gnmi-port=9339   # build, then run
-./run.sh -d --name peerB --network peer-net --headless gnmi-peer
+./run.sh -d --name peerB --network peer-net --headless gnmi-cli
 ./run.sh shell                              # poke around the image
 ./run.sh exec peerB                         # bash into a running container
 ./run.sh raw -- ls -la /app

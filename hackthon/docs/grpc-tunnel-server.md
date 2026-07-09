@@ -200,7 +200,7 @@ return {
 }
 ```
 ```bash
-./run.sh --config ./endpoint.lua gnmi-peer
+./run.sh --config ./endpoint.lua gnmi-cli
 # then: gnmi get /system/state   |   gnmi set /a/b:5   |   gnmi subscribe /…
 ```
 
