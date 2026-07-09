@@ -31,7 +31,15 @@
 #   ./service.sh set <path>:<val>   One-shot gNMI Set
 #   ./service.sh subscribe <path>   Stream telemetry (Ctrl-C to stop)
 #
-# `up` is a deprecated alias for `grpc-tunnel`; `down` for `stop`.
+# Standalone gNMI client (independent of the stack above):
+#   ./service.sh gnmi-cli [--config <path>]
+#                                   Interactive gNMI client TUI (gnmi_peer).
+#                                   endpoint.lua (default docs/endpoint.lua) is
+#                                   bind-mounted, so every run re-reads it — edit
+#                                   `remote` + re-run to retarget. --network host.
+#
+# `up` is a deprecated alias for `grpc-tunnel`; `down` for `stop`; `gnmi-peer`
+# for `gnmi-cli`.
 # Env: ENGINE=docker|podman (default: auto).
 set -euo pipefail
 
@@ -225,8 +233,29 @@ case "$cmd" in
     echo "          attaching (detach: Ctrl-P Ctrl-Q; quit: ^D)"
     exec "$eng" attach mgmt-svc
     ;;
+  gnmi-cli|gnmi-peer)
+    # Standalone interactive gNMI client (gnmi_peer) — independent of the stack.
+    # --network host so `remote` can be 127.0.0.1:9339 (this host's tunnel) or a
+    # LAN device. endpoint.lua is bind-mounted, so every run re-reads it (edit +
+    # re-run to retarget) — no rebuild. Foreground --rm; ^D / 'quit' to exit.
+    cfg="$here/docs/endpoint.lua"
+    while [ $# -gt 0 ]; do
+      case "$1" in
+        --config) cfg="$2"; shift 2 ;;
+        *) die "gnmi-cli: unknown option '$1' (--config <path>)" ;;
+      esac
+    done
+    ensure_image
+    [ -f "$cfg" ] || die "config not found: $cfg (create it or pass --config <path>)"
+    cfgabs="$(cd "$(dirname "$cfg")" && pwd)/$(basename "$cfg")"
+    echo "[service] gnmi-cli — remote from $(basename "$cfg") (edit + re-run to retarget); ^D/quit to exit"
+    exec "$eng" run -it --rm --network host \
+      -e "TERM=${MGMT_TERM:-xterm-256color}" \
+      -v "$cfgabs:/app/command/endpoint.lua:ro" \
+      "$IMAGE" /app/gnmi_peer --config=/app/command/endpoint.lua
+    ;;
   -h|--help|help)
     awk 'NR==1{next} /^set -e/{exit} {sub(/^# ?/,""); print}' "$0"
     ;;
-  *) die "unknown command '$cmd' (grpc-tunnel|mgmt|attach|get|set|subscribe|logs|ps|stop|restart|build; --help)" ;;
+  *) die "unknown command '$cmd' (grpc-tunnel|mgmt|gnmi-cli|attach|get|set|subscribe|logs|ps|stop|restart|build; --help)" ;;
 esac

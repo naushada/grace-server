@@ -4,16 +4,16 @@
 #          (whichever is present), or open a shell in one.
 #
 # The image is built by ./build.sh (default marvel:dev) and bundles:
-#   gnmi-peer  gnmi-server  cli  app  vpn-server  vpn-client
+#   gnmi-cli  gnmi-server  cli  app  vpn-server  vpn-client
 #   openvpn-server  openvpn-client
 #
 # Usage:
 #   ./run.sh [global options] <command> [command args] [-- binary args]
 #
 # Commands:
-#   gnmi-peer        Two-pane peer-to-peer gNMI shell (interactive TUI).
+#   gnmi-cli         Interactive gNMI client shell (get/set/subscribe TUI).
 #                    Use --headless for line-mode (pipe/CI). --config mounts a
-#                    host endpoint.lua. Default port 58989.
+#                    host endpoint.lua. Default port 58989. (alias: gnmi-peer)
 #   gnmi-server      Plain gNMI server: /app/app --mode=gnmi-server (port 58989).
 #                    Shows a colour-coded monitor TUI by default; --headless for
 #                    stdout. --out-file <path> also appends updates to a file.
@@ -54,14 +54,14 @@
 #   ENGINE   Same as --engine.   IMAGE   Same as --image.
 #
 # Examples:
-#   ./run.sh gnmi-peer                         # interactive TUI, port 58989
-#   ./run.sh --config ./my.lua gnmi-peer       # with a custom config
+#   ./run.sh gnmi-cli                          # interactive TUI, port 58989
+#   ./run.sh --config ./my.lua gnmi-cli        # with a custom config
 #   ./run.sh gnmi-server                       # monitor TUI, port 58989
 #   ./run.sh gnmi-server --out-file ./logs/updates.txt   # TUI + append to file
 #   ./run.sh --headless gnmi-server --out-file ./u.txt   # no TUI, just log to file
 #   ./run.sh --build gnmi-server -- --gnmi-port=9339
-#   echo 'gnmi get /a/b' | ./run.sh --headless gnmi-peer
-#   ./run.sh --name peerB -d --network peer-net gnmi-peer --headless
+#   echo 'gnmi get /a/b' | ./run.sh --headless gnmi-cli
+#   ./run.sh --name peerB -d --network peer-net gnmi-cli --headless
 #   ./run.sh shell                             # poke around inside the image
 #   ./run.sh exec peerB                        # bash into a running container
 #   ./run.sh smoke                             # healthcheck-gated two-peer test
@@ -140,7 +140,7 @@ inner_cfg="/app/command/endpoint.lua"
 add_default_port() { [ ${#PORTS[@]} -eq 0 ] && PORTS+=("$1"); }
 
 case "$cmd" in
-  gnmi-peer)
+  gnmi-cli|gnmi-peer)
     INTERACTIVE=1
     add_default_port "58989:58989"
     BIN=(/app/gnmi_peer "--config=$inner_cfg")
