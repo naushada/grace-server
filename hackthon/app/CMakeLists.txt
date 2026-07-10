@@ -109,7 +109,7 @@ target_link_libraries(app PUBLIC
   ${LUA_LIBRARIES})
 
 # ---------------------------------------------------------------------------
-# gnmi_peer — two-pane ncurses peer-to-peer gNMI shell
+# gnmi_peer — ncurses peer-to-peer gNMI shell
 # ---------------------------------------------------------------------------
 add_subdirectory(peer)
 

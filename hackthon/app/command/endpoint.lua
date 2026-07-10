@@ -3,8 +3,8 @@
 -- Consumed by the `gnmi_peer` binary (--config=<path>, default
 -- /app/command/endpoint.lua). It declares:
 --   * local.endpoint  — where THIS process runs its own gNMI server. The
---     remote peer pushes gNMI Set operations here; they appear in the bottom
---     pane of the two-window terminal.
+--     remote peer pushes gNMI Set operations here; they appear in the
+--     transcript, tagged [remote].
 --   * remote.endpoint — where `gnmi set` / `gnmi get` are sent (direct gRPC
 --     over HTTP/2).
 --

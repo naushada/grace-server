@@ -6,18 +6,21 @@
 
 // Interactive monitor + command console for `app --mode=mgmt-dialout`.
 //
-//   Marvel gNMI Mgmt · :58989 · 1 session        PgUp/PgDn·End scroll · ^D quit
-//   SESSION   UPTIME
-//   #1        2m
-//   ──────────────────────────────────────────────────────────────────────
-//   [mgmt] → 'show version'  rpc=r-8f3a…            <- colour-coded transcript
-//   [mgmt] reply 'show version'  rpc=r-8f3a…           (results + proactive
-//       exit=0  12ms                                     pushes)
+//   Marvel gNMI Mgmt · :58989 · 1 session(s)     PgUp/PgDn·←/→ scroll · ^D quit
+//   ▸ bn(bn-1) connected · device S147F…            <- colour-coded transcript,
+//   [mgmt] → 'show version'  rpc=r-8f3a…               full height (results +
+//   [mgmt] reply 'show version'  rpc=r-8f3a…           proactive pushes)
+//       exit=0  12ms
 //   {"sw":"SYS.A3…"}
+//   #1 bn(bn-1)  2m      · defaults                 <- sessions + sticky settings
 //   ╭────────────────────────────────────────────╮  <- Claude-style rounded
-//   │ BN(bn-1)> show interfaces_                   │     input box; the prompt is
+//   │ bn(bn-1)> show interfaces_                  │     input box; the prompt is
 //   ╰────────────────────────────────────────────╯     role(hostname) from an
-//                                                       on-open /system/state probe
+//                                                      on-open /system/state probe
+//
+// Four windows: header (row 0), transcript (fills the middle), footer (session
+// summary + sticky settings), and the 3-row input box. There is no separate
+// sessions pane — the summary lives in the footer beside the box.
 //
 // Grpc-tunnel-style, with a bottom input line: type a command + Enter to send
 // it (mgmt_hub packs a DeviceRequest with a random rpc_id); replies + proactive
@@ -59,8 +62,6 @@ public:
 
 private:
   void draw_header();
-  void draw_sessions();
-  void draw_sep();
   void draw_foot(); // session → device summary (above the input line)
   void draw_input();
   void redraw_out();
@@ -98,8 +99,6 @@ private:
   int m_attr_get{0}; // gnmi get leaf lines (cyan; set reuses reply-green, sub push-magenta)
   int m_ansi_fg[8]{}; // ANSI SGR 30-37 → ncurses colour pairs (device CLI colours)
   struct _win_st *m_head{nullptr};
-  struct _win_st *m_sessions{nullptr};
-  struct _win_st *m_sep{nullptr};
   struct _win_st *m_out{nullptr};
   struct _win_st *m_foot{nullptr};
   struct _win_st *m_inp{nullptr};

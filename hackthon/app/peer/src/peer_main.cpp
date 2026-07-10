@@ -1,15 +1,15 @@
 // SPDX-License-Identifier: MIT
 // Copyright (c) 2026 Naushad
 
-// gnmi_peer — a two-pane, config-driven peer-to-peer gNMI shell.
+// gnmi_peer — a config-driven peer-to-peer gNMI shell.
 //
 //   * Reads local/remote gRPC endpoints from a Lua config (--config).
 //   * Runs a local gNMI server at local.endpoint so the remote peer can push
-//     Set operations to us (rendered live in the bottom pane).
+//     Set operations to us (rendered live in the transcript, tagged [remote]).
 //   * Sends `gnmi set` / `gnmi get` to remote.endpoint over direct gRPC.
 //
 // Two front-ends:
-//   * ncurses two-pane TUI  — the default on an interactive terminal.
+//   * ncurses TUI  — the default on an interactive terminal.
 //   * headless line shell    — auto-selected when stdin/stdout is not a TTY
 //     (pipe / CI / smoke test). Reads command lines from stdin, prints results
 //     and remote pushes to stdout. Force with --headless=true|false.

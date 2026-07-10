@@ -189,8 +189,6 @@ mgmt_tui::~mgmt_tui() {
   if (m_winch_ev) event_free(m_winch_ev);
   if (m_tick_ev) event_free(m_tick_ev);
   if (m_head) delwin(m_head);
-  if (m_sessions) delwin(m_sessions);
-  if (m_sep) delwin(m_sep);
   if (m_out) delwin(m_out);
   if (m_foot) delwin(m_foot);
   if (m_inp) delwin(m_inp);
@@ -216,47 +214,6 @@ void mgmt_tui::draw_header() {
   mvwaddnstr(m_head, 0, 0, s.c_str(), utf8_clip(s, w > 0 ? w : 0));
   wattroff(m_head, A_DIM);
   wnoutrefresh(m_head);
-}
-
-void mgmt_tui::draw_sessions() {
-  if (!m_sessions) return;
-  int th = 0, w = 0;
-  getmaxyx(m_sessions, th, w);
-  werase(m_sessions);
-  wattron(m_sessions, A_DIM);
-  char hdr[96];
-  std::snprintf(hdr, sizeof(hdr), " %-8s %-22s %s", "SESSION", "DEVICE", "UPTIME");
-  mvwaddnstr(m_sessions, 0, 0, hdr, utf8_clip(hdr, w));
-  wattroff(m_sessions, A_DIM);
-
-  auto snap = mgmt_hub::instance().snapshot();
-  const std::time_t now = std::time(nullptr);
-  const int rows = th - 1;
-  for (int i = 0; i < static_cast<int>(snap.size()) && i < rows; ++i) {
-    char sess[16];
-    std::snprintf(sess, sizeof(sess), "#%d", snap[i].id);
-    char line[192];
-    std::snprintf(line, sizeof(line), " %-8s %-22.22s %s", sess,
-                  snap[i].device.empty() ? "-" : snap[i].device.c_str(),
-                  fmt_uptime(now - snap[i].since).c_str());
-    std::string ls(line);
-    if (m_attr_reply) wattron(m_sessions, m_attr_reply);
-    mvwaddnstr(m_sessions, i + 1, 0, ls.c_str(), utf8_clip(ls, w));
-    if (m_attr_reply) wattroff(m_sessions, m_attr_reply);
-  }
-  wnoutrefresh(m_sessions);
-}
-
-void mgmt_tui::draw_sep() {
-  if (!m_sep) return;
-  int h = 0, w = 0;
-  getmaxyx(m_sep, h, w);
-  (void)h;
-  werase(m_sep);
-  wattron(m_sep, A_DIM);
-  mvwhline(m_sep, 0, 0, ACS_HLINE, w);
-  wattroff(m_sep, A_DIM);
-  wnoutrefresh(m_sep);
 }
 
 // Session → device summary (the mgmt analogue of the tunnel's target footer).
@@ -753,8 +710,6 @@ void mgmt_tui::relayout() {
   if (out_h < 1) out_h = 1;
 
   if (m_head) { delwin(m_head); m_head = nullptr; }
-  if (m_sessions) { delwin(m_sessions); m_sessions = nullptr; }
-  if (m_sep) { delwin(m_sep); m_sep = nullptr; }
   if (m_out) { delwin(m_out); m_out = nullptr; }
   if (m_foot) { delwin(m_foot); m_foot = nullptr; }
   if (m_inp) { delwin(m_inp); m_inp = nullptr; }
