@@ -79,6 +79,164 @@ operator `:9339` connection is a separate raw TCP socket relayed byte-for-byte t
 the device's real gNMI socket. Full breakdown:
 [dialout-overview.md](dialout-overview.md#tcp-sockets--streams).
 
+### Detailed flow — inside `gnmi_peer`
+
+The diagram above stops at the tunnel boundary. This one follows a single
+`gnmi get /system/state`, typed in the TUI, all the way to the device and back —
+naming the code that performs each step.
+
+```mermaid
+sequenceDiagram
+    autonumber
+    actor U as You (TUI keyboard)
+    participant TUI as gnmi_tui
+    participant CMD as gnmi_cmd
+    participant CLI as gnmi_connection<br/>(+ http2_session)
+    participant BR as tunnel_bridge<br/>server :9339
+    participant HUB as tunnel_hub
+    participant DEV as Device<br/>grpctunnel client
+    participant G as Device local gNMI
+
+    Note over DEV,HUB: PRE-EXISTING — device dialed OUT to :58989 long ago
+    DEV->>HUB: Register: Target{ADD,"S147F…",GNMI_GNOI}
+    HUB-->>DEV: Target{accept=true}
+    Note over HUB: hub: target → owning Register stream
+
+    U->>TUI: types "gnmi get /system/state" ⏎
+    TUI->>TUI: echo into transcript pane<br/>gnmi_tui.cpp:565
+    TUI->>CMD: dispatch(line)
+
+    rect rgb(240,240,250)
+    Note over CMD: BUILD PROTO — gnmi_cmd.cpp:164 do_get()
+    CMD->>CMD: strip "gnmi", verb="get", spec="/system/state"
+    CMD->>CMD: prefix.target = "VIEWER"  ⚠ RBAC role, NOT tunnel target
+    CMD->>CMD: split spec on ',' → parse_yang_path each<br/>gnmi_util.hpp:29 → Path{elem{name,keys}}
+    CMD->>CMD: encoding = JSON
+    CMD->>CMD: req.SerializeToString(&pb)
+    end
+
+    CMD->>CLI: push_async(host,port,"/gnmi.gNMI/Get",pb,tls,cb)<br/>gnmi_client.cpp:205
+    Note over CLI: GC sweep: erase done() conns → frees<br/>PREVIOUS command's socket (see lifetime below)
+    CLI->>CLI: new gnmi_connection → evt_io(host,port,ctx)<br/>initiates TCP connect
+
+    rect rgb(235,248,235)
+    Note over CLI,G: TCP #2 opens — TUI → tunnel :9339
+    CLI->>BR: TCP SYN → :9339
+    BR->>BR: handle_connect → wrap_accepted (plain, no TLS ctx)<br/>tunnel_proxy.cpp:19
+    BR->>HUB: open_bridge(target, on_bytes, on_close)
+    alt target not registered
+        HUB-->>BR: tag = 0
+        BR-->>CLI: drop connection<br/>"[tun] refused: target '…' not connected"
+    else target live
+        HUB-->>DEV: Session{tag=N, target} on Register stream
+        DEV->>HUB: opens Tunnel(stream Data) — first Data{tag=N} pairs it
+        HUB-->>BR: tag = N   "[tun] bridge tag=N → '…'"
+        DEV->>G: TCP #3 — device-local connect to its gNMI
+    end
+    end
+
+    rect rgb(250,245,235)
+    Note over CLI: handle_connect — gnmi_client.cpp:71
+    CLI->>CLI: flush() → HTTP/2 preface + SETTINGS
+    CLI->>CLI: encode_frame(pb) → [0x00][len BE32][pb]<br/>grpc_session.cpp:55
+    CLI->>CLI: submit_request POST :path=/gnmi.gNMI/Get<br/>content-type: application/grpc+proto, te: trailers
+    CLI->>CLI: flush()
+    end
+
+    Note over CLI,G: bytes are OPAQUE to the tunnel — the HTTP/2 peer is the DEVICE
+    CLI->>BR: h2 preface + SETTINGS + HEADERS + DATA (raw bytes)
+    BR->>HUB: from_operator(tag, bytes)  tunnel_proxy.cpp:65
+    HUB->>DEV: Data{tag=N, data}
+    DEV->>G: bytes
+    G->>G: resolve /system/state, build GetResponse
+
+    G-->>DEV: HEADERS + DATA(GetResponse) + trailers(grpc-status:0)
+    DEV-->>HUB: Data{tag=N, data}
+    HUB-->>BR: on_bytes → tx() to operator socket  tunnel_proxy.cpp:48
+    BR-->>CLI: raw bytes
+
+    rect rgb(250,240,240)
+    Note over CLI: handle_read — gnmi_client.cpp:87
+    CLI->>CLI: m_h2.recv() → nghttp2 decode
+    CLI->>CLI: flush() (SETTINGS ACK, WINDOW_UPDATE)
+    Note over CLI: trailing HEADERS w/ END_STREAM fires the handler
+    CLI->>CLI: capture_response — read grpc-status / grpc-message<br/>decode_frame() strips 5-byte prefix → body_pb
+    CLI->>CLI: finish() → m_done = true<br/>❗ socket NOT closed
+    end
+
+    CLI->>CMD: on_done(response)
+    CMD->>CMD: render_get_resp — gnmi_cmd.cpp:315
+    alt transport error (grpc_status = -1)
+        CMD->>TUI: "[get] transport error: …"
+    else device returned a non-zero status
+        CMD->>TUI: "[get] error status=N msg=…"  ← the device's own reply
+    else OK (grpc_status = 0)
+        CMD->>CMD: GetResponse.ParseFromString(body_pb)
+        CMD->>TUI: "[get] OK, N notification(s)" + update_to_json per leaf
+    end
+    TUI->>U: rendered in transcript pane
+```
+
+Two details this makes visible:
+
+- **`prefix.target = "VIEWER"` is set during proto-build, long before the tunnel
+  is involved.** It is this repo's own gNMI server's RBAC role (Get ⇒ `VIEWER`,
+  Set ⇒ `ADMIN`), hardcoded in `gnmi_cmd.cpp` with no CLI override. Over the
+  tunnel it rides through the byte pipe untouched and is interpreted by the
+  *device*, which may reject it or scope the request to a nonexistent target.
+  `gnmic` sends no prefix target by default — that difference explains most
+  "works with gnmic, fails with gnmi_peer" `status=3` reports.
+- **`finish()` does not close the socket.** See below.
+
+### Client connection lifetime
+
+`finish()` marks the exchange done and fires the render callback; the TCP
+connection to `:9339` stays open until the *next* command's GC sweep reaps it.
+
+```mermaid
+stateDiagram-v2
+    direction TB
+
+    [*] --> Connecting : push_async() → new gnmi_connection
+    Connecting --> Active : BEV_EVENT_CONNECTED → handle_connect()
+    Active --> Done : trailing HEADERS (grpc-status) → finish()
+
+    note right of Done
+      m_done = true, callback fired, output rendered.
+      But the socket to :9339 is STILL OPEN — finish()
+      never closes it. The tunnel_bridge, its tag, and
+      the device's local gNMI socket all stay open, idle.
+
+      ~5s later the inherited bufferevent timeout fires:
+      handle_event() logs "[gnmi_connection] timed out",
+      then finish() early-returns. Cosmetic log noise —
+      the response was already rendered. (The subscribe
+      path clears this timeout; the unary path does not.)
+    end note
+
+    Done --> Reaped : NEXT push_async() GC sweep (gnmi_client.cpp line 211)
+    Reaped --> [*] : ~evt_io → bufferevent_free → fd closed → FIN
+
+    Done --> LeakedAtExit : user types 'quit'
+    LeakedAtExit --> [*] : s_active never destroyed — kernel closes the fd
+
+    note left of Reaped
+      Server-side teardown (both paths):
+      tunnel_bridge::handle_close (tunnel_proxy.cpp:69)
+        → tunnel_hub::close_from_operator(tag)
+        → Data{tag, close} to the device
+        → device closes its local gNMI socket
+    end note
+```
+
+So command N's socket, tunnel tag, and device-side gNMI connection close when you
+type command N+1 — there is **no connection reuse** across commands, and each one
+opens a fresh TCP connection, HTTP/2 preface, and tag. The last command's socket
+is never closed by the program: `s_active` is deliberately never destroyed
+(`gnmi_client.cpp:199`) to avoid a static-destruction-order crash where a
+bufferevent outlives the event base. On exit the kernel closes the fd, the tunnel
+sees EOF, and the bridge cleans up.
+
 ---
 
 ## Status
