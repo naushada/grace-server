@@ -427,6 +427,15 @@ Then drive gNMI either interactively or one-shot (scriptable):
 ./service.sh subscribe /interfaces 10s # SAMPLE every 10s (omit interval => on-change); Ctrl-C to stop
 ```
 `./service.sh stop` tears it down; `ps`, `restart`, `build`, `--help` also exist.
+
+Steps 2–3 (read `+target`, paste it into `docs/tunnel.lua`, `restart`) are
+automated by the **`device-soak` skill**, which also captures a bounded run and
+summarises the updates it saw:
+
+```bash
+.claude/skills/device-soak/scripts/soak.sh --mode grpc-tunnel \
+  --no-enable --path /interfaces --duration 30m
+```
 The one-shot commands run an ephemeral gnmi_peer against `tunnel:9339` — the
 stack must be `up` first so the device is registered. For several devices, add
 ports to `tunnel.lua` and run a peer per target.

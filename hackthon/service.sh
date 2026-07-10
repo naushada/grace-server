@@ -13,10 +13,13 @@
 #
 # Two "start" verbs; they share :58989, so starting one stops the other:
 #   ./service.sh grpc-tunnel        Bring up the tunnel stack (tunnel-svc + peer-svc)
-#   ./service.sh mgmt [--out-file <path>] [--req-dir <dir>]
+#   ./service.sh mgmt [--out-file <path>] [--req-dir <dir>] [--no-attach]
 #                                   tNMI mgmt dial-out server + command TUI
 #                                   (mgmt-svc). --out-file saves responses;
-#                                   --req-dir mounts a request-.lua dir at /req.
+#                                   --req-dir mounts a request-.lua dir at /req;
+#                                   --no-attach leaves it detached (for scripts —
+#                                   attaching with a closed stdin sends ^D and
+#                                   quits the TUI). Attach later with `attach`.
 #
 # Lifecycle verbs act on whichever is running (tunnel or mgmt):
 #   ./service.sh attach             Attach to the running console (peer or mgmt)
@@ -32,11 +35,13 @@
 #   ./service.sh subscribe <path>   Stream telemetry (Ctrl-C to stop)
 #
 # Standalone gNMI client (independent of the stack above):
-#   ./service.sh gnmi-cli [--config <path>]
+#   ./service.sh gnmi-cli [--config <path>] [--headless]
 #                                   Interactive gNMI client TUI (gnmi_peer).
 #                                   endpoint.lua (default docs/endpoint.lua) is
 #                                   bind-mounted, so every run re-reads it — edit
 #                                   `remote` + re-run to retarget. --network host.
+#                                   --headless reads `gnmi …` command lines from
+#                                   stdin and prints results to stdout (pipes/CI).
 #
 # `up` is a deprecated alias for `grpc-tunnel`; `down` for `stop`; `gnmi-peer`
 # for `gnmi-cli`.
@@ -197,12 +202,13 @@ case "$cmd" in
     # tNMI mgmt dial-out: a detached, named container (mgmt-svc) you attach to,
     # so stop/restart/logs work like the tunnel. Shares :58989, so the tunnel is
     # stopped first. --out-file saves responses; --req-dir mounts the request dir.
-    out=""; reqdir="$here/docs/mgmt-requests"
+    out=""; reqdir="$here/docs/mgmt-requests"; attach=1
     while [ $# -gt 0 ]; do
       case "$1" in
-        --out-file) out="$2"; shift 2 ;;
-        --req-dir)  reqdir="$2"; shift 2 ;;
-        *) die "mgmt: unknown option '$1' (--out-file <path> | --req-dir <path>)" ;;
+        --out-file)  out="$2"; shift 2 ;;
+        --req-dir)   reqdir="$2"; shift 2 ;;
+        --no-attach) attach=0; shift ;;
+        *) die "mgmt: unknown option '$1' (--out-file <path> | --req-dir <path> | --no-attach)" ;;
       esac
     done
     ensure_image
@@ -230,6 +236,11 @@ case "$cmd" in
     fi
     "$eng" run "${runargs[@]}" "$IMAGE" "${binargs[@]}" >/dev/null
     echo "[service] mgmt-svc up — console on :58989, gNMI tunnel on :9339"
+    if [ "$attach" -eq 0 ]; then
+      echo "          detached (--no-attach); ./service.sh attach to drive it"
+      [ -n "$out" ] && echo "          responses -> $out"
+      exit 0
+    fi
     echo "          attaching (detach: Ctrl-P Ctrl-Q; quit: ^D)"
     exec "$eng" attach mgmt-svc
     ;;
@@ -238,16 +249,24 @@ case "$cmd" in
     # --network host so `remote` can be 127.0.0.1:9339 (this host's tunnel) or a
     # LAN device. endpoint.lua is bind-mounted, so every run re-reads it (edit +
     # re-run to retarget) — no rebuild. Foreground --rm; ^D / 'quit' to exit.
-    cfg="$here/docs/endpoint.lua"
+    cfg="$here/docs/endpoint.lua"; headless=0
     while [ $# -gt 0 ]; do
       case "$1" in
-        --config) cfg="$2"; shift 2 ;;
-        *) die "gnmi-cli: unknown option '$1' (--config <path>)" ;;
+        --config)   cfg="$2"; shift 2 ;;
+        --headless) headless=1; shift ;;
+        *) die "gnmi-cli: unknown option '$1' (--config <path> | --headless)" ;;
       esac
     done
     ensure_image
     [ -f "$cfg" ] || die "config not found: $cfg (create it or pass --config <path>)"
     cfgabs="$(cd "$(dirname "$cfg")" && pwd)/$(basename "$cfg")"
+    if [ "$headless" -eq 1 ]; then
+      # Line shell: `gnmi get/set/subscribe …` on stdin, results on stdout. No
+      # -t (a TTY would select the ncurses front-end); stdin EOF ends the run.
+      exec "$eng" run -i --rm --network host \
+        -v "$cfgabs:/app/command/endpoint.lua:ro" \
+        "$IMAGE" /app/gnmi_peer --config=/app/command/endpoint.lua --headless=true
+    fi
     echo "[service] gnmi-cli — remote from $(basename "$cfg") (edit + re-run to retarget); ^D/quit to exit"
     exec "$eng" run -it --rm --network host \
       -e "TERM=${MGMT_TERM:-xterm-256color}" \

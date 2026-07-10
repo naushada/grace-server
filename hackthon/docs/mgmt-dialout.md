@@ -61,7 +61,14 @@ work under tmux):
 ./service.sh mgmt                              # command TUI on :58989
 ./service.sh mgmt --out-file ./logs/mgmt.txt   # + save every response to a file
 ./service.sh mgmt --req-dir ./my-requests      # mount a request-.lua dir at /req
+./service.sh mgmt --no-attach                  # leave it detached (scripts/CI)
 ```
+
+`--no-attach` exists because attaching with a closed stdin (`< /dev/null`, a
+pipeline, cron) sends `^D` to the TUI and quits it. Scripts should start the
+container detached and, if they need a transcript, pass `--out-file`; attach
+later with `./service.sh attach` when a human wants to type. See
+[capturing a long run](#capturing-a-long-run).
 Or directly:
 ```bash
 docker run -it --rm -e TERM=xterm-256color -p 58989:58989 \
@@ -408,6 +415,30 @@ Responses stream into the transcript, colour-coded:
 
 `--out-file` / `--log-file` appends every one of these lines to a host file
 (works with the TUI or `--headless`), so you get a full transcript on disk.
+
+## Capturing a long run
+
+Headless `mgmt-dialout` (`--headless=true`) **has no stdin reader** — it prints
+the banner and runs the event loop. Commands can only be typed into the ncurses
+TUI, so an unattended mgmt run *observes* (proactive pushes, `IsAlive`, results
+of nothing) but cannot *drive* a device. To drive traffic without a terminal,
+use `gnmi_peer --headless`, which does read command lines from stdin.
+
+That shape — enable the device, start the stack detached, capture for N minutes,
+then summarise — is automated by the **`device-soak` skill**
+(`.claude/skills/device-soak/`):
+
+```bash
+.claude/skills/device-soak/scripts/soak.sh \
+  --mode mgmt --host <device> --server <ip>:58989 \
+  --enable-file ./enable.txt --duration 30m
+```
+
+It writes `capture.log`, a `timeline.tsv` of wall-clock line counts (the capture
+itself is untimestamped), and an `updates.tsv` listing every gNMI path with its
+first/last value and a change count. `--mode gnmi-cli` drives real Get/Subscribe
+traffic instead; `--mode grpc-tunnel` auto-maps the device's registered target
+into `docs/tunnel.lua`. Re-analyse an old capture with `scripts/analyze.sh`.
 
 ## Also serves the gNMI tunnel (:9339)
 

@@ -1,0 +1,5 @@
+# Soak / capture artifacts (.claude/skills/device-soak, service.sh --out-file)
+logs/
+
+# tunnel.lua is rewritten in place when a soak maps a device target
+docs/tunnel.lua.soak

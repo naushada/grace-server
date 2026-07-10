@@ -128,6 +128,12 @@ each with a monitor TUI and optional file logging. Start with the
   or gNMI (or `send <file.lua>`) and see results + proactive pushes.
   `./service.sh mgmt`. [docs/mgmt-dialout.md](docs/mgmt-dialout.md)
 
+To exercise one of these against a real device for a bounded window — reach it
+over `t3 console`, enable its endpoints, capture, then summarise the gNMI updates
+that changed — use the `device-soak` skill:
+`.claude/skills/device-soak/scripts/soak.sh --mode mgmt --host <device> --duration 30m`
+([SKILL.md](.claude/skills/device-soak/SKILL.md)).
+
 > **Every command and flag** — scripts, `gnmi_peer`, `app` modes, `cli_app`,
 > and the VPN binaries — is catalogued in
 > [docs/commands.md](docs/commands.md).

@@ -176,6 +176,25 @@ or `send <file.lua>`, and see results + proactive pushes. `--port` (58989),
 interactive. Full runbook + `service.sh mgmt`:
 **[mgmt-dialout.md](mgmt-dialout.md)**.
 
+`--headless` here logs responses to stdout but reads **no** commands from stdin —
+only the TUI sends. To drive a device from a script, use `gnmi_peer --headless`.
+
+---
+
+## `service.sh` (dial-out stacks)
+
+| Command | Notes |
+|---------|-------|
+| `grpc-tunnel` | Tunnel stack (tunnel-svc + peer-svc); then `get`/`set`/`subscribe`/`attach` |
+| `mgmt [--out-file <p>] [--req-dir <d>] [--no-attach]` | mgmt dial-out console. `--no-attach` leaves `mgmt-svc` detached — attaching with a closed stdin sends `^D` and quits the TUI |
+| `gnmi-cli [--config <p>] [--headless]` | Standalone `gnmi_peer`. `--headless` reads `gnmi …` lines from stdin, prints to stdout (pipes/CI) |
+| `attach` · `logs` · `ps` · `stop` · `restart` · `build` | Act on whichever stack is up |
+
+Unattended runs of any of the three are automated by the **`device-soak` skill**
+(`.claude/skills/device-soak/`): reach the device over `t3 console`, enable its
+endpoints, start the stack, capture for a bounded window, then emit `summary.txt`
++ `updates.tsv`. `scripts/soak.sh --help`.
+
 ### `--mode=server` (custom VPN tunnel server + gNMI)
 
 | Flag | Default | Description |
