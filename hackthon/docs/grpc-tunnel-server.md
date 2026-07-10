@@ -188,6 +188,10 @@ Two details this makes visible:
   "works with gnmic, fails with gnmi_peer" `status=3` reports.
 - **`finish()` does not close the socket.** See below.
 
+For the front-end half of this picture — the four ncurses windows, how keystrokes
+reach `dispatch()` off the libevent loop, and how each pane gets filled — see
+[gnmi-peer-tui.md](gnmi-peer-tui.md).
+
 ### Client connection lifetime
 
 `finish()` marks the exchange done and fires the render callback; the TCP
