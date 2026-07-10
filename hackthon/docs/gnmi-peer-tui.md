@@ -88,7 +88,7 @@ sequenceDiagram
     CFG-->>M: local{ip,port}, remote{ip,port}, tls, colors
     Note over M: stderr still reaches the real terminal here —<br/>config errors are printed BEFORE ncurses takes over
 
-    M->>M: redirect std::cout / std::cerr → --log file<br/>(linked components log verbosely; would corrupt the screen)
+    M->>M: redirect std::cout / std::cerr → --log file<br/>(linked components log verbosely — would corrupt the screen)
 
     M->>SRV: server(local.host, local.port, tls)
     Note over SRV: listens for a peer's gNMI Set → we render it
@@ -101,7 +101,7 @@ sequenceDiagram
     TUI->>NC: newwin ×4 (m_head, m_out, m_box, m_hint)
     TUI->>NC: scrollok(m_out,FALSE) · keypad(m_box,TRUE) · nodelay(m_box,TRUE)
     TUI->>TUI: draw_chrome() → header + hint
-    TUI->>TUI: println("Ready. Local server is up; commands go to …")
+    TUI->>TUI: println() the "Ready. Local server is up …" greeting
     TUI->>EB: evsignal_new(SIGWINCH, on_winch)
     Note over TUI,EB: SIGWINCH is not stdin data — without this the<br/>resize would only be noticed on the next keystroke
 
@@ -129,7 +129,7 @@ sequenceDiagram
     actor U as You
     participant EB as libevent
     participant TUI as gnmi_tui
-    participant BOX as m_box
+    participant INP as m_box
     participant OUT as m_out
     participant CMD as gnmi_cmd
     participant CLI as gnmi_client
@@ -139,16 +139,16 @@ sequenceDiagram
     EB->>TUI: handle_read()  (EV_READ)
 
     loop drain until wgetch() == ERR
-        TUI->>BOX: wgetch(m_box)   nodelay ⇒ non-blocking
+        TUI->>INP: wgetch(m_box)   nodelay ⇒ non-blocking
         alt printable 32..126
             TUI->>TUI: m_line.push_back(ch)
-            TUI->>BOX: draw_box() — reprint "❯ " + tail + block cursor
+            TUI->>INP: draw_box() — reprint "❯ " + tail + block cursor
         else scroll key (PgUp/PgDn, Shift+↑↓, ←→, Home/End, wheel)
             TUI->>TUI: adjust m_scroll / m_hscroll
             TUI->>OUT: redraw_out()  (clamps, re-renders viewport + bars)
         else ↑ / ↓
             TUI->>TUI: m_line = m_history[m_hist_idx±1]
-            TUI->>BOX: draw_box()
+            TUI->>INP: draw_box()
         else Ctrl-D (ch == 4)
             TUI->>EB: event_base_loopbreak() → exit
         else Enter
@@ -220,7 +220,7 @@ sequenceDiagram
     SINK->>TUI: cb("UPDATE /a/b = 5")
     TUI->>TUI: println("[remote] " + line)
     TUI->>OUT: push_history → redraw_out → draw_box
-    SINK->>F: out_file << line  (only when --out given)
+    SINK->>F: append the line to the --out file (only when given)
 ```
 
 `update_sink` is a no-op singleton when nothing registers (the `app` and

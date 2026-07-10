@@ -215,7 +215,7 @@ stateDiagram-v2
       handle_event() logs "[gnmi_connection] timed out",
       then finish() early-returns. Cosmetic log noise —
       the response was already rendered. (The subscribe
-      path clears this timeout; the unary path does not.)
+      path clears this timeout, the unary path does not.)
     end note
 
     Done --> Reaped : NEXT push_async() GC sweep (gnmi_client.cpp line 211)
