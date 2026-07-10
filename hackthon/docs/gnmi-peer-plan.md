@@ -6,6 +6,15 @@ created; `podman build --build-arg RUN_TESTS=OFF` compiled and linked
 binary ships to `/app/gnmi_peer` in the image. This doc is kept as the design
 record. Original plan text follows unchanged.
 
+> **Superseded as a description of the built tool** — see
+> [gnmi-peer-tui.md](gnmi-peer-tui.md) for what `gnmi_peer` actually does.
+> The plan's **two-pane terminal** (requirement 4: a top window for commands,
+> a bottom window for remote updates) was not built that way. The TUI has four
+> ncurses windows — header, a single full-height transcript, a rounded input
+> box, and a hint row — and operations the remote peer pushes are interleaved
+> into that one transcript, tagged `[remote]`, rather than shown in a separate
+> pane. Everything else here still holds. Kept verbatim as the design record.
+
 ## Goal (user requirements)
 
 A new interactive peer-to-peer gNMI tool:
