@@ -1,22 +1,22 @@
 # Two-peer gnmi_peer setup.
 #
-# Two symmetric instances of the config-driven, two-pane gNMI shell. Each runs
-# its own local gNMI server and points `remote` at the other (resolved by the
-# compose service name over gnmi-peer-net):
+# Two symmetric instances of the config-driven gNMI shell. Each runs its own
+# local gNMI server and points `remote` at the other (resolved by the compose
+# service name over gnmi-peer-net):
 #
 #   peerA  local :58989  ── gnmi set/get ──▶  peerB :58990
 #   peerB  local :58990  ── gnmi set/get ──▶  peerA :58989
 #
-# A `gnmi set` typed in one peer's top pane is pushed to the other peer's local
-# server and shown in that peer's bottom pane as `[remote] UPDATE …`.
+# A `gnmi set` typed in one peer is pushed to the other peer's local server and
+# shown in that peer's transcript as `[remote] UPDATE …`.
 #
-# ── Interactive (ncurses two-pane TUI) ──────────────────────────────────────
+# ── Interactive (ncurses TUI) ───────────────────────────────────────────────
 #   docker compose -f docs/docker-compose.gnmi-peer.yml up -d
 #   # terminal 1:
 #   docker compose -f docs/docker-compose.gnmi-peer.yml attach peerA
 #   # terminal 2:
 #   docker compose -f docs/docker-compose.gnmi-peer.yml attach peerB
-#   # in peerA:  gnmi set /demo/leaf:5      -> appears in peerB's bottom pane
+#   # in peerA:  gnmi set /demo/leaf:5      -> appears in peerB's transcript
 #   # detach without stopping: Ctrl-P Ctrl-Q ;  leave the shell: quit / exit
 #
 # ── Headless (observe pushes in the logs, no attach) ────────────────────────

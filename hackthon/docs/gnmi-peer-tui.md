@@ -5,9 +5,10 @@ ncurses UI driven entirely from the **shared libevent loop** — there is no inp
 thread and no blocking `getch()`. The same loop that runs the outgoing gNMI
 client and the local gNMI server also delivers keystrokes.
 
-> Historical note: the design doc and some header comments call this a
-> "two-pane terminal". That describes the *concept* (you type up top, remote
-> pushes appear below). The implementation has **four ncurses windows**.
+> Historical note: `gnmi-peer-plan.md`, the frozen design record, calls this a
+> "two-pane terminal" — you type up top, remote pushes appear below. It was
+> never built that way: there are **four ncurses windows**, and remote pushes
+> are interleaved into the single transcript, tagged `[remote]`.
 
 ---
 

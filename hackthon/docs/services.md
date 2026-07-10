@@ -308,7 +308,7 @@ Two front-ends, chosen automatically (override with `--headless=true|false`):
 
 | Front-end | When | I/O |
 |-----------|------|-----|
-| ncurses two-pane TUI | interactive TTY (`-it`) | top pane input, bottom pane remote pushes |
+| ncurses TUI | interactive TTY (`-it`) | input box; results + `[remote] …` pushes in the transcript |
 | headless line-mode | non-TTY (pipe / `-d`) | one command per stdin line; results + `[remote] …` to stdout |
 
 Config (`endpoint.lua`) — each endpoint is `{ ip=, port= }` **or** `"host:port"`;
@@ -624,7 +624,7 @@ podman run --rm -p 58989:58989 marvel:dev \
   /app/app --mode=gnmi-server --gnmi-port=58989
 ```
 
-**gnmi_peer — interactive two-pane shell (needs a TTY)**
+**gnmi_peer — interactive ncurses shell (needs a TTY)**
 
 ```bash
 podman run --rm -it -p 58989:58989 \

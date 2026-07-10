@@ -110,9 +110,10 @@ echo 'gnmi get /a/b' | ./run.sh --headless gnmi-cli
 
 ## `gnmi_peer`
 
-Config-driven, two-pane, peer-to-peer gNMI shell. See
-[README → gnmi_peer](../README.md#gnmi_peer--two-pane-peer-to-peer-gnmi-shell)
-for the full walkthrough.
+Config-driven, peer-to-peer gNMI shell. See
+[README → gnmi_peer](../README.md#gnmi_peer--peer-to-peer-gnmi-shell) for the
+full walkthrough, and [gnmi-peer-tui.md](gnmi-peer-tui.md) for the TUI
+internals.
 
 ### Flags
 
@@ -122,7 +123,7 @@ for the full walkthrough.
 | `--headless <bool>` | auto | `true`/`false` force the front-end; auto = ncurses on a TTY, line-mode otherwise |
 | `--log <path>` | `/tmp/gnmi_peer.log` | Where component logs go in TUI mode |
 
-### Interactive shell commands (top pane / stdin)
+### Interactive shell commands (input box / stdin)
 
 | Command | gNMI op | Notes |
 |---------|---------|-------|
@@ -139,7 +140,7 @@ notifications (`[sub] …`) — is rendered as **JSON**, e.g.
 `xpath` is `/`-separated YANG, e.g.
 `/interfaces/interface[name=eth0]/config/mtu`. The `gnmi set` / `gnmi get`
 prefix is optional (`set …` and `get …` also work). Operations the **remote**
-peer pushes into this process's local server appear in the bottom pane as
+peer pushes into this process's local server appear in the transcript as
 `[remote] UPDATE/REPLACE/DELETE …`.
 
 ---

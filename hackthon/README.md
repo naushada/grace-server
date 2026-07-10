@@ -98,7 +98,7 @@ cd hackthon
 ./build.sh --tests on            # build and run the gtest suite
 ./build.sh -t marvel:dev --no-cache
 
-./run.sh gnmi-peer               # interactive two-pane gNMI shell (port 58989)
+./run.sh gnmi-peer               # interactive ncurses gNMI shell (port 58989)
 ./run.sh --config ./my.lua gnmi-peer
 echo 'gnmi get /a/b' | ./run.sh --headless gnmi-peer
 ./run.sh --build gnmi-server -- --gnmi-port=9339   # build, then run
@@ -249,7 +249,7 @@ readline REPL
 
 ---
 
-## gnmi_peer — two-pane peer-to-peer gNMI shell
+## gnmi_peer — peer-to-peer gNMI shell
 
 The `gnmi_peer` binary is a config-driven, Claude-style ncurses terminal:
 
@@ -354,7 +354,7 @@ cmake --build build -j"$(nproc)" --target gnmi_peer
 
 ### Run — interactive (ncurses TUI)
 
-Attach a TTY (`-it`) so the two-pane UI renders:
+Attach a TTY (`-it`) so the ncurses UI renders:
 
 ```bash
 podman run --rm -it -p 58989:58989 \
@@ -363,8 +363,8 @@ podman run --rm -it -p 58989:58989 \
   /app/gnmi_peer --config=/app/command/endpoint.lua
 ```
 
-Type `gnmi set /a/b:5,/c/d:up`, `gnmi get /a/b`, `help`, or `quit` in the top
-pane; remote pushes appear in the bottom pane. Lines are colour-coded on your
+Type `gnmi set /a/b:5,/c/d:up`, `gnmi get /a/b`, `help`, or `quit` in the input
+box; remote pushes appear in the transcript tagged `[remote]`. Lines are colour-coded on your
 terminal's own background (defaults: cyan = remote pushes, green = OK,
 amber = errors, dim = echoed commands) — override any of these with a `colors`
 table in the config (see `app/command/endpoint.lua`). Exit with
@@ -392,8 +392,8 @@ podman run --rm -it --name peerA --network peer-net \
   /app/gnmi_peer --config=/app/command/endpoint.lua
 ```
 
-Give each peer its own config (`local`/`remote` swapped). A `gnmi set` in A's
-top pane appears as `[remote] UPDATE …` in B's output.
+Give each peer its own config (`local`/`remote` swapped). A `gnmi set` typed in
+A appears as `[remote] UPDATE …` in B's transcript.
 
 ### Run — two peers (docker-compose)
 
@@ -406,7 +406,7 @@ terminal:
 docker compose -f docs/docker-compose.gnmi-peer.yml up -d
 docker compose -f docs/docker-compose.gnmi-peer.yml attach peerA   # terminal 1
 docker compose -f docs/docker-compose.gnmi-peer.yml attach peerB   # terminal 2
-# in peerA:  gnmi set /demo/leaf:5   → shows in peerB's bottom pane
+# in peerA:  gnmi set /demo/leaf:5   → shows in peerB's transcript as [remote]
 # detach without stopping: Ctrl-P Ctrl-Q ;  tear down: … down
 ```
 

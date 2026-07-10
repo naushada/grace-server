@@ -230,7 +230,7 @@ Diagnostics baked in for future issues:
 
 ## Interactive TUI
 
-Run without `--headless` (needs a TTY) for the two-pane shell:
+Run without `--headless` (needs a TTY) for the ncurses shell:
 ```bash
 docker run --rm -it -p <host-lan-ip>:58989:58989 \
   -v "$PWD/endpoint.lua:/app/command/endpoint.lua:ro" \
